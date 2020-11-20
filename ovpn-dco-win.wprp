@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<WindowsPerformanceRecorder Version="1.0" Author="Microsoft Corporation" Copyright="Microsoft Corporation" Company="Microsoft Corporation">
+  <Profiles>
+    <EventCollector Id="EventCollector_OpenVPN" Name="OpenVPN">
+      <BufferSize Value="64" />
+      <Buffers Value="4" />
+    </EventCollector>
+
+    <EventProvider Id="EventProvider_OpenVPN" Name="4970F9cf-2c0c-4f11-b1cc-e3a1e9958833" NonPagedMemory="true" />
+
+    <Profile Id="OpenVPN.Verbose.File" Name="OpenVPN" Description="OpenVPN" LoggingMode="File" DetailLevel="Verbose">
+      <Collectors>
+        <EventCollectorId Value="EventCollector_OpenVPN">
+          <EventProviders>
+            <EventProviderId Value="EventProvider_OpenVPN" />
+          </EventProviders>
+        </EventCollectorId>
+      </Collectors>
+    </Profile>
+
+    <Profile Id="OpenVPN.Light.File" Name="OpenVPN" Description="OpenVPN" Base="OpenVPN.Verbose.File" LoggingMode="File" DetailLevel="Light" />
+    <Profile Id="OpenVPN.Verbose.Memory" Name="OpenVPN" Description="OpenVPN" Base="OpenVPN.Verbose.File" LoggingMode="Memory" DetailLevel="Verbose" />
+    <Profile Id="OpenVPN.Light.Memory" Name="OpenVPN" Description="OpenVPN" Base="OpenVPN.Verbose.File" LoggingMode="Memory" DetailLevel="Light" />
+
+  </Profiles>
+</WindowsPerformanceRecorder>

@@ -1,0 +1,71 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 16
+VisualStudioVersion = 16.0.30413.136
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "ovpn-dco", "ovpn-dco-win.vcxproj", "{C91D6DBF-F373-44CD-8179-D0F55888A015}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "ovpn-dco-cli", "ovpn-cli\ovpn-cli.vcxproj", "{BA23900A-7FAC-49CF-9AC7-C20CD52F42AF}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "DmfKFramework", "DMF\Dmf\Solution\DmfKFramework\DmfKFramework.vcxproj", "{A603433B-6AE6-419D-AD1A-103809B82745}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "driverhelper", "driverhelper\driverhelper.vcxproj", "{5C994DAB-9E44-40C9-AC49-E0724F216672}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|ARM64 = Debug|ARM64
+		Debug|x64 = Debug|x64
+		Release|ARM64 = Release|ARM64
+		Release|x64 = Release|x64
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{C91D6DBF-F373-44CD-8179-D0F55888A015}.Debug|ARM64.ActiveCfg = Debug|ARM64
+		{C91D6DBF-F373-44CD-8179-D0F55888A015}.Debug|ARM64.Build.0 = Debug|ARM64
+		{C91D6DBF-F373-44CD-8179-D0F55888A015}.Debug|ARM64.Deploy.0 = Debug|ARM64
+		{C91D6DBF-F373-44CD-8179-D0F55888A015}.Debug|x64.ActiveCfg = Debug|x64
+		{C91D6DBF-F373-44CD-8179-D0F55888A015}.Debug|x64.Build.0 = Debug|x64
+		{C91D6DBF-F373-44CD-8179-D0F55888A015}.Debug|x64.Deploy.0 = Debug|x64
+		{C91D6DBF-F373-44CD-8179-D0F55888A015}.Release|ARM64.ActiveCfg = Release|ARM64
+		{C91D6DBF-F373-44CD-8179-D0F55888A015}.Release|ARM64.Build.0 = Release|ARM64
+		{C91D6DBF-F373-44CD-8179-D0F55888A015}.Release|ARM64.Deploy.0 = Release|ARM64
+		{C91D6DBF-F373-44CD-8179-D0F55888A015}.Release|x64.ActiveCfg = Release|x64
+		{C91D6DBF-F373-44CD-8179-D0F55888A015}.Release|x64.Build.0 = Release|x64
+		{C91D6DBF-F373-44CD-8179-D0F55888A015}.Release|x64.Deploy.0 = Release|x64
+		{BA23900A-7FAC-49CF-9AC7-C20CD52F42AF}.Debug|ARM64.ActiveCfg = Debug|Win32
+		{BA23900A-7FAC-49CF-9AC7-C20CD52F42AF}.Debug|x64.ActiveCfg = Debug|x64
+		{BA23900A-7FAC-49CF-9AC7-C20CD52F42AF}.Debug|x64.Build.0 = Debug|x64
+		{BA23900A-7FAC-49CF-9AC7-C20CD52F42AF}.Release|ARM64.ActiveCfg = Release|Win32
+		{BA23900A-7FAC-49CF-9AC7-C20CD52F42AF}.Release|x64.ActiveCfg = Release|x64
+		{BA23900A-7FAC-49CF-9AC7-C20CD52F42AF}.Release|x64.Build.0 = Release|x64
+		{A603433B-6AE6-419D-AD1A-103809B82745}.Debug|ARM64.ActiveCfg = Debug|ARM64
+		{A603433B-6AE6-419D-AD1A-103809B82745}.Debug|ARM64.Build.0 = Debug|ARM64
+		{A603433B-6AE6-419D-AD1A-103809B82745}.Debug|ARM64.Deploy.0 = Debug|ARM64
+		{A603433B-6AE6-419D-AD1A-103809B82745}.Debug|x64.ActiveCfg = Debug|x64
+		{A603433B-6AE6-419D-AD1A-103809B82745}.Debug|x64.Build.0 = Debug|x64
+		{A603433B-6AE6-419D-AD1A-103809B82745}.Debug|x64.Deploy.0 = Debug|x64
+		{A603433B-6AE6-419D-AD1A-103809B82745}.Release|ARM64.ActiveCfg = Release|ARM64
+		{A603433B-6AE6-419D-AD1A-103809B82745}.Release|ARM64.Build.0 = Release|ARM64
+		{A603433B-6AE6-419D-AD1A-103809B82745}.Release|ARM64.Deploy.0 = Release|ARM64
+		{A603433B-6AE6-419D-AD1A-103809B82745}.Release|x64.ActiveCfg = Release|x64
+		{A603433B-6AE6-419D-AD1A-103809B82745}.Release|x64.Build.0 = Release|x64
+		{A603433B-6AE6-419D-AD1A-103809B82745}.Release|x64.Deploy.0 = Release|x64
+		{5C994DAB-9E44-40C9-AC49-E0724F216672}.Debug|ARM64.ActiveCfg = Debug|ARM64
+		{5C994DAB-9E44-40C9-AC49-E0724F216672}.Debug|ARM64.Build.0 = Debug|ARM64
+		{5C994DAB-9E44-40C9-AC49-E0724F216672}.Debug|ARM64.Deploy.0 = Debug|ARM64
+		{5C994DAB-9E44-40C9-AC49-E0724F216672}.Debug|x64.ActiveCfg = Debug|x64
+		{5C994DAB-9E44-40C9-AC49-E0724F216672}.Debug|x64.Build.0 = Debug|x64
+		{5C994DAB-9E44-40C9-AC49-E0724F216672}.Debug|x64.Deploy.0 = Debug|x64
+		{5C994DAB-9E44-40C9-AC49-E0724F216672}.Release|ARM64.ActiveCfg = Release|ARM64
+		{5C994DAB-9E44-40C9-AC49-E0724F216672}.Release|ARM64.Build.0 = Release|ARM64
+		{5C994DAB-9E44-40C9-AC49-E0724F216672}.Release|ARM64.Deploy.0 = Release|ARM64
+		{5C994DAB-9E44-40C9-AC49-E0724F216672}.Release|x64.ActiveCfg = Release|x64
+		{5C994DAB-9E44-40C9-AC49-E0724F216672}.Release|x64.Build.0 = Release|x64
+		{5C994DAB-9E44-40C9-AC49-E0724F216672}.Release|x64.Deploy.0 = Release|x64
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {1AF87E8C-07A5-48F3-AB76-2B658F7C02CF}
+	EndGlobalSection
+EndGlobal
