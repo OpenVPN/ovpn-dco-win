@@ -225,22 +225,54 @@ static
 NTSTATUS
 OvpnSocketUdpReceiveFromEvent(_In_ PVOID socketContext, ULONG flags, _In_opt_ PWSK_DATAGRAM_INDICATION dataIndication)
 {
-    UNREFERENCED_PARAMETER(flags);
-
     POVPN_DEVICE device = (POVPN_DEVICE)socketContext;
+
+    // buffer where we assemble fragmented datagram
+    PUCHAR packetBuf = device->Socket.UdpState.PacketBuf;
 
     // one DataIndication is one UDP datagram
     while (dataIndication != NULL) {
         PMDL mdl = dataIndication->Buffer.Mdl;
-        PUCHAR buf = (PUCHAR) MmGetSystemAddressForMdlSafe(mdl, LowPagePriority);
-        if (buf == NULL)
-            return STATUS_INSUFFICIENT_RESOURCES;
-        buf += dataIndication->Buffer.Offset;
+        ULONG offset = dataIndication->Buffer.Offset;
+        PUCHAR buf = (PUCHAR)MmGetSystemAddressForMdlSafe(mdl, LowPagePriority);
 
-        if (mdl->Next) {
-            // Lev: I have never seen it being called
-            // TODO:
-            LOG_ERROR("mdl->Next != NULL");
+        SIZE_T bytesCopied = 0;
+        SIZE_T bytesRemained = dataIndication->Buffer.Length;
+        if (bytesRemained > OVPN_SOCKET_PACKET_BUFFER_SIZE) {
+            LOG_ERROR("UDP datagram of size <size> is larged than buffer size <buf>", TraceLoggingValue(bytesRemained, "size"),
+                TraceLoggingValue(OVPN_SOCKET_PACKET_BUFFER_SIZE, "buf"));
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+        while ((bytesRemained > 0) && (mdl != NULL)) {
+            buf = (PUCHAR)MmGetSystemAddressForMdlSafe(mdl, LowPagePriority);
+            if (buf == NULL) {
+                return STATUS_INSUFFICIENT_RESOURCES;
+            }
+            buf += offset;
+
+            // when datagram is split into several MDLs (seems this is only happens when datagram is fragmented)
+            // we first assemble all fragments (MDLs) into temporary buffer
+
+            // usually this is not the case, so we just use MDL buffer
+            if (dataIndication->Buffer.Mdl->Next == NULL) {
+                break;
+            }
+
+            SIZE_T copyLength = min(bytesRemained, MmGetMdlByteCount(mdl) - offset);
+            RtlCopyMemory(packetBuf + bytesCopied, buf, copyLength);
+
+            bytesCopied += copyLength;
+            bytesRemained -= copyLength;
+
+            // offset is only for the 1st MDL
+            offset = 0;
+
+            mdl = mdl->Next;
+
+        }
+        // shall we use temporary buffer where we have all fragments assembled or MDL buffer?
+        if (dataIndication->Buffer.Mdl->Next != NULL) {
+            buf = packetBuf;
         }
 
         OvpnSocketProcessIncomingPacket(device, buf, dataIndication->Buffer.Length, flags & WSK_FLAG_AT_DISPATCH_LEVEL);
@@ -289,7 +321,7 @@ OvpnSocketTcpReceiveEvent(_In_opt_ PVOID socketContext, _In_ ULONG flags, _In_op
                     // header fully read?
                     if (tcpState->BytesRead == sizeof(tcpState->LenBuf)) {
                         USHORT len = RtlUshortByteSwap(*(USHORT*)tcpState->LenBuf);
-                        if ((len == 0) || (len > OVPN_SOCKET_TCP_BUFFER_SIZE)) {
+                        if ((len == 0) || (len > OVPN_SOCKET_PACKET_BUFFER_SIZE)) {
                             return STATUS_INVALID_BUFFER_SIZE;
                         }
 

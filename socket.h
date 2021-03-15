@@ -26,7 +26,7 @@
 
 #include "driverhelper\buffers.h"
 
-#define OVPN_SOCKET_TCP_BUFFER_SIZE 2048
+#define OVPN_SOCKET_PACKET_BUFFER_SIZE 2048
 
 struct OvpnSocketTcpState
 {
@@ -38,8 +38,15 @@ struct OvpnSocketTcpState
 	// how many bytes already read for header or buffer
 	USHORT BytesRead;
 
-	// packet buffer if packet s scattered across MDLs
-	UCHAR PacketBuf[OVPN_SOCKET_TCP_BUFFER_SIZE];
+	// packet buffer if packet is scattered across MDLs
+	UCHAR PacketBuf[OVPN_SOCKET_PACKET_BUFFER_SIZE];
+};
+
+struct OvpnSocketUdpState
+{
+	// packet buffer if datagram scattered across MDLs
+	// this seems to only happen in unlikely case when datagram is fragmented
+	UCHAR PacketBuf[OVPN_SOCKET_PACKET_BUFFER_SIZE];
 };
 
 struct OvpnSocket
@@ -48,6 +55,7 @@ struct OvpnSocket
 	PWSK_SOCKET Socket;
 
 	OvpnSocketTcpState TcpState;
+	OvpnSocketUdpState UdpState;
 };
 
 _Must_inspect_result_
