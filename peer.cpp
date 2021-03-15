@@ -204,15 +204,18 @@ OvpnPeerSwapKeys(POVPN_DEVICE device)
 
 _Use_decl_annotations_
 VOID
-OvpnPeerUninit(POVPN_DEVICE device, HANDLE pid)
+OvpnPeerUninit(POVPN_DEVICE device)
 {
     LONG existingPid = InterlockedCompareExchange(&device->UserspacePid, 0, 0);
 
-    if (existingPid != PtrToLong(pid)) {
+    // by some reasons EVT_FILE_CLEANUP, which calls this function, is also called on driver reinstall,
+    // when peer hasn't been added. Catch this case.
+    if (existingPid == 0) {
+        LOG_INFO("Peer not added.");
         return;
     }
 
-    LOG_INFO("Process <pid> closed handle, do cleanup", TraceLoggingValue(existingPid, "pid"));
+    LOG_INFO("Uninitializing peer");
 
     KIRQL kirql = ExAcquireSpinLockExclusive(&device->SpinLock);
 

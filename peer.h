@@ -60,4 +60,4 @@ OvpnPeerSwapKeys(_In_ POVPN_DEVICE device);
 _IRQL_requires_same_
 _IRQL_requires_(PASSIVE_LEVEL)
 VOID
-OvpnPeerUninit(_In_ POVPN_DEVICE device, _In_ HANDLE pid);
+OvpnPeerUninit(_In_ POVPN_DEVICE device);

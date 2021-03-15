@@ -258,13 +258,9 @@ EVT_WDF_FILE_CLEANUP OvpnEvtFileCleanup;
 
 _Use_decl_annotations_
 VOID OvpnEvtFileCleanup(WDFFILEOBJECT fileObject) {
-    HANDLE pid = PsGetCurrentProcessId();
-    if (pid == NULL) {
-        return;
-    }
     POVPN_DEVICE device = OvpnGetDeviceContext(WdfFileObjectGetDevice(fileObject));
 
-    OvpnPeerUninit(device, pid);
+    OvpnPeerUninit(device);
 }
 
 EVT_WDF_DRIVER_DEVICE_ADD OvpnEvtDeviceAdd;
