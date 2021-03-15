@@ -64,7 +64,7 @@ NTSTATUS OvpnPeerNew(POVPN_DEVICE device, WDFREQUEST request)
     LOG_INFO("Client pid <pid> connected", TraceLoggingValue(newPid, "pid"));
 
     POVPN_DRIVER driver = OvpnGetDriverContext(WdfGetDriver());
-    PWSK_SOCKET socket;
+    PWSK_SOCKET socket = NULL;
     BOOLEAN tcp = peer->Proto == OVPN_PROTO_TCP;
     SIZE_T remoteAddrSize = peer->Remote.Addr4.sin_family == AF_INET ? sizeof(peer->Remote.Addr4) : sizeof(peer->Remote.Addr6);
 
