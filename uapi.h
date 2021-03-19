@@ -22,7 +22,9 @@
  */
 
 #pragma once
-
+#ifndef _KERNEL_MODE
+#include <winsock2.h>
+#endif
 #include <ws2def.h>
 #include <ws2ipdef.h>
 
