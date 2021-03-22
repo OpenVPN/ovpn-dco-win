@@ -289,7 +289,9 @@ OvpnEvtDeviceAdd(WDFDRIVER wdfDriver, PWDFDEVICE_INIT deviceInit) {
     WDFDEVICE wdfDevice;
     GOTO_IF_NOT_NT_SUCCESS(done, status, WdfDeviceCreate(&deviceInit, &objAttributes, &wdfDevice));
 
-    GOTO_IF_NOT_NT_SUCCESS(done, status, WdfDeviceCreateSymbolicLink(wdfDevice, &symLink));
+    // this will fail if one device has already been created but that's ok, since
+    // openvpn2/3 accesses devices via Device Interface GUID, and symlink is used only by test client.
+    LOG_IF_NOT_NT_SUCCESS(WdfDeviceCreateSymbolicLink(wdfDevice, &symLink));
 
     UNICODE_STRING referenceString;
     RtlInitUnicodeString(&referenceString, L"ovpn-dco");
