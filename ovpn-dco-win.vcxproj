@@ -226,9 +226,7 @@
     <Link>
       <AdditionalDependencies>Netio.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
-    <Inf>
-      <TimeStamp>$(OVPN_DCO_VERSION_MAJOR).$(OVPN_DCO_VERSION_MINOR)</TimeStamp>
-    </Inf>
+    <Inf />
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
     <ClCompile>
@@ -263,9 +261,7 @@
       <Command>
       </Command>
     </PreBuildEvent>
-    <Inf>
-      <TimeStamp>$(OVPN_DCO_VERSION_MAJOR).$(OVPN_DCO_VERSION_MINOR)</TimeStamp>
-    </Inf>
+    <Inf />
     <PostBuildEvent>
       <Command>
       </Command>
@@ -299,9 +295,7 @@
     <Link>
       <AdditionalDependencies>Netio.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
-    <Inf>
-      <TimeStamp>$(OVPN_DCO_VERSION_MAJOR).$(OVPN_DCO_VERSION_MINOR)</TimeStamp>
-    </Inf>
+    <Inf />
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|ARM'">
     <ClCompile>
@@ -347,9 +341,7 @@
     <Link>
       <AdditionalDependencies>uuid.lib;Netio.lib;Ksecdd.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
-    <Inf>
-      <TimeStamp>$(OVPN_DCO_VERSION_MAJOR).$(OVPN_DCO_VERSION_MINOR)</TimeStamp>
-    </Inf>
+    <Inf />
   </ItemDefinitionGroup>
   <ItemGroup>
     <FilesToPackage Include="$(TargetPath)" />
