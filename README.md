@@ -86,24 +86,18 @@ To send and receive control channel packets, client uses Read/WriteFile calls. I
 
 ### OpenVPN support
 
-At the moment we are working on adding support for ovpn-dco-win to openvpn2 and openvpn3 reference client. We will provide source code and binaries when we think code is ready for external testing.
+Thanks to Arne Schwabe, there is now a beta version of the openvpn-gui client with dco-win support.
+Installer could be found here: https://swupdate.openvpn.net/beta-downloads/win-dco/openvpn-install-dco-preview-Win10.exe
+It was built from "dco" branch in Arne's github repo https://github.com/schwabe/openvpn/tree/dco. See https://github.com/schwabe/openvpn/blob/dco/README.dco.md for more info about current and general limitations.
 
+To use ovpn-dco-win with openvpn2, add the following lines to the .ovpn profile:
 
-### Performance
+```
+  windows-driver ovpn-dco-win
+  tun-mtu 1428
+```
 
-We haven't dived into performance tuning yet. However our preliminary tests shows that ovpn-dco-win easily outperforms NDIS miniport based drivers, such as tap-windows6. Below are results of iperf3 tests conducted on Hyper-V guests (Windows 10 and Ubuntu 20.04), host machine is Windows 10 Lenovo Thinkpad X1 Gen6 (Core i7 8550U). Cipher algorithm used is AES-256-GCM. 
-
-"openvpn3 ovpn-dco-win" mean experimental branch of openvpn3 reference client with ovpn-dco-win support.
-
-|Client (Windows)         |Server (Linux)         |iPerf3 bandwidth                   |
-|-------------------------|-----------------------|-----------------------------------|
-|openvpn3 ovpn-dco-win    |openvpn 2.5 ovpn-dco   |S->C: 1.22Gbis/s, C->S: 1.10Gbit/s |
-|openvpn3 ovpn-dco-win    |openvpn 2.4.7          |S->C: 894Mbit/s, C->S: 586Mbit/s   |
-|openvpn 2.5 wintun       |openvpn 2.5 ovpn-dco   |S->C: 242Mbit/s, C->S: 456Mbit/s   |
-|openvpn 2.5 wintun       |openvpn 2.4.7          |S->C: 255Mbit/s, C->S: 400Mbit/s   |
-|openvpn 2.5 tap-windows6 |openvpn 2.5 ovpn-dco   |S->C: 121Mbit/s, C->S: 214Mbit/s   |
-|openvpn 2.5 tap-windows6 |openvpn 2.4.7          |S->C: 141Mbit/s, C->S: 218Mbit/s   |
-
+OpenVPN3 support is in progress and coming soon.
 
 ### Logging
 
