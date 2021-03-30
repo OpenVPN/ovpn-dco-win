@@ -222,6 +222,9 @@ OvpnEvtIoDeviceControl(WDFQUEUE queue, WDFREQUEST request, size_t outputBufferLe
 
     case OVPN_IOCTL_NEW_PEER:
         status = OvpnPeerNew(device, request);
+        if (status == STATUS_PENDING) {
+            LOG_IF_NOT_NT_SUCCESS(WdfRequestForwardToIoQueue(request, device->PendingNewPeerQueue));
+        }
         break;
 
     case OVPN_IOCTL_START_VPN:
@@ -251,7 +254,9 @@ OvpnEvtIoDeviceControl(WDFQUEUE queue, WDFREQUEST request, size_t outputBufferLe
         status = STATUS_INVALID_DEVICE_REQUEST;
     }
 
-    WdfRequestCompleteWithInformation(request, status, bytesReturned);
+    if (status != STATUS_PENDING) {
+        WdfRequestCompleteWithInformation(request, status, bytesReturned);
+    }
 }
 
 EVT_WDF_FILE_CLEANUP OvpnEvtFileCleanup;
@@ -315,6 +320,10 @@ OvpnEvtDeviceAdd(WDFDRIVER wdfDriver, PWDFDEVICE_INIT deviceInit) {
     // create manual pending queue which handles async writes
     WDF_IO_QUEUE_CONFIG_INIT(&queueConfig, WdfIoQueueDispatchManual);
     GOTO_IF_NOT_NT_SUCCESS(done, status, WdfIoQueueCreate(wdfDevice, &queueConfig, WDF_NO_OBJECT_ATTRIBUTES, &device->PendingWritesQueue));
+
+    // create manual pending queue which handles async NewPeer requests (when proto is TCP, connect is async)
+    WDF_IO_QUEUE_CONFIG_INIT(&queueConfig, WdfIoQueueDispatchManual);
+    GOTO_IF_NOT_NT_SUCCESS(done, status, WdfIoQueueCreate(wdfDevice, &queueConfig, WDF_NO_OBJECT_ATTRIBUTES, &device->PendingNewPeerQueue));
 
     POVPN_DRIVER driver = OvpnGetDriverContext(wdfDriver);
 

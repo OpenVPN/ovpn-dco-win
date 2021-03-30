@@ -60,13 +60,20 @@ struct OvpnSocket
 
 _Must_inspect_result_
 _IRQL_requires_(PASSIVE_LEVEL)
-NTSTATUS OvpnSocketInit(_In_ WSK_PROVIDER_NPI* wskProviderNpi, ADDRESS_FAMILY addrFamily,
+NTSTATUS
+OvpnSocketInit(_In_ WSK_PROVIDER_NPI* wskProviderNpi, ADDRESS_FAMILY addrFamily,
 	BOOLEAN tcp, _In_ PSOCKADDR localAddr, _In_ PSOCKADDR remoteAddr, SIZE_T remoteAddrSize,
 	_In_ PVOID deviceContext, _Out_ PWSK_SOCKET* socket);
 
 _Must_inspect_result_
 _IRQL_requires_(PASSIVE_LEVEL)
-NTSTATUS OvpnSocketClose(_In_ PWSK_SOCKET socket);
+NTSTATUS
+OvpnSocketClose(_In_ PWSK_SOCKET socket);
 
 _Must_inspect_result_
-NTSTATUS OvpnSocketSendTxBuffer(_In_ OvpnSocket* socket, _In_ OVPN_TX_BUFFER* buffer, _Out_ BOOLEAN* wskSendCalled);
+NTSTATUS
+OvpnSocketSendTxBuffer(_In_ OvpnSocket* socket, _In_ OVPN_TX_BUFFER* buffer, _Out_ BOOLEAN* wskSendCalled);
+
+_Must_inspect_result_
+NTSTATUS
+OvpnSocketTcpConnect(_In_ PWSK_SOCKET socket, _In_ PVOID context, _In_ PSOCKADDR remote);

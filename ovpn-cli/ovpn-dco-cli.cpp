@@ -62,14 +62,19 @@ public:
 
 		handle_ = std::make_unique<asio::windows::stream_handle>(io_context, h);
 
-		new_peer(transport);
+		new_peer(transport, [self = this, key_file, key_direction, tun]() {
+			self->peer_added(key_file, key_direction, tun);
+		});
+	}
 
+private:
+	void peer_added(const std::string& key_file, int key_direction, const Tun& tun) {
 		queue_read_();
 
-		timer_ = std::make_unique<asio::steady_timer>(io_context, duration_);
+		timer_ = std::make_unique<asio::steady_timer>(io_context_, duration_);
 		timer_->async_wait([this](const asio::error_code& error) {
 			tick_();
-		});
+			});
 
 		setup_crypto(key_file, key_direction);
 
@@ -80,7 +85,6 @@ public:
 		setup_tun(tun);
 	}
 
-private:
 	void start_vpn() {
 		DWORD bytes_returned = 0;
 		if (!DeviceIoControl(handle_->native_handle(), OVPN_IOCTL_START_VPN, NULL, 0, NULL, NULL, &bytes_returned, NULL)) {
@@ -261,7 +265,8 @@ private:
 		handle_->write_some(asio::buffer(str.c_str(), str.length()));
 	}
 
-	void new_peer(const Transport& transport) {
+	template <class C>
+	void new_peer(const Transport& transport, C callback) {
 		OVPN_NEW_PEER peer = {};
 
 		ADDRESS_FAMILY af = transport.ipv6 ? AF_INET6 : AF_INET;
@@ -286,9 +291,30 @@ private:
 
 		peer.Proto = transport.tcp ? OVPN_PROTO_TCP : OVPN_PROTO_UDP;
 
-		if (!DeviceIoControl(handle_->native_handle(), OVPN_IOCTL_NEW_PEER, &peer, sizeof(peer), NULL, 0, NULL, NULL)) {
-			std::cerr << "DeviceIoControl(OVPN_IOCTL_NEW_PEER) failed with code " << GetLastError() << std::endl;
-			throw std::exception();
+		asio::windows::overlapped_ptr ov{ io_context_, [callback](const asio::error_code& ec, std::size_t len) {
+			if (!ec) {
+				std::cout << "TCP connected" << std::endl;
+				callback();
+			}
+			else {
+				std::cerr << "TCP connection error: " << ec.message() << std::endl;
+				throw std::exception();
+			}
+		} };
+
+		BOOL res = DeviceIoControl(handle_->native_handle(), OVPN_IOCTL_NEW_PEER, &peer, sizeof(peer), NULL, 0, NULL, ov.get());
+		if (!res) {
+			DWORD err = GetLastError();
+			if (err == ERROR_IO_PENDING) {
+				ov.release();
+			}
+			else {
+				asio::error_code errCode(err, asio::system_category());
+				ov.complete(errCode, 0);
+			}
+		}
+		else {
+			callback();
 		}
 	}
 
@@ -309,6 +335,9 @@ int main(int argc, char **argv)
 		std::cout << "Usage: ovpn-dco-cli.exe <tcp|udp> <i4|i6> <local-ip> <local-port> <remote-ip> <remote-port> <vpn-ip> <vpn-netmask> <vpn-gw> <key-file> <key-direction>";
 		return 1;
 	}
+
+	MessageBeep(MB_ICONASTERISK);
+	MessageBoxA(NULL, "a", "b", MB_OK);
 
 	asio::io_context io_context;
 

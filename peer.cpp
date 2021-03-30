@@ -45,7 +45,8 @@ OvpnPeerZeroStats(POVPN_STATS stats)
 }
 
 _Use_decl_annotations_
-NTSTATUS OvpnPeerNew(POVPN_DEVICE device, WDFREQUEST request)
+NTSTATUS
+OvpnPeerNew(POVPN_DEVICE device, WDFREQUEST request)
 {
     POVPN_NEW_PEER peer = NULL;
     NTSTATUS status;
@@ -65,10 +66,10 @@ NTSTATUS OvpnPeerNew(POVPN_DEVICE device, WDFREQUEST request)
 
     POVPN_DRIVER driver = OvpnGetDriverContext(WdfGetDriver());
     PWSK_SOCKET socket = NULL;
-    BOOLEAN tcp = peer->Proto == OVPN_PROTO_TCP;
+    BOOLEAN proto_tcp = peer->Proto == OVPN_PROTO_TCP;
     SIZE_T remoteAddrSize = peer->Remote.Addr4.sin_family == AF_INET ? sizeof(peer->Remote.Addr4) : sizeof(peer->Remote.Addr6);
 
-    GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnSocketInit(&driver->WskProviderNpi, peer->Local.Addr4.sin_family, tcp, (PSOCKADDR)&peer->Local,
+    GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnSocketInit(&driver->WskProviderNpi, peer->Local.Addr4.sin_family, proto_tcp, (PSOCKADDR)&peer->Local,
         (PSOCKADDR)&peer->Remote, remoteAddrSize, device, &socket));
 
     BCRYPT_ALG_HANDLE algHandle;
@@ -78,13 +79,16 @@ NTSTATUS OvpnPeerNew(POVPN_DEVICE device, WDFREQUEST request)
     RtlZeroMemory(&device->CryptoContext, sizeof(OvpnCryptoContext));
     device->CryptoContext.AlgHandle = algHandle;
     device->Socket.Socket = socket;
-    device->Socket.Tcp = tcp;
-
+    device->Socket.Tcp = proto_tcp;
     RtlZeroMemory(&device->Socket.TcpState, sizeof(OvpnSocketTcpState));
-
     ExReleaseSpinLockExclusive(&device->SpinLock, kirql);
 
     OvpnPeerZeroStats(&device->Stats);
+
+    if (proto_tcp) {
+        // start async connect
+        status = OvpnSocketTcpConnect(socket, device, (PSOCKADDR)&peer->Remote);
+    }
 
 done:
     return status;

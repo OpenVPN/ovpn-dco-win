@@ -59,6 +59,9 @@ struct OVPN_DEVICE {
     WDFQUEUE PendingReadsQueue;
     WDFQUEUE PendingWritesQueue;
 
+    // NEW_PEER request may be enqueued here if TCP connect doesn't finish immediatelly
+    WDFQUEUE PendingNewPeerQueue;
+
     // buffer queue for received decrypted data channel packets
     OVPN_BUFFER_QUEUE DataRxBufferQueue;
 

@@ -446,10 +446,7 @@ OvpnSocketInit(WSK_PROVIDER_NPI* wskProviderNpi, ADDRESS_FAMILY addressFamily, B
             return connectionDispatch->WskBind(*socket, localAddr, 0, irp);
         }, [](PIRP) {}));
 
-        // connect
-        GOTO_IF_NOT_NT_SUCCESS(error, status, OvpnSocketSyncOp("ConnectSocket", [connectionDispatch, socket, remoteAddr](PIRP irp) {
-            return connectionDispatch->WskConnect(*socket, remoteAddr, 0, irp);
-        }, [](PIRP) {}));
+        // connect will be done later
     }
     else {
         // bind
@@ -465,14 +462,14 @@ OvpnSocketInit(WSK_PROVIDER_NPI* wskProviderNpi, ADDRESS_FAMILY addressFamily, B
         GOTO_IF_NOT_NT_SUCCESS(error, status, OvpnSocketSyncOp("SetRemote", [basicDispatch, socket, remoteAddrSize, remoteAddr](PIRP irp) {
             return basicDispatch->WskControlSocket(*socket, WskIoctl, SIO_WSK_SET_REMOTE_ADDRESS, 0, remoteAddrSize, remoteAddr, 0, NULL, NULL, irp);
         }, [](PIRP) {}));
+
+        // enable ReceiveFrom event
+        eventCallbackControl.NpiId = &NPI_WSK_INTERFACE_ID;
+        eventCallbackControl.EventMask = WSK_EVENT_RECEIVE_FROM;
+
+        GOTO_IF_NOT_NT_SUCCESS(error, status, connectionDispatch->Basic.WskControlSocket(*socket, WskSetOption, SO_WSK_EVENT_CALLBACK, SOL_SOCKET,
+            sizeof(WSK_EVENT_CALLBACK_CONTROL), &eventCallbackControl, 0, NULL, NULL, NULL));
     }
-
-    // enable either Receive, Disconnect (TCP) or ReceiveFrom (UDP) events
-    eventCallbackControl.NpiId = &NPI_WSK_INTERFACE_ID;
-    eventCallbackControl.EventMask = tcp ? (WSK_EVENT_RECEIVE | WSK_EVENT_DISCONNECT) : WSK_EVENT_RECEIVE_FROM;
-
-    GOTO_IF_NOT_NT_SUCCESS(error, status, connectionDispatch->Basic.WskControlSocket(*socket, WskSetOption, SO_WSK_EVENT_CALLBACK, SOL_SOCKET,
-        sizeof(WSK_EVENT_CALLBACK_CONTROL), &eventCallbackControl, 0, NULL, NULL, NULL));
 
     goto done;
 
@@ -502,6 +499,82 @@ OvpnSocketClose(PWSK_SOCKET socket)
     }, [](PIRP) { });
 
     return status;
+}
+
+_Function_class_(IO_COMPLETION_ROUTINE)
+NTSTATUS
+OvpnSocketTcpConnectComplete(_In_ PDEVICE_OBJECT deviceObj, _In_ PIRP irp, _In_ PVOID context)
+{
+    UNREFERENCED_PARAMETER(deviceObj);
+
+    POVPN_DEVICE device = (POVPN_DEVICE)context;
+
+    // finish pending IO request
+    WDFREQUEST request;
+    NTSTATUS status = WdfIoQueueRetrieveNextRequest(device->PendingNewPeerQueue, &request);
+
+    if (!NT_SUCCESS(status)) {
+        LOG_ERROR("No pending NewPeer requests");
+    }
+    else {
+        status = irp->IoStatus.Status;
+        LOG_INFO("TCP Connect completed with status ", TraceLoggingNTStatus(status, "status"));
+        if (status == STATUS_SUCCESS) {
+            WSK_EVENT_CALLBACK_CONTROL eventCallbackControl = {};
+            // enable Receive and Disconnect events
+            eventCallbackControl.NpiId = &NPI_WSK_INTERFACE_ID;
+            eventCallbackControl.EventMask = WSK_EVENT_RECEIVE | WSK_EVENT_DISCONNECT;
+
+            KIRQL kirql = ExAcquireSpinLockExclusive(&device->SpinLock);
+            PWSK_SOCKET socket = device->Socket.Socket;
+            ExReleaseSpinLockExclusive(&device->SpinLock, kirql);
+
+            if (socket != NULL) {
+                PWSK_PROVIDER_CONNECTION_DISPATCH connectionDispatch = (PWSK_PROVIDER_CONNECTION_DISPATCH)(socket)->Dispatch;
+                LOG_IF_NOT_NT_SUCCESS(status = connectionDispatch->Basic.WskControlSocket(socket, WskSetOption, SO_WSK_EVENT_CALLBACK, SOL_SOCKET,
+                    sizeof(WSK_EVENT_CALLBACK_CONTROL), &eventCallbackControl, 0, NULL, NULL, NULL));
+            }
+            else {
+                LOG_ERROR("socket is NULL");
+                status = STATUS_INVALID_DEVICE_STATE;
+            }
+
+        }
+        // complete request
+        ULONG_PTR bytesSent = 0;
+        WdfRequestCompleteWithInformation(request, status, bytesSent);
+    }
+
+    // Free the IRP
+    IoFreeIrp(irp);
+
+    // Always return STATUS_MORE_PROCESSING_REQUIRED to
+    // terminate the completion processing of the IRP.
+    return STATUS_MORE_PROCESSING_REQUIRED;
+}
+
+NTSTATUS
+_Use_decl_annotations_
+OvpnSocketTcpConnect(PWSK_SOCKET socket, PVOID context, PSOCKADDR remote)
+{
+    // Get pointer to the socket's provider dispatch structure
+    PWSK_PROVIDER_CONNECTION_DISPATCH dispatch = (PWSK_PROVIDER_CONNECTION_DISPATCH)(socket->Dispatch);
+
+    // Allocate an IRP
+    PIRP irp = IoAllocateIrp(1, FALSE);
+
+    // Check result
+    if (!irp)
+    {
+        // Return error
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    // Set the completion routine for the IRP
+    IoSetCompletionRoutine(irp, OvpnSocketTcpConnectComplete, context, TRUE, TRUE, TRUE);
+
+    // Initiate the connect operation on the socket
+    return dispatch->WskConnect(socket, remote, 0, irp);
 }
 
 _Function_class_(IO_COMPLETION_ROUTINE)
