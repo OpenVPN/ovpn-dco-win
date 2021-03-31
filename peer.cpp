@@ -62,7 +62,7 @@ OvpnPeerNew(POVPN_DEVICE device, WDFREQUEST request)
 
     InterlockedExchange(&device->UserspacePid, newPid);
 
-    LOG_INFO("Client pid <pid> connected", TraceLoggingValue(newPid, "pid"));
+    LOG_INFO("Userspace client connected", TraceLoggingValue(newPid, "pid"));
 
     POVPN_DRIVER driver = OvpnGetDriverContext(WdfGetDriver());
     PWSK_SOCKET socket = NULL;
@@ -118,7 +118,7 @@ NTSTATUS OvpnPeerSet(POVPN_DEVICE device, WDFREQUEST request)
     GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnTimerRecvCreate(device->WdfDevice, &device->KeepaliveRecvTimer));
     OvpnTimerReset(device->KeepaliveRecvTimer, peer->KeepaliveTimeout);
 
-    LOG_INFO("Keepalive interval <interval>, timeout <timeout>", TraceLoggingValue(peer->KeepaliveInterval, "interval"), TraceLoggingValue(peer->KeepaliveTimeout, "timeout"));
+    LOG_INFO("Keepalive", TraceLoggingValue(peer->KeepaliveInterval, "interval"), TraceLoggingValue(peer->KeepaliveTimeout, "timeout"));
 
 done:
     return status;

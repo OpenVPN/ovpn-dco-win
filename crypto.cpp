@@ -245,7 +245,7 @@ OvpnCryptoNewKey(OvpnCryptoContext* cryptoContext, POVPN_CRYPTO_DATA cryptoData)
         keySlot->KeyId = cryptoData->KeyId;
         keySlot->PeerId = cryptoData->PeerId;
 
-        LOG_INFO("Installed key <KeyId> for peer <PeerId>", TraceLoggingValue(cryptoData->KeyId, "KeyId"), TraceLoggingValue(cryptoData->KeyId, "PeerId"));
+        LOG_INFO("Key installed", TraceLoggingValue(cryptoData->KeyId, "KeyId"), TraceLoggingValue(cryptoData->KeyId, "PeerId"));
     }
     else if (cryptoData->CipherAlg == OVPN_CIPHER_ALG_NONE) {
         cryptoContext->Encrypt = OvpnCryptoEncryptNone;

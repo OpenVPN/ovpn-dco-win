@@ -518,7 +518,7 @@ OvpnSocketTcpConnectComplete(_In_ PDEVICE_OBJECT deviceObj, _In_ PIRP irp, _In_ 
     }
     else {
         status = irp->IoStatus.Status;
-        LOG_INFO("TCP Connect completed with status ", TraceLoggingNTStatus(status, "status"));
+        LOG_INFO("TCP Connect completed", TraceLoggingNTStatus(status, "status"));
         if (status == STATUS_SUCCESS) {
             WSK_EVENT_CALLBACK_CONTROL eventCallbackControl = {};
             // enable Receive and Disconnect events
@@ -572,6 +572,8 @@ OvpnSocketTcpConnect(PWSK_SOCKET socket, PVOID context, PSOCKADDR remote)
 
     // Set the completion routine for the IRP
     IoSetCompletionRoutine(irp, OvpnSocketTcpConnectComplete, context, TRUE, TRUE, TRUE);
+
+    LOG_INFO("TCP Connect initiated");
 
     // Initiate the connect operation on the socket
     return dispatch->WskConnect(socket, remote, 0, irp);
