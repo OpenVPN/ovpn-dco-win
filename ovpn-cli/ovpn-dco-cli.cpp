@@ -336,9 +336,6 @@ int main(int argc, char **argv)
 		return 1;
 	}
 
-	MessageBeep(MB_ICONASTERISK);
-	MessageBoxA(NULL, "a", "b", MB_OK);
-
 	asio::io_context io_context;
 
 	bool tcp = std::strcmp(argv[1], "tcp") == 0;
