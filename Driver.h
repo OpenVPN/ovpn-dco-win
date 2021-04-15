@@ -32,7 +32,7 @@
 #include "driverhelper\buffers.h"
 #include "crypto.h"
 #include "socket.h"
-#include "uapi.h"
+#include "uapi\ovpn-dco.h"
 
 extern "C" {
     DRIVER_INITIALIZE DriverEntry;

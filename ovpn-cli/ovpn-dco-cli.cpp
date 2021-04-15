@@ -30,7 +30,7 @@
 
 #include <asio.hpp>
 
-#include "..\uapi.h"
+#include "..\uapi\ovpn-dco.h"
 
 struct Transport {
 	bool tcp;

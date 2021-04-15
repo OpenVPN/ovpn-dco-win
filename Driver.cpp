@@ -31,7 +31,7 @@
 #include "driverhelper\trace.h"
 #include "driver.tmh"
 #include "peer.h"
-#include "uapi.h"
+#include "uapi\ovpn-dco.h"
 #include "socket.h"
 
 TRACELOGGING_DEFINE_PROVIDER(OpenVPNTraceProvider, "Ovpn", (0x4970f9cf, 0x2c0c, 0x4f11, 0xb1, 0xcc, 0xe3, 0xa1, 0xe9, 0x95, 0x88, 0x33));

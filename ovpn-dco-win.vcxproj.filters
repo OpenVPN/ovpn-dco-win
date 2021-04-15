@@ -17,12 +17,12 @@
       <UniqueIdentifier>{8E41214B-6785-4CFE-B992-037D68949A14}</UniqueIdentifier>
       <Extensions>inf;inv;inx;mof;mc;</Extensions>
     </Filter>
+    <Filter Include="Header Files\uapi">
+      <UniqueIdentifier>{5288a68c-a343-462e-a9a6-127ec12dd77a}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="driver.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="uapi.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="adapter.h">
@@ -57,6 +57,12 @@
     </ClInclude>
     <ClInclude Include="resource.h">
       <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="ovpn-dco.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="uapi\ovpn-dco.h">
+      <Filter>Header Files\uapi</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>

@@ -57,8 +57,9 @@
     <ClInclude Include="rxqueue.h" />
     <ClInclude Include="timer.h" />
     <ClInclude Include="txqueue.h" />
-    <ClInclude Include="uapi.h" />
+    <ClInclude Include="ovpn-dco.h" />
     <ClInclude Include="socket.h" />
+    <ClInclude Include="uapi\ovpn-dco.h" />
   </ItemGroup>
   <ItemGroup>
     <Inf Include="ovpn-dco.inf" />

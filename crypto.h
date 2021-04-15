@@ -26,7 +26,7 @@
 
 #include "driverhelper\buffers.h"
 #include "pktid.h"
-#include "uapi.h"
+#include "uapi\ovpn-dco.h"
 
 struct OvpnCryptoKeySlot
 {

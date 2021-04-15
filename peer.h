@@ -24,7 +24,7 @@
 #include <ntddk.h>
 
 #include "driver.h"
-#include "uapi.h"
+#include "uapi\ovpn-dco.h"
 
 _Must_inspect_result_
 _IRQL_requires_(PASSIVE_LEVEL)
