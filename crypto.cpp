@@ -259,6 +259,10 @@ OvpnCryptoNewKey(OvpnCryptoContext* cryptoContext, POVPN_CRYPTO_DATA cryptoData)
         goto done;
     }
 
+    // reset pktid for a new key
+    RtlZeroMemory(&keySlot->PktidXmit, sizeof(keySlot->PktidXmit));
+    RtlZeroMemory(&keySlot->PktidRecv, sizeof(keySlot->PktidRecv));
+
 done:
     return status;
 }

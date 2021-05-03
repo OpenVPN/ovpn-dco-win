@@ -64,8 +64,6 @@ struct OvpnCryptoContext
 {
     BCRYPT_ALG_HANDLE AlgHandle;
 
-    // TODO: locks
-
     OvpnCryptoKeySlot Primary;
     OvpnCryptoKeySlot Secondary;
 
