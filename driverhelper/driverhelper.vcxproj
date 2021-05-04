@@ -245,6 +245,9 @@
     <ProjectReference Include="..\DMF\Dmf\Solution\DmfKFramework\DmfKFramework.vcxproj">
       <Project>{a603433b-6ae6-419d-ad1a-103809b82745}</Project>
     </ProjectReference>
+    <ProjectReference Include="..\DMF\Dmf\Solution\DmfKModules.Library\DmfKModules.Library.vcxproj">
+      <Project>{7cd49bfe-26bb-423e-8093-980f28a34389}</Project>
+    </ProjectReference>
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
