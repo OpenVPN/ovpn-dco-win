@@ -36,6 +36,9 @@ struct OVPN_RX_BUFFER
     UCHAR Head[];
 };
 
+VOID
+OvpnBufferQueueFlushPending(_In_ OVPN_BUFFER_QUEUE handle);
+
 _Must_inspect_result_
 NTSTATUS
 OvpnBufferQueueCreate(_In_ WDFDEVICE Device, _Outptr_ OVPN_BUFFER_QUEUE* Handle);

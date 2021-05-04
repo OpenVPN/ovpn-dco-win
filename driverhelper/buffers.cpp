@@ -88,6 +88,21 @@ done:
     return status;
 }
 
+VOID
+OvpnBufferQueueFlushPending(_In_ OVPN_BUFFER_QUEUE handle)
+{
+    OVPN_RX_BUFFER* buffer;
+
+    int buffersFlushed = 0;
+    while (NT_SUCCESS(OvpnBufferQueueDequeue(handle, &buffer)))
+    {
+        OvpnBufferQueueReuse(handle, buffer);
+        ++buffersFlushed;
+    }
+
+    LOG_INFO("Flushed buffers: ", TraceLoggingValue(buffersFlushed, "count"));
+}
+
 _Use_decl_annotations_
 NTSTATUS
 OvpnTxBufferPoolCreate(WDFDEVICE device, OVPN_BUFFER_POOL* handle)

@@ -239,4 +239,8 @@ OvpnPeerUninit(POVPN_DEVICE device)
     LOG_IF_NOT_NT_SUCCESS(OvpnSocketClose(socket));
 
     OvpnAdapterDestroy(device->Adapter);
+
+    // there might be buffers in consumer list, move them to producer list
+    // so that client won't get control channel messages from previous session
+    OvpnBufferQueueFlushPending(device->ControlRxBufferQueue);
 }
