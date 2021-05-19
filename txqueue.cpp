@@ -49,7 +49,7 @@ OvpnTransmitPacket(_In_ POVPN_DEVICE device, _In_ POVPN_TXQUEUE queue, _In_ NET_
         return STATUS_INSUFFICIENT_RESOURCES;
     }
 
-    SIZE_T bytesCopied = 0;
+    UINT64 bytesCopied = 0;
 
     // gather fragments into single buffer
     while (NetFragmentIteratorHasAny(&fi)) {
