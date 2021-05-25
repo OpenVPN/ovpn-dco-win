@@ -45,4 +45,3 @@ jobs:
         name: artifacts
         path: |
           ${{ matrix.arch }}\${{env.BUILD_CONFIGURATION}}\ovpn-dco\ovpn-dco.*
-          CustomActions\bin\${{ matrix.arch }}\${{env.BUILD_CONFIGURATION}}\CustomActions.CA.dll
