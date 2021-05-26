@@ -668,7 +668,8 @@ OvpnSocketSendTxBuffer(OvpnSocket* ovpnSocket, OVPN_TX_BUFFER* buffer, BOOLEAN* 
 
     // prepend TCP packet with size, as required by OpenVPN protocol
     if (ovpnSocket->Tcp) {
-        *(UINT16*)OvpnTxBufferPush(buffer, 2) = RtlUshortByteSwap(buffer->Len);
+        UINT16 len = RtlUshortByteSwap(buffer->Len);
+        *(UINT16*)OvpnTxBufferPush(buffer, 2) = len;
     }
 
     WSK_BUF wskBuf = {};
