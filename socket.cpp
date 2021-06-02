@@ -303,11 +303,12 @@ OvpnSocketTcpReceiveEvent(_In_opt_ PVOID socketContext, _In_ ULONG flags, _In_op
         // iterate over MDLs
         while (dataIndicationLen > 0 && mdl != NULL) {
             SIZE_T mdlDataLen = min(dataIndicationLen, MmGetMdlByteCount(mdl) - offset);
-            PUCHAR sysAddr = (PUCHAR)MmGetSystemAddressForMdlSafe(mdl, LowPagePriority) + offset;
+            PUCHAR sysAddr = (PUCHAR)MmGetSystemAddressForMdlSafe(mdl, LowPagePriority);
 
             if (sysAddr == NULL) {
                 return STATUS_INSUFFICIENT_RESOURCES;
             }
+            sysAddr += offset;
 
             // there could be multiple packets inside MDL
             while (mdlDataLen > 0) {
