@@ -26,6 +26,7 @@
 #include <vector>
 #include <cstdlib>
 
+#include <iphlpapi.h>
 #include <NdisGuid.h>
 
 #include <asio.hpp>
@@ -183,7 +184,13 @@ private:
 	void setup_tun(const Tun& tun) {
 		std::ostringstream ss;
 
-		ss << "netsh interface ip set address \"Local Area Connection\" static " <<
+		auto index = get_adapter_index();
+		if (index == 0) {
+			std::cerr << "Cannot get ovpn-dco adapter index" << std::endl;
+			throw std::exception();
+		}
+
+		ss << "netsh interface ip set address " << index << " static " <<
 			tun.vpn_ip << " " << tun.vpn_netmask << " " << tun.vpn_ip;
 		std::string cmd = ss.str();
 		std::cout << cmd;
@@ -193,7 +200,7 @@ private:
 		ss.clear();
 
 		// decrease MTU so that payload and openvpn header wouldn't exceed physical network adapter MTU
-		ss << "netsh interface ipv4 set subinterface \"Local Area Connection\" mtu=1428";
+		ss << "netsh interface ipv4 set subinterface " << index << " mtu = 1428";
 		cmd = ss.str();
 		std::cout << cmd;
 		std::system(cmd.c_str());
@@ -202,7 +209,7 @@ private:
 		ss.clear();
 
 		// decrease MTU so that payload and openvpn header wouldn't exceed physical network adapter MTU
-		ss << "netsh interface ipv6 set subinterface \"Local Area Connection\" mtu=1428";
+		ss << "netsh interface ipv6 set subinterface " << index << " mtu = 1428";
 		cmd = ss.str();
 		std::cout << cmd;
 		std::system(cmd.c_str());
@@ -257,7 +264,6 @@ private:
 		//std::cout << "Received: " << buf << std::endl;
 		//send_(std::string(buf));
 
-
 		queue_read_();
 	}
 
@@ -291,13 +297,15 @@ private:
 
 		peer.Proto = transport.tcp ? OVPN_PROTO_TCP : OVPN_PROTO_UDP;
 
-		asio::windows::overlapped_ptr ov{ io_context_, [callback](const asio::error_code& ec, std::size_t len) {
+		asio::windows::overlapped_ptr ov{ io_context_, [callback, peer](const asio::error_code& ec, std::size_t len) {
 			if (!ec) {
-				std::cout << "TCP connected" << std::endl;
+				if (peer.Proto == OVPN_PROTO_TCP)
+					std::cout << "TCP connected" << std::endl;
 				callback();
 			}
 			else {
-				std::cerr << "TCP connection error: " << ec.message() << std::endl;
+				if (peer.Proto == OVPN_PROTO_TCP)
+					std::cerr << "TCP connection error: " << ec.message() << std::endl;
 				throw std::exception();
 			}
 		} };
@@ -318,6 +326,58 @@ private:
 		}
 	}
 
+	public:
+	static ULONG get_adapter_index()
+	{
+		ULONG index = 0;
+		HKEY adapter_key;
+		RegOpenKeyExW(HKEY_LOCAL_MACHINE, ADAPTER_KEY, 0, KEY_READ, &adapter_key);
+
+		int i = 0;
+		while (true) {
+			wchar_t enum_name[256];
+			DWORD len = _countof(enum_name);
+			LONG status = RegEnumKeyExW(adapter_key, i, enum_name, &len, NULL, NULL, NULL, NULL);
+			if (status == ERROR_NO_MORE_ITEMS) {
+				break;
+			}
+
+			wchar_t unit_string[256];
+			HKEY unit_key;
+			swprintf(unit_string, _countof(unit_string), L"%s\\%s", ADAPTER_KEY, enum_name);
+			RegOpenKeyExW(HKEY_LOCAL_MACHINE, unit_string, 0, KEY_READ, &unit_key);
+
+			WCHAR component_id_string[] = L"ComponentId";
+			WCHAR component_id[256];
+			DWORD data_type;
+
+			len = sizeof(component_id);
+			RegQueryValueExW(unit_key, component_id_string, NULL, &data_type, (LPBYTE)component_id, &len);
+
+			if (wcscmp(L"ovpn-dco", component_id) == 0) {
+				WCHAR net_cfg_instance_id_string[] = L"NetCfgInstanceId";
+				WCHAR net_cfg_instance_id[256];
+
+				len = sizeof(net_cfg_instance_id);
+				RegQueryValueExW(unit_key, net_cfg_instance_id_string, NULL, &data_type, (LPBYTE)net_cfg_instance_id, &len);
+
+				WCHAR buf[256];
+				swprintf(buf, _countof(buf), L"\\DEVICE_TCPIP_%s", net_cfg_instance_id);
+				GetAdapterIndex(buf, &index);
+
+				RegCloseKey(unit_key);
+
+				break;
+			}
+
+			++i;
+		}
+
+		RegCloseKey(adapter_key);
+
+		return index;
+	}
+
 	std::unique_ptr<asio::windows::stream_handle> handle_;
 	asio::io_context& io_context_;
 	std::unique_ptr<asio::steady_timer> timer_;
@@ -325,9 +385,9 @@ private:
 
 	char buf[4096];
 	int index_ = 0;
+
+	static inline const wchar_t* ADAPTER_KEY = L"SYSTEM\\CurrentControlSet\\Control\\Class\\{4D36E972-E325-11CE-BFC1-08002BE10318}";
 };
-
-
 
 int main(int argc, char **argv)
 {
