@@ -45,3 +45,4 @@ jobs:
         name: artifacts
         path: |
           ${{ matrix.arch }}\${{env.BUILD_CONFIGURATION}}\ovpn-dco\ovpn-dco.*
+          ${{ matrix.arch }}\${{env.BUILD_CONFIGURATION}}\ovpn-dco-cli.exe
