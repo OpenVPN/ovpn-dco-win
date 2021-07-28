@@ -177,48 +177,51 @@
     <ClCompile>
       <WppEnabled>true</WppEnabled>
       <AdditionalIncludeDirectories>$(SolutionDir)dmf\dmf;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <WppScanConfigurationData>$(SolutionDir)driverhelper\tracewpp.h</WppScanConfigurationData>
+      <WppScanConfigurationData>$(ProjectDir)tracewpp.h</WppScanConfigurationData>
     </ClCompile>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|ARM'">
     <ClCompile>
       <WppEnabled>true</WppEnabled>
       <AdditionalIncludeDirectories>$(SolutionDir)dmf\dmf;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <WppScanConfigurationData>$(SolutionDir)driverhelper\tracewpp.h</WppScanConfigurationData>
+      <WppScanConfigurationData>$(ProjectDir)tracewpp.h</WppScanConfigurationData>
+      <UseFullPaths>false</UseFullPaths>
     </ClCompile>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|ARM64'">
     <ClCompile>
       <WppEnabled>true</WppEnabled>
       <AdditionalIncludeDirectories>$(SolutionDir)dmf\dmf;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <WppScanConfigurationData>$(SolutionDir)driverhelper\tracewpp.h</WppScanConfigurationData>
+      <WppScanConfigurationData>$(ProjectDir)tracewpp.h</WppScanConfigurationData>
     </ClCompile>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'">
     <ClCompile>
       <WppEnabled>true</WppEnabled>
       <AdditionalIncludeDirectories>$(SolutionDir)dmf\dmf;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <WppScanConfigurationData>$(SolutionDir)driverhelper\tracewpp.h</WppScanConfigurationData>
+      <WppScanConfigurationData>$(ProjectDir)tracewpp.h</WppScanConfigurationData>
+      <UseFullPaths>false</UseFullPaths>
     </ClCompile>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>
       <WppEnabled>true</WppEnabled>
       <AdditionalIncludeDirectories>$(SolutionDir)dmf\dmf;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <WppScanConfigurationData>$(SolutionDir)driverhelper\tracewpp.h</WppScanConfigurationData>
+      <WppScanConfigurationData>$(ProjectDir)tracewpp.h</WppScanConfigurationData>
     </ClCompile>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
     <ClCompile>
       <WppEnabled>true</WppEnabled>
       <AdditionalIncludeDirectories>$(SolutionDir)dmf\dmf;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <WppScanConfigurationData>$(SolutionDir)driverhelper\tracewpp.h</WppScanConfigurationData>
+      <WppScanConfigurationData>$(ProjectDir)tracewpp.h</WppScanConfigurationData>
+      <UseFullPaths>false</UseFullPaths>
     </ClCompile>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>
       <WppEnabled>true</WppEnabled>
-      <WppScanConfigurationData>$(SolutionDir)driverhelper\tracewpp.h</WppScanConfigurationData>
+      <WppScanConfigurationData>$(ProjectDir)tracewpp.h</WppScanConfigurationData>
       <EnablePREfast>true</EnablePREfast>
       <AdditionalIncludeDirectories>$(SolutionDir)dmf\dmf;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
@@ -227,7 +230,8 @@
     <ClCompile>
       <WppEnabled>true</WppEnabled>
       <AdditionalIncludeDirectories>$(SolutionDir)dmf\dmf;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <WppScanConfigurationData>$(SolutionDir)driverhelper\tracewpp.h</WppScanConfigurationData>
+      <WppScanConfigurationData>$(ProjectDir)tracewpp.h</WppScanConfigurationData>
+      <UseFullPaths>false</UseFullPaths>
     </ClCompile>
   </ItemDefinitionGroup>
   <ItemGroup>
