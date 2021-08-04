@@ -47,7 +47,7 @@ OvpnSocketSyncOpCompletionRoutine(PDEVICE_OBJECT reserved, PIRP irp, PVOID conte
 }
 
 template <class OP, class SUCCESS>
-NTSTATUS
+__forceinline static NTSTATUS
 _Must_inspect_result_
 _IRQL_requires_(PASSIVE_LEVEL)
 OvpnSocketSyncOp(_In_z_ CHAR* opName, OP op, SUCCESS success)
