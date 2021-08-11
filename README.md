@@ -125,6 +125,24 @@ To see logs in attached debbuger (windbg), use `tracelog.exe` in administrator c
 * `tracelog -start MyTrace -guid #4970F9cf-2c0c-4f11-b1cc-e3a1e9958833 -rt -kd`
 
 
+### Reproducible builds
+
+Release builds of ovpn-dco-win are reproducible, meaning that when you use the same build environment, you should get the exact same ovpn-dco.sys binary. That way, you can verify that a driver released in binary form is indeed compiled from the source code in this repository. This is useful because Microsoft's driver signing requirements make it difficult to run self-compiled drivers.
+
+Released drivers are built with Windows 11 EWDK (Enterprise Windows Driver Kit). Despite the name, it also works on Windows 10.
+You can download it here: https://docs.microsoft.com/en-us/windows-hardware/drivers/download-the-wdk
+
+If you have obtained a ovpn-dco.sys file, you can verify it as follows:
+
+1. Remove the signature from the ovpn-dco.sys file you received: `signtool remove /s ovpn-dco.sys`
+2. Clone this repository and check out the version that your file is supposed to be.
+3. Mount the Windows 11 EWDK iso image.
+4. In Powershell, navigate to the virtual drive and run `LaunchBuildEnv.cmd`.
+5. Navigate to the ovpn-dco-win project directory.
+6. Build the driver: `msbuild /p:platform=<arch> /p:configuration=release /p:signmode=off ovpn-dco-win.vcxproj /t:Build` where `<arch>` is `Win32`, `x64`, `ARM` or `ARM64`.
+7. Check that `<arch>/Release/ovpn-dco.sys` and the file from step 1 have the same SHA256 hash.
+
+
 ### Limitations
 
 * Minimum supported Windows version is Windows 10 20H1. This will unlikely to change.
