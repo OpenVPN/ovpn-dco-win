@@ -22,11 +22,10 @@
 #include <ntddk.h>
 #include <bcrypt.h>
 
-#include "driverhelper\buffers.h"
 #include "crypto.h"
-#include "driverhelper\trace.h"
+#include "trace.h"
 #include "pktid.h"
-#include "proto.h"
+#include "socket.h"
 
 OVPN_CRYPTO_DECRYPT OvpnCryptoDecryptNone;
 
@@ -38,7 +37,7 @@ NTSTATUS OvpnCryptoDecryptNone(OvpnCryptoKeySlot* keySlot, UCHAR* cipherTextBuff
     UNREFERENCED_PARAMETER(plainTextBufferMaxSize);
 
     /* OP header size + Packet ID */
-    constexpr int payloadOffset = OVPN_OP_SIZE_V2 + 4;
+    constexpr int payloadOffset = OVPN_DATA_V2_LEN + 4;
 
     RtlCopyMemory(plainTextBuffer, cipherTextBuffer +
         payloadOffset, cipherTextSize - payloadOffset);
@@ -49,6 +48,24 @@ NTSTATUS OvpnCryptoDecryptNone(OvpnCryptoKeySlot* keySlot, UCHAR* cipherTextBuff
 }
 
 OVPN_CRYPTO_ENCRYPT OvpnCryptoEncryptNone;
+
+UINT
+OvpnCryptoOpCompose(UINT opcode, UINT keyId)
+{
+    return (opcode << OVPN_OPCODE_SHIFT) | keyId;
+}
+
+static
+UINT
+OvpnProtoOp32Compose(UINT opcode, UINT keyId, UINT opPeerId)
+{
+    UINT op8 = OvpnCryptoOpCompose(opcode, keyId);
+
+    if (opcode == OVPN_OP_DATA_V2)
+        return (op8 << 24) | (opPeerId & 0x00FFFFFF);
+
+    return op8;
+}
 
 _Use_decl_annotations_
 NTSTATUS
@@ -63,10 +80,10 @@ OvpnCryptoEncryptNone(OvpnCryptoKeySlot* keySlot, OVPN_TX_BUFFER* buffer)
     RtlCopyMemory(buf, &pktidNetwork, 4);
 
     // prepend with opcode, key-id and peer-id
-    ULONG op = OvpnProtoOp32Compose(OVPN_DATA_V2, 0, -1);
+    ULONG op = OvpnProtoOp32Compose(OVPN_OP_DATA_V2, 0, 0);
     op = RtlUlongByteSwap(op);
-    buf = OvpnTxBufferPush(buffer, OVPN_OP_SIZE_V2);
-    RtlCopyMemory(buf, &op, OVPN_OP_SIZE_V2);
+    buf = OvpnTxBufferPush(buffer, OVPN_DATA_V2_LEN);
+    RtlCopyMemory(buf, &op, OVPN_DATA_V2_LEN);
 
     return STATUS_SUCCESS;
 }
@@ -92,19 +109,19 @@ OvpnCryptoDecryptAEAD(OvpnCryptoKeySlot* keySlot, UCHAR* cipherTextBuffer, UCHAR
 {
     // prepare nonce, which is 4 bytes pktid + 8 bytes nonce_tail
     UCHAR nonce[12];
-    RtlCopyMemory(nonce, cipherTextBuffer + OVPN_OP_SIZE_V2, 4);
+    RtlCopyMemory(nonce, cipherTextBuffer + OVPN_DATA_V2_LEN, 4);
     RtlCopyMemory(nonce + 4, &keySlot->DecNonceTail, sizeof(keySlot->DecNonceTail));
 
     BCRYPT_AUTHENTICATED_CIPHER_MODE_INFO authInfo;
     BCRYPT_INIT_AUTH_MODE_INFO(authInfo);
     authInfo.pbNonce = nonce;
     authInfo.cbNonce = sizeof(nonce);
-    authInfo.pbTag = cipherTextBuffer + OVPN_OP_SIZE_V2 + 4;
+    authInfo.pbTag = cipherTextBuffer + OVPN_DATA_V2_LEN + 4;
     authInfo.cbTag = 16;
     authInfo.pbAuthData = cipherTextBuffer;
-    authInfo.cbAuthData = OVPN_OP_SIZE_V2 + 4;
+    authInfo.cbAuthData = OVPN_DATA_V2_LEN + 4;
 
-    constexpr int payloadOffset = OVPN_OP_SIZE_V2 + 4 + 16; // op + pktid + auth_tag
+    constexpr int payloadOffset = OVPN_DATA_V2_LEN + 4 + 16; // op + pktid + auth_tag
 
     ULONG bytesDone = 0;
     NTSTATUS status;
@@ -172,10 +189,10 @@ OvpnCryptoEncryptAEAD(OvpnCryptoKeySlot* keySlot, OVPN_TX_BUFFER* buffer)
     RtlCopyMemory(buf, &pktidNetwork, 4);
 
     // prepend with opcode, key-id and peer-id
-    ULONG op = OvpnProtoOp32Compose(OVPN_DATA_V2, keySlot->KeyId, keySlot->PeerId);
+    ULONG op = OvpnProtoOp32Compose(OVPN_OP_DATA_V2, keySlot->KeyId, keySlot->PeerId);
     op = RtlUlongByteSwap(op);
-    buf = OvpnTxBufferPush(buffer, OVPN_OP_SIZE_V2);
-    RtlCopyMemory(buf, &op, OVPN_OP_SIZE_V2);
+    buf = OvpnTxBufferPush(buffer, OVPN_DATA_V2_LEN);
+    RtlCopyMemory(buf, &op, OVPN_DATA_V2_LEN);
 
     BCRYPT_AUTHENTICATED_CIPHER_MODE_INFO authInfo;
     BCRYPT_INIT_AUTH_MODE_INFO(authInfo);
@@ -184,13 +201,13 @@ OvpnCryptoEncryptAEAD(OvpnCryptoKeySlot* keySlot, OVPN_TX_BUFFER* buffer)
     authInfo.pbTag = tag;
     authInfo.cbTag = 16;
     authInfo.pbAuthData = buffer->Data;
-    authInfo.cbAuthData = OVPN_OP_SIZE_V2 + 4;
+    authInfo.cbAuthData = OVPN_DATA_V2_LEN + 4;
 
-    constexpr int payloadOffset = OVPN_OP_SIZE_V2 + 4 + 16;
+    constexpr int payloadOffset = OVPN_DATA_V2_LEN + 4 + 16;
 
     ULONG bytesDone = 0;
     LOG_IF_NOT_NT_SUCCESS(status = BCryptEncrypt(keySlot->EncKey, buffer->Data + payloadOffset, (ULONG)plainTextLen, &authInfo, NULL, 0, buffer->Data + payloadOffset,
-        OVPN_BUFFER_CAPACITY, &bytesDone, 0));
+        OVPN_SOCKET_PACKET_BUFFER_SIZE, &bytesDone, 0));
     if (!NT_SUCCESS(status)) {
         buffer->Len = 0;
     }

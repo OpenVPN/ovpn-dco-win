@@ -24,12 +24,9 @@
 #include <wdf.h>
 #include <wdfrequest.h>
 
-#include "driverhelper\tracewpp.h"
-
-#include "driverhelper\buffers.h"
+#include "bufferpool.h"
 #include "driver.h"
-#include "driverhelper\trace.h"
-#include "driver.tmh"
+#include "trace.h"
 #include "peer.h"
 #include "uapi\ovpn-dco.h"
 #include "socket.h"
@@ -47,8 +44,7 @@ _Use_decl_annotations_
 VOID
 OvpnEvtDriverContextCleanup(_In_ WDFOBJECT driverObject)
 {
-    // Stop WPP Tracing
-    WPP_CLEANUP(WdfDriverWdmGetDriverObject((WDFDRIVER)driverObject));
+    UNREFERENCED_PARAMETER(driverObject);
 
     TraceLoggingUnregister(OpenVPNTraceProvider);
 }
@@ -56,8 +52,6 @@ OvpnEvtDriverContextCleanup(_In_ WDFOBJECT driverObject)
 NTSTATUS
 DriverEntry(_In_ PDRIVER_OBJECT driverObject, _In_ PUNICODE_STRING registryPath)
 {
-    WPP_INIT_TRACING(driverObject, registryPath);
-
     TraceLoggingRegister(OpenVPNTraceProvider);
 
     WDF_OBJECT_ATTRIBUTES driverAttrs;
@@ -95,42 +89,42 @@ OvpnEvtIoRead(WDFQUEUE queue, WDFREQUEST request, size_t length)
 
     POVPN_DEVICE device = OvpnGetDeviceContext(WdfIoQueueGetDevice(queue));
 
-    // try to get packet from buffer queue
-    OVPN_RX_BUFFER* buffer;
-    NTSTATUS status = OvpnBufferQueueDequeue(device->ControlRxBufferQueue, &buffer);
+    // do we have pending control packets?
+    LIST_ENTRY* entry = OvpnBufferQueueDequeue(device->ControlRxBufferQueue);
+    if (entry == NULL) {
+        // no pending control packets, move request to manual queue
+        LOG_IF_NOT_NT_SUCCESS(WdfRequestForwardToIoQueue(request, device->PendingReadsQueue));
+        return;
+    }
 
-    // any packets in buffer queue?
+    OVPN_RX_BUFFER* buffer = CONTAINING_RECORD(entry, OVPN_RX_BUFFER, ListEntry);
+
+    NTSTATUS status;
+
+    // retrieve IO request buffer
+    PVOID inputBuffer;
+    size_t inputBufferLength;
+    ULONG_PTR bytesSent;
+
+    LOG_IF_NOT_NT_SUCCESS(status = WdfRequestRetrieveOutputBuffer(request, buffer->Len, &inputBuffer, &inputBufferLength));
+
     if (NT_SUCCESS(status)) {
+        // copy packet into IO request buffer
+        RtlCopyMemory(inputBuffer, buffer->Data, buffer->Len);
+        bytesSent = buffer->Len;
 
-        // retrieve IO request buffer
-        PVOID inputBuffer;
-        size_t inputBufferLength;
-        ULONG_PTR bytesSent;
-
-        LOG_IF_NOT_NT_SUCCESS(status = WdfRequestRetrieveOutputBuffer(request, buffer->Len, &inputBuffer, &inputBufferLength));
-
-        if (NT_SUCCESS(status)) {
-            // copy packet into IO request buffer
-            RtlCopyMemory(inputBuffer, buffer->Head, buffer->Len);
-            bytesSent = buffer->Len;
-
-            InterlockedIncrementNoFence(&device->Stats.ReceivedControlPackets);
-        }
-        else {
-            // likely userspace buffer is too small
-            bytesSent = 0;
-        }
-
-        // complete IO request
-        WdfRequestCompleteWithInformation(request, status, bytesSent);
-
-        // return buffer back to queue
-        OvpnBufferQueueReuse(device->ControlRxBufferQueue, buffer);
+        InterlockedIncrementNoFence(&device->Stats.ReceivedControlPackets);
     }
     else {
-        // move request to manual queue
-        LOG_IF_NOT_NT_SUCCESS(WdfRequestForwardToIoQueue(request, device->PendingReadsQueue));
+        // likely userspace buffer is too small
+        bytesSent = 0;
     }
+
+    // complete IO request
+    WdfRequestCompleteWithInformation(request, status, bytesSent);
+
+    // return buffer back to pool
+    OvpnRxBufferPoolPut(buffer);
 }
 
 EVT_WDF_IO_QUEUE_IO_READ OvpnEvtIoWrite;
@@ -157,7 +151,7 @@ OvpnEvtIoWrite(WDFQUEUE queue, WDFREQUEST request, size_t length)
     }
 
     // fetch tx buffer
-    GOTO_IF_NOT_NT_SUCCESS(error, status, OvpnTxBufferPoolGet(device->TxPool, &buffer));
+    GOTO_IF_NOT_NT_SUCCESS(error, status, OvpnTxBufferPoolGet(device->TxBufferPool, &buffer));
 
     // get request buffer
     PVOID requestBuffer;
@@ -174,15 +168,7 @@ OvpnEvtIoWrite(WDFQUEUE queue, WDFREQUEST request, size_t length)
     GOTO_IF_NOT_NT_SUCCESS(error, status, WdfRequestForwardToIoQueue(request, device->PendingWritesQueue));
 
     // send
-    BOOLEAN wskSendCalled = FALSE;
-    LOG_IF_NOT_NT_SUCCESS(status = OvpnSocketSendTxBuffer(&device->Socket, buffer, &wskSendCalled));
-    if (!NT_SUCCESS(status)) {
-        // if WskSend was called, then buffer will be put back and request will be
-        // completed by IoCompletion callback even in case of send failure
-        if (!wskSendCalled) {
-            goto error;
-        }
-    }
+    LOG_IF_NOT_NT_SUCCESS(status = OvpnSocketSend(&device->Socket, buffer));
 
     goto done_not_complete;
 
@@ -268,11 +254,29 @@ VOID OvpnEvtFileCleanup(WDFFILEOBJECT fileObject) {
     OvpnPeerUninit(device);
 }
 
+EVT_WDF_DEVICE_CONTEXT_CLEANUP OvpnEvtDeviceCleanup;
+
+_Use_decl_annotations_
+VOID OvpnEvtDeviceCleanup(WDFOBJECT obj) {
+    LOG_INFO("");
+
+    OVPN_DEVICE* device = OvpnGetDeviceContext(obj);
+
+    OvpnBufferPoolDelete((OVPN_BUFFER_POOL)device->TxBufferPool);
+    OvpnBufferPoolDelete((OVPN_BUFFER_POOL)device->RxBufferPool);
+
+    OvpnBufferQueueDelete(device->ControlRxBufferQueue);
+    OvpnBufferQueueDelete(device->DataRxBufferQueue);
+}
+
+
 EVT_WDF_DRIVER_DEVICE_ADD OvpnEvtDeviceAdd;
 
 _Use_decl_annotations_
 NTSTATUS
 OvpnEvtDeviceAdd(WDFDRIVER wdfDriver, PWDFDEVICE_INIT deviceInit) {
+    LOG_INFO("");
+
     // make sure only one app can access driver at time
     WdfDeviceInitSetExclusive(deviceInit, TRUE);
 
@@ -290,6 +294,7 @@ OvpnEvtDeviceAdd(WDFDRIVER wdfDriver, PWDFDEVICE_INIT deviceInit) {
     WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&objAttributes, OVPN_DEVICE);
     // BCryptOpenAlgorithmProvider with BCRYPT_PROV_DISPATCH returns STATUS_NOT_SUPPORTED if sync scope is WdfSynchronizationScopeDevice
     objAttributes.SynchronizationScope = WdfSynchronizationScopeNone;
+    objAttributes.EvtCleanupCallback = OvpnEvtDeviceCleanup;
 
     WDFDEVICE wdfDevice;
     GOTO_IF_NOT_NT_SUCCESS(done, status, WdfDeviceCreate(&deviceInit, &objAttributes, &wdfDevice));
@@ -330,10 +335,11 @@ OvpnEvtDeviceAdd(WDFDRIVER wdfDriver, PWDFDEVICE_INIT deviceInit) {
     // Capture the WSK Provider NPI. If WSK subsystem is not ready yet, wait until it becomes ready.
     GOTO_IF_NOT_NT_SUCCESS(done, status, WskCaptureProviderNPI(&driver->WskRegistration, WSK_INFINITE_WAIT, &driver->WskProviderNpi));
 
-    GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnBufferQueueCreate(wdfDevice, &device->DataRxBufferQueue));
-    GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnBufferQueueCreate(wdfDevice, &device->ControlRxBufferQueue));
+    GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnTxBufferPoolCreate(&device->TxBufferPool, device));
+    GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnRxBufferPoolCreate(&device->RxBufferPool));
 
-    GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnTxBufferPoolCreate(wdfDevice, &device->TxPool));
+    GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnBufferQueueCreate(&device->ControlRxBufferQueue));
+    GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnBufferQueueCreate(&device->DataRxBufferQueue));
 
 done:
     return status;

@@ -36,6 +36,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="adapter.cpp" />
+    <ClCompile Include="bufferpool.cpp" />
     <ClCompile Include="crypto.cpp" />
     <ClCompile Include="driver.cpp" />
     <ClCompile Include="peer.cpp" />
@@ -47,15 +48,15 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="adapter.h" />
+    <ClInclude Include="bufferpool.h" />
     <ClInclude Include="crypto.h" />
     <ClInclude Include="driver.h" />
     <ClInclude Include="netringiterator.h" />
     <ClInclude Include="peer.h" />
     <ClInclude Include="pktid.h" />
-    <ClInclude Include="proto.h" />
-    <ClInclude Include="resource.h" />
     <ClInclude Include="rxqueue.h" />
     <ClInclude Include="timer.h" />
+    <ClInclude Include="trace.h" />
     <ClInclude Include="txqueue.h" />
     <ClInclude Include="ovpn-dco.h" />
     <ClInclude Include="socket.h" />
@@ -224,7 +225,7 @@
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>
-      <WppEnabled>true</WppEnabled>
+      <WppEnabled>false</WppEnabled>
       <WppRecorderEnabled>true</WppRecorderEnabled>
       <WppScanConfigurationData Condition="'%(ClCompile.ScanConfigurationData)' == ''">driverhelper\tracewpp.h</WppScanConfigurationData>
       <WppKernelMode>true</WppKernelMode>
@@ -238,7 +239,7 @@
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
     <ClCompile>
-      <WppEnabled>true</WppEnabled>
+      <WppEnabled>false</WppEnabled>
       <WppRecorderEnabled>true</WppRecorderEnabled>
       <WppScanConfigurationData Condition="'%(ClCompile.ScanConfigurationData)' == ''">driverhelper\tracewpp.h</WppScanConfigurationData>
       <WppKernelMode>true</WppKernelMode>
@@ -258,7 +259,7 @@
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>
-      <WppEnabled>true</WppEnabled>
+      <WppEnabled>false</WppEnabled>
       <WppRecorderEnabled>true</WppRecorderEnabled>
       <WppScanConfigurationData Condition="'%(ClCompile.ScanConfigurationData)' == ''">driverhelper\tracewpp.h</WppScanConfigurationData>
       <WppKernelMode>true</WppKernelMode>
@@ -281,7 +282,7 @@
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
-      <WppEnabled>true</WppEnabled>
+      <WppEnabled>false</WppEnabled>
       <WppRecorderEnabled>true</WppRecorderEnabled>
       <WppScanConfigurationData Condition="'%(ClCompile.ScanConfigurationData)' == ''">driverhelper\tracewpp.h</WppScanConfigurationData>
       <WppKernelMode>true</WppKernelMode>
@@ -301,7 +302,7 @@
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|ARM'">
     <ClCompile>
-      <WppEnabled>true</WppEnabled>
+      <WppEnabled>false</WppEnabled>
       <WppRecorderEnabled>true</WppRecorderEnabled>
       <WppScanConfigurationData Condition="'%(ClCompile.ScanConfigurationData)' == ''">driverhelper\tracewpp.h</WppScanConfigurationData>
       <WppKernelMode>true</WppKernelMode>
@@ -315,7 +316,7 @@
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|ARM'">
     <ClCompile>
-      <WppEnabled>true</WppEnabled>
+      <WppEnabled>false</WppEnabled>
       <WppRecorderEnabled>true</WppRecorderEnabled>
       <WppScanConfigurationData Condition="'%(ClCompile.ScanConfigurationData)' == ''">driverhelper\tracewpp.h</WppScanConfigurationData>
       <WppKernelMode>true</WppKernelMode>
@@ -335,7 +336,7 @@
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'">
     <ClCompile>
-      <WppEnabled>true</WppEnabled>
+      <WppEnabled>false</WppEnabled>
       <WppRecorderEnabled>true</WppRecorderEnabled>
       <WppScanConfigurationData Condition="'%(ClCompile.ScanConfigurationData)' == ''">driverhelper\tracewpp.h</WppScanConfigurationData>
       <WppKernelMode>true</WppKernelMode>
@@ -355,7 +356,7 @@
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|ARM64'">
     <ClCompile>
-      <WppEnabled>true</WppEnabled>
+      <WppEnabled>false</WppEnabled>
       <WppRecorderEnabled>true</WppRecorderEnabled>
       <WppScanConfigurationData Condition="'%(ClCompile.ScanConfigurationData)' == ''">driverhelper\tracewpp.h</WppScanConfigurationData>
       <WppKernelMode>true</WppKernelMode>
@@ -369,11 +370,6 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <FilesToPackage Include="$(TargetPath)" />
-  </ItemGroup>
-  <ItemGroup>
-    <ProjectReference Include="driverhelper\driverhelper.vcxproj">
-      <Project>{5c994dab-9e44-40c9-ac49-e0724f216672}</Project>
-    </ProjectReference>
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="ovpn-dco.rc" />

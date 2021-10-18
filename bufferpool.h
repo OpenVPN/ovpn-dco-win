@@ -21,43 +21,17 @@
 
 #pragma once
 
-#include <ntddk.h>
-#include <wdf.h>
+#include <ntdef.h>
+#include <wdftypes.h>
+#include <wdm.h>
 
-DECLARE_HANDLE(OVPN_BUFFER_QUEUE);
-
-extern int OVPN_BUFFER_CAPACITY;
-
-struct OVPN_RX_BUFFER
-{
-    SIZE_T Len;
-
-#pragma warning(suppress:4200) //nonstandard extension used: zero-sized array in struct/union
-    UCHAR Head[];
-};
-
-VOID
-OvpnBufferQueueFlushPending(_In_ OVPN_BUFFER_QUEUE handle);
-
-_Must_inspect_result_
-NTSTATUS
-OvpnBufferQueueCreate(_In_ WDFDEVICE Device, _Outptr_ OVPN_BUFFER_QUEUE* Handle);
-
-_Must_inspect_result_
-NTSTATUS
-OvpnBufferQueueFetch(_In_ OVPN_BUFFER_QUEUE Handle, _Outptr_ OVPN_RX_BUFFER** Buffer);
-
-VOID
-OvpnBufferQueueEnqueue(_In_ OVPN_BUFFER_QUEUE Handle, _In_ OVPN_RX_BUFFER* Buffer);
-
-_Must_inspect_result_
-NTSTATUS
-OvpnBufferQueueDequeue(_In_ OVPN_BUFFER_QUEUE Handle, _Outptr_ OVPN_RX_BUFFER** Buffer);
-
-VOID
-OvpnBufferQueueReuse(_In_ OVPN_BUFFER_QUEUE Handle, _In_ OVPN_RX_BUFFER* Buffer);
+#define OVPN_SOCKET_PACKET_BUFFER_SIZE 2048
 
 DECLARE_HANDLE(OVPN_BUFFER_POOL);
+DECLARE_HANDLE(OVPN_TX_BUFFER_POOL);
+DECLARE_HANDLE(OVPN_RX_BUFFER_POOL);
+
+DECLARE_HANDLE(OVPN_BUFFER_QUEUE);
 
 struct OVPN_TX_BUFFER
 {
@@ -73,7 +47,7 @@ struct OVPN_TX_BUFFER
     // describes MDL for buffer, used by Winsock Kernel
     PMDL Mdl;
 
-    OVPN_BUFFER_POOL Pool;
+    OVPN_TX_BUFFER_POOL Pool;
 
     // used when sending from EvtIoWrite
     WDFQUEUE IoQueue;
@@ -82,21 +56,63 @@ struct OVPN_TX_BUFFER
     UCHAR Head[];
 };
 
-_Must_inspect_result_
-PUCHAR OvpnTxBufferPut(_In_ OVPN_TX_BUFFER* buffer, SIZE_T len);
+struct OVPN_RX_BUFFER
+{
+    LIST_ENTRY ListEntry;
 
-PUCHAR OvpnTxBufferPush(_In_ OVPN_TX_BUFFER* buffer, SIZE_T len);
+    SIZE_T Len;
+
+    OVPN_RX_BUFFER_POOL Pool;
+
+    UCHAR Data[OVPN_SOCKET_PACKET_BUFFER_SIZE];
+};
+
+_Must_inspect_result_
+UCHAR*
+OvpnTxBufferPut(_In_ OVPN_TX_BUFFER* work, SIZE_T len);
+
+UCHAR*
+OvpnTxBufferPush(_In_ OVPN_TX_BUFFER* work, SIZE_T len);
 
 _Must_inspect_result_
 NTSTATUS
-OvpnTxBufferPoolCreate(_In_ WDFDEVICE device, _Outptr_ OVPN_BUFFER_POOL* handle);
+OvpnTxBufferPoolCreate(OVPN_TX_BUFFER_POOL* handle, VOID* ctx);
+
+VOID*
+OvpnTxBufferPoolGetContext(OVPN_TX_BUFFER_POOL handle);
 
 _Must_inspect_result_
 NTSTATUS
-OvpnTxBufferPoolGet(_In_ OVPN_BUFFER_POOL handle, _Outptr_ OVPN_TX_BUFFER** buffer);
+OvpnTxBufferPoolGet(_In_ OVPN_TX_BUFFER_POOL handle, _Outptr_ OVPN_TX_BUFFER** buffer);
 
 VOID
 OvpnTxBufferPoolPut(_In_ OVPN_TX_BUFFER* buffer);
 
-WDFDEVICE
-OvpnTxBufferPoolGetParentDevice(_In_ OVPN_BUFFER_POOL handle);
+_Must_inspect_result_
+NTSTATUS
+OvpnRxBufferPoolGet(_In_ OVPN_RX_BUFFER_POOL handle, _Outptr_ OVPN_RX_BUFFER** buffer);
+
+VOID
+OvpnRxBufferPoolPut(_In_ OVPN_RX_BUFFER* buffer);
+
+_Must_inspect_result_
+NTSTATUS
+OvpnRxBufferPoolCreate(OVPN_RX_BUFFER_POOL* handle);
+
+NTSTATUS
+OvpnBufferQueueCreate(OVPN_BUFFER_QUEUE* handle);
+
+VOID
+OvpnBufferQueueEnqueue(OVPN_BUFFER_QUEUE handle, PLIST_ENTRY listEntry);
+
+VOID
+OvpnBufferQueueEnqueueHead(OVPN_BUFFER_QUEUE handle, PLIST_ENTRY listEntry);
+
+LIST_ENTRY*
+OvpnBufferQueueDequeue(OVPN_BUFFER_QUEUE handle);
+
+VOID
+OvpnBufferPoolDelete(OVPN_BUFFER_POOL handle);
+
+VOID
+OvpnBufferQueueDelete(OVPN_BUFFER_QUEUE handle);

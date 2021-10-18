@@ -40,9 +40,6 @@
     <ClInclude Include="crypto.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="proto.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
     <ClInclude Include="timer.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -55,14 +52,17 @@
     <ClInclude Include="socket.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="resource.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
     <ClInclude Include="ovpn-dco.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="uapi\ovpn-dco.h">
       <Filter>Header Files\uapi</Filter>
+    </ClInclude>
+    <ClInclude Include="trace.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="bufferpool.h">
+      <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
@@ -91,6 +91,9 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="socket.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="bufferpool.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>

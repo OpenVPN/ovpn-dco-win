@@ -25,8 +25,7 @@
 #include "adapter.h"
 #include "crypto.h"
 #include "driver.h"
-#include "driverhelper\trace.h"
-#include "proto.h"
+#include "trace.h"
 #include "rxqueue.h"
 #include "timer.h"
 #include "socket.h"
@@ -101,20 +100,22 @@ OvpnSocketControlPacketReceived(_In_ POVPN_DEVICE device, _In_reads_(len) PUCHAR
     NTSTATUS status = WdfIoQueueRetrieveNextRequest(device->PendingReadsQueue, &request);
     if (!NT_SUCCESS(status)) {
         // add control channel packet to queue
+
         OVPN_RX_BUFFER* buffer;
 
         // fetch buffer
-        LOG_IF_NOT_NT_SUCCESS(status = OvpnBufferQueueFetch(device->ControlRxBufferQueue, &buffer));
-        if (!NT_SUCCESS(status)) {
+        if (!NT_SUCCESS(OvpnRxBufferPoolGet(device->RxBufferPool, &buffer))) {
+            LOG_ERROR("RxBufferPool exhausted");
             InterlockedIncrementNoFence(&device->Stats.LostInControlPackets);
+            return;
         }
 
         // copy control packet to buffer
-        RtlCopyMemory(buffer->Head, buf, len);
+        RtlCopyMemory(buffer->Data, buf, len);
         buffer->Len = len;
 
         // enqueue buffer, it will be dequeued when read request arrives
-        OvpnBufferQueueEnqueue(device->ControlRxBufferQueue, buffer);
+        OvpnBufferQueueEnqueue(device->ControlRxBufferQueue, &buffer->ListEntry);
     }
     else {
         // service IO request right away
@@ -139,19 +140,20 @@ OvpnSocketControlPacketReceived(_In_ POVPN_DEVICE device, _In_reads_(len) PUCHAR
 
 static
 _Requires_shared_lock_held_(device->SpinLock)
-VOID OvpnSocketDataPacketReceived(_In_ POVPN_DEVICE device, ULONG op, _In_reads_(len) PUCHAR buf, SIZE_T len)
+VOID OvpnSocketDataPacketReceived(_In_ POVPN_DEVICE device, UCHAR op, _In_reads_(len) PUCHAR buf, SIZE_T len)
 {
+    OVPN_RX_BUFFER* buffer;
+
     // fetch buffer for plaintext
-    OVPN_RX_BUFFER* plainTextBuffer;
-    NTSTATUS status;
-    LOG_IF_NOT_NT_SUCCESS(status = OvpnBufferQueueFetch(device->DataRxBufferQueue, &plainTextBuffer));
+    NTSTATUS status = OvpnRxBufferPoolGet(device->RxBufferPool, &buffer);
     if (!NT_SUCCESS(status)) {
+        LOG_ERROR("RxBufferPool exhausted");
         InterlockedIncrementNoFence(&device->Stats.LostInDataPackets);
         return;
     }
 
     if (device->CryptoContext.Decrypt) {
-        unsigned int keyId = OvpnProtoKeyIdExtract(op);
+        UCHAR keyId = OvpnCryptoKeyIdExtract(op);
         OvpnCryptoKeySlot* keySlot = OvpnCryptoKeySlotFromKeyId(&device->CryptoContext, keyId);
         if (!keySlot) {
             status = STATUS_INVALID_DEVICE_STATE;
@@ -160,7 +162,7 @@ VOID OvpnSocketDataPacketReceived(_In_ POVPN_DEVICE device, ULONG op, _In_reads_
         }
         else {
             // decrypt into plaintext buffer
-            status = device->CryptoContext.Decrypt(keySlot, buf, plainTextBuffer->Head, len, OVPN_BUFFER_CAPACITY, &plainTextBuffer->Len);
+            status = device->CryptoContext.Decrypt(keySlot, buf, buffer->Data, len, OVPN_SOCKET_PACKET_BUFFER_SIZE, &buffer->Len);
         }
     }
     else {
@@ -173,15 +175,15 @@ VOID OvpnSocketDataPacketReceived(_In_ POVPN_DEVICE device, ULONG op, _In_reads_
         OvpnTimerReset(device->KeepaliveRecvTimer, device->KeepaliveTimeout);
 
         // ping packet?
-        if (OvpnTimerIsKeepaliveMessage(plainTextBuffer->Head, plainTextBuffer->Len)) {
+        if (OvpnTimerIsKeepaliveMessage(buffer->Data, buffer->Len)) {
             LOG_INFO("Ping received");
 
-            // no need to inject ping packet into OS, return buffer to the queue
-            OvpnBufferQueueReuse(device->DataRxBufferQueue, plainTextBuffer);
+            // no need to inject ping packet into OS, return buffer to the pool
+            OvpnRxBufferPoolPut(buffer);
         }
         else {
             // enqueue plaintext buffer, it will be dequeued by NetAdapter RX datapath
-            OvpnBufferQueueEnqueue(device->DataRxBufferQueue, plainTextBuffer);
+            OvpnBufferQueueEnqueue(device->DataRxBufferQueue, &buffer->ListEntry);
 
             OvpnAdapterNotifyRx(device->Adapter);
         }
@@ -203,8 +205,8 @@ OvpnSocketProcessIncomingPacket(_In_ POVPN_DEVICE device, _In_reads_(packetLengt
         kirql = ExAcquireSpinLockShared(&device->SpinLock);
     }
 
-    ULONG op = RtlUlongByteSwap(*(ULONG*)(buf)) >> 24;
-    if (OvpnProtoOpcodeIsDataV2(op)) {
+    UCHAR op = RtlUlongByteSwap(*(ULONG*)(buf)) >> 24;
+    if (OvpnCryptoOpcodeExtract(op) == OVPN_OP_DATA_V2) {
         OvpnSocketDataPacketReceived(device, op, buf, packetLength);
     }
     else {
@@ -580,60 +582,41 @@ OvpnSocketTcpConnect(PWSK_SOCKET socket, PVOID context, PSOCKADDR remote)
     return dispatch->WskConnect(socket, remote, 0, irp);
 }
 
-_Function_class_(IO_COMPLETION_ROUTINE)
-NTSTATUS
-OvpnSocketSendComplete(_In_ PDEVICE_OBJECT deviceObj, _In_ PIRP irp, _In_ PVOID context)
+static
+VOID
+OvpnSocketFinalizeTxBuffer(_In_ OVPN_TX_BUFFER* buffer, NTSTATUS ioStatus, ULONG bytesSent)
 {
-    UNREFERENCED_PARAMETER(deviceObj);
-
-    OVPN_TX_BUFFER* buffer = (OVPN_TX_BUFFER*)context;
-    POVPN_DEVICE device = OvpnGetDeviceContext(OvpnTxBufferPoolGetParentDevice(buffer->Pool));
-
-    ULONG bytesSent = (ULONG)(irp->IoStatus.Information);
-
-    // while ovpn-dco driver prepends TCP packet with 2 bytes payload length according to VPN protocol,
-    // when completing IO request we must report bytes sent exaclty as specified by userspace
-    if (device->Socket.Tcp) {
-        bytesSent -= 2;
-    }
-
-    // if send was triggered from EvtIoWrite, we need to complete pending IO request
-    // this is for control channel packets
-    if (buffer->IoQueue != WDF_NO_HANDLE) {
+    if (buffer->IoQueue != NULL) {
         WDFREQUEST request;
         NTSTATUS status;
         GOTO_IF_NOT_NT_SUCCESS(done, status, WdfIoQueueRetrieveNextRequest(buffer->IoQueue, &request));
 
-        if (irp->IoStatus.Status != STATUS_SUCCESS) {
-            LOG_ERROR("Error, Irp->IoStatus.status <status>", TraceLoggingNTStatus(irp->IoStatus.Status, "status"));
-            status = irp->IoStatus.Status;
-
-            InterlockedIncrementNoFence(&device->Stats.LostOutControlPackets);
-        }
-        else {
-            InterlockedIncrementNoFence(&device->Stats.SentControlPackets);
-            InterlockedExchangeAddNoFence64(&device->Stats.TransportBytesSent, bytesSent);
-        }
-
         // report status and bytesSent to userspace
-        WdfRequestCompleteWithInformation(request, status, bytesSent);
-    }
-    else {
-        if (irp->IoStatus.Status != STATUS_SUCCESS) {
-            LOG_ERROR("Error, Irp->IoStatus.status <status>", TraceLoggingNTStatus(irp->IoStatus.Status, "status"));
-
-            InterlockedIncrementNoFence(&device->Stats.LostOutDataPackets);
-        }
-        else {
-            InterlockedIncrementNoFence(&device->Stats.SentDataPackets);
-            InterlockedExchangeAddNoFence64(&device->Stats.TransportBytesSent, bytesSent);
-        }
+        WdfRequestCompleteWithInformation(request, ioStatus, bytesSent);
     }
 
 done:
-
-    // return tx buffer to the pool
     OvpnTxBufferPoolPut(buffer);
+}
+
+_Function_class_(IO_COMPLETION_ROUTINE)
+NTSTATUS
+OvpnSocketSendComplete(_In_ PDEVICE_OBJECT deviceObj, _In_ PIRP irp, _In_ PVOID ctx)
+{
+    UNREFERENCED_PARAMETER(deviceObj);
+
+    if (irp->IoStatus.Status != STATUS_SUCCESS) {
+        LOG_ERROR("Send failed", TraceLoggingNTStatus(irp->IoStatus.Status, "status"));
+    }
+
+    OVPN_TX_BUFFER* buffer = (OVPN_TX_BUFFER*)ctx;
+
+    OVPN_DEVICE* device = (OVPN_DEVICE*)OvpnTxBufferPoolGetContext(buffer->Pool);
+
+    ULONG bytesSend = (ULONG)(irp->IoStatus.Information);
+    if (device->Socket.Tcp)
+        bytesSend -= 2;
+    OvpnSocketFinalizeTxBuffer(buffer, irp->IoStatus.Status, bytesSend);
 
     IoFreeIrp(irp);
 
@@ -642,26 +625,25 @@ done:
 
 NTSTATUS
 _Use_decl_annotations_
-OvpnSocketSendTxBuffer(OvpnSocket* ovpnSocket, OVPN_TX_BUFFER* buffer, BOOLEAN* wskSendCalled) {
-    *wskSendCalled = FALSE;
+OvpnSocketSend(OvpnSocket* ovpnSocket, OVPN_TX_BUFFER* buffer) {
+    OVPN_DEVICE* device = (OVPN_DEVICE*)OvpnTxBufferPoolGetContext(buffer->Pool);
 
-    OVPN_DEVICE* device = OvpnGetDeviceContext(OvpnTxBufferPoolGetParentDevice(buffer->Pool));
     PWSK_SOCKET socket = ovpnSocket->Socket;
+
+    PIRP irp = IoAllocateIrp(1, FALSE);
+    if (irp == NULL) {
+        LOG_ERROR("Failed to allocate IRP");
+        OvpnSocketFinalizeTxBuffer(buffer, STATUS_INSUFFICIENT_RESOURCES, 0);
+        InterlockedIncrementNoFence(buffer->IoQueue != WDF_NO_HANDLE ? &device->Stats.LostOutControlPackets : &device->Stats.LostOutDataPackets);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
 
     if (socket == NULL) {
         LOG_ERROR("Socket is NULL");
+        OvpnSocketFinalizeTxBuffer(buffer, STATUS_INVALID_DEVICE_STATE, 0);
+        IoFreeIrp(irp);
         InterlockedIncrementNoFence(buffer->IoQueue != WDF_NO_HANDLE ? &device->Stats.LostOutControlPackets : &device->Stats.LostOutDataPackets);
         return STATUS_INVALID_DEVICE_STATE;
-    }
-
-    NTSTATUS status;
-
-    PIRP irp = IoAllocateIrp(1, FALSE);
-    if (!irp) {
-        status = STATUS_INSUFFICIENT_RESOURCES;
-        LOG_ERROR("IoAllocateIrp() failed");
-        InterlockedIncrementNoFence(buffer->IoQueue != WDF_NO_HANDLE ? &device->Stats.LostOutControlPackets : &device->Stats.LostOutDataPackets);
-        return status;
     }
 
     // completion routine will be called in any case and will free IRP
@@ -678,6 +660,7 @@ OvpnSocketSendTxBuffer(OvpnSocket* ovpnSocket, OVPN_TX_BUFFER* buffer, BOOLEAN* 
     wskBuf.Mdl = buffer->Mdl;
     wskBuf.Offset = FIELD_OFFSET(OVPN_TX_BUFFER, Head) + (ULONG)(buffer->Data - buffer->Head);
 
+    NTSTATUS status;
     if (ovpnSocket->Tcp) {
         PWSK_PROVIDER_CONNECTION_DISPATCH connectionDispatch = (PWSK_PROVIDER_CONNECTION_DISPATCH)socket->Dispatch;
         LOG_IF_NOT_NT_SUCCESS(status = connectionDispatch->WskSend(socket, &wskBuf, 0, irp));
@@ -686,8 +669,6 @@ OvpnSocketSendTxBuffer(OvpnSocket* ovpnSocket, OVPN_TX_BUFFER* buffer, BOOLEAN* 
         PWSK_PROVIDER_DATAGRAM_DISPATCH datagramDispatch = (PWSK_PROVIDER_DATAGRAM_DISPATCH)socket->Dispatch;
         LOG_IF_NOT_NT_SUCCESS(status = datagramDispatch->WskSendTo(socket, &wskBuf, 0, NULL, 0, NULL, irp));
     }
-
-    *wskSendCalled = TRUE;
 
     return status;
 }

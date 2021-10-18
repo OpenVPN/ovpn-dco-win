@@ -21,7 +21,7 @@
 
 #include <ntifs.h>
 
-#include "driverhelper\trace.h"
+#include "trace.h"
 #include "peer.h"
 #include "timer.h"
 #include "socket.h"
@@ -240,7 +240,10 @@ OvpnPeerUninit(POVPN_DEVICE device)
 
     OvpnAdapterDestroy(device->Adapter);
 
-    // there might be buffers in consumer list, move them to producer list
-    // so that client won't get control channel messages from previous session
-    OvpnBufferQueueFlushPending(device->ControlRxBufferQueue);
+    // flush buffers in control queue so that client won't get control channel messages from previous session
+    while (LIST_ENTRY* entry = OvpnBufferQueueDequeue(device->ControlRxBufferQueue)) {
+        OVPN_RX_BUFFER* buffer = CONTAINING_RECORD(entry, OVPN_RX_BUFFER, ListEntry);
+        // return buffer back to pool
+        OvpnRxBufferPoolPut(buffer);
+    }
 }

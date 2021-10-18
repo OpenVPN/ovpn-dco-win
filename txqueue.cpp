@@ -27,7 +27,7 @@
 
 #include "crypto.h"
 #include "driver.h"
-#include "driverhelper\trace.h"
+#include "trace.h"
 #include "netringiterator.h"
 #include "timer.h"
 #include "txqueue.h"
@@ -37,14 +37,14 @@ _Must_inspect_result_
 _Requires_shared_lock_held_(device->SpinLock)
 static
 NTSTATUS
-OvpnTransmitPacket(_In_ POVPN_DEVICE device, _In_ POVPN_TXQUEUE queue, _In_ NET_RING_PACKET_ITERATOR *packetIterator)
+OvpnTxSendPacket(_In_ POVPN_DEVICE device, _In_ POVPN_TXQUEUE queue, _In_ NET_RING_PACKET_ITERATOR *pi)
 {
-    NET_RING_FRAGMENT_ITERATOR fi = NetPacketIteratorGetFragments(packetIterator);
+    NET_RING_FRAGMENT_ITERATOR fi = NetPacketIteratorGetFragments(pi);
 
     // get buffer into which we gather plaintext fragments and do in-place encryption
     OVPN_TX_BUFFER* buffer;
     NTSTATUS status;
-    LOG_IF_NOT_NT_SUCCESS(status = OvpnTxBufferPoolGet(device->TxPool, &buffer));
+    LOG_IF_NOT_NT_SUCCESS(status = OvpnTxBufferPoolGet(device->TxBufferPool, &buffer));
     if (!NT_SUCCESS(status)) {
         return STATUS_INSUFFICIENT_RESOURCES;
     }
@@ -79,18 +79,14 @@ OvpnTransmitPacket(_In_ POVPN_DEVICE device, _In_ POVPN_TXQUEUE queue, _In_ NET_
 
     if (NT_SUCCESS(status)) {
         // start async send, this will return ciphertext buffer to the pool
-        BOOLEAN wskSendCalled = FALSE;
-        status = OvpnSocketSendTxBuffer(&device->Socket, buffer, &wskSendCalled);
-        if (!NT_SUCCESS(status) && !wskSendCalled) {
-            OvpnTxBufferPoolPut(buffer);
-        }
+        status = OvpnSocketSend(&device->Socket, buffer);
     }
     else {
         OvpnTxBufferPoolPut(buffer);
     }
 
     // update fragment ring's BeginIndex to indicate that we've processes all fragments
-    NET_PACKET* packet = NetPacketIteratorGetPacket(packetIterator);
+    NET_PACKET* packet = NetPacketIteratorGetPacket(pi);
     NET_RING* const fragmentRing = NetRingCollectionGetFragmentRing(fi.Iterator.Rings);
     UINT32 const lastFragmentIndex = NetRingAdvanceIndex(fragmentRing, packet->FragmentIndex, packet->FragmentCount);
 
@@ -113,7 +109,7 @@ OvpnEvtTxQueueAdvance(NETPACKETQUEUE netPacketQueue)
     while (NetPacketIteratorHasAny(&pi)) {
         NET_PACKET* packet = NetPacketIteratorGetPacket(&pi);
         if (!packet->Ignore && !packet->Scratch) {
-            NTSTATUS status = OvpnTransmitPacket(device, queue, &pi);
+            NTSTATUS status = OvpnTxSendPacket(device, queue, &pi);
             if (!NT_SUCCESS(status)) {
                 InterlockedIncrementNoFence(&device->Stats.LostOutDataPackets);
                 break;

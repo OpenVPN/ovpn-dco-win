@@ -25,7 +25,7 @@
 #include <net/virtualaddress.h>
 
 #include "driver.h"
-#include "driverhelper\buffers.h"
+#include "bufferpool.h"
 #include "rxqueue.h"
 #include "netringiterator.h"
 
@@ -37,23 +37,22 @@ OvpnEvtRxQueueAdvance(NETPACKETQUEUE netPacketQueue)
 {
     POVPN_RXQUEUE queue = OvpnGetRxQueueContext(netPacketQueue);
     OVPN_DEVICE* device = OvpnGetDeviceContext(queue->Adapter->WdfDevice);
-    OVPN_BUFFER_QUEUE bufferQueue = device->DataRxBufferQueue;
 
     NET_RING_FRAGMENT_ITERATOR fi = NetRingGetAllFragments(queue->Rings);
     NET_RING_PACKET_ITERATOR pi = NetRingGetAllPackets(queue->Rings);
     while (NetFragmentIteratorHasAny(&fi)) {
-        OVPN_RX_BUFFER* buffer;
-
-        // nothing has arrived and decrypted yet?
-        if (!NT_SUCCESS(OvpnBufferQueueDequeue(bufferQueue, &buffer))) {
+        // get RX workitem, if any
+        LIST_ENTRY* entry = OvpnBufferQueueDequeue(device->DataRxBufferQueue);
+        if (entry == NULL)
             break;
-        }
+
+        OVPN_RX_BUFFER* buffer = CONTAINING_RECORD(entry, OVPN_RX_BUFFER, ListEntry);
 
         NET_FRAGMENT* fragment = NetFragmentIteratorGetFragment(&fi);
         fragment->ValidLength = buffer->Len;
         fragment->Offset = 0;
         NET_FRAGMENT_VIRTUAL_ADDRESS* virtualAddr = NetExtensionGetFragmentVirtualAddress(&queue->VirtualAddressExtension, NetFragmentIteratorGetIndex(&fi));
-        RtlCopyMemory(virtualAddr->VirtualAddress, buffer->Head, buffer->Len);
+        RtlCopyMemory(virtualAddr->VirtualAddress, buffer->Data, buffer->Len);
 
         InterlockedExchangeAddNoFence64(&device->Stats.TunBytesReceived, buffer->Len);
 
@@ -66,7 +65,7 @@ OvpnEvtRxQueueAdvance(NETPACKETQUEUE netPacketQueue)
         NetFragmentIteratorAdvance(&fi);
         NetPacketIteratorAdvance(&pi);
 
-        OvpnBufferQueueReuse(bufferQueue, buffer);
+        OvpnRxBufferPoolPut(buffer);
 
         InterlockedIncrementNoFence(&device->Stats.ReceivedDataPackets);
     }

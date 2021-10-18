@@ -20,7 +20,7 @@
  */
 
 #include "pktid.h"
-#include "driverhelper\trace.h"
+#include "trace.h"
 
 #include <wdfcore.h>
 

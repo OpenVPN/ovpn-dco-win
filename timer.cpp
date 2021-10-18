@@ -19,9 +19,9 @@
  *  51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
-#include "driverhelper\buffers.h"
+#include "bufferpool.h"
 #include "driver.h"
-#include "driverhelper\trace.h"
+#include "trace.h"
 #include "timer.h"
 #include "socket.h"
 
@@ -43,7 +43,7 @@ static VOID OvpnTimerXmit(WDFTIMER timer)
     OVPN_TX_BUFFER* buffer;
     NTSTATUS status;
 
-    LOG_IF_NOT_NT_SUCCESS(status = OvpnTxBufferPoolGet(device->TxPool, &buffer));
+    LOG_IF_NOT_NT_SUCCESS(status = OvpnTxBufferPoolGet(device->TxBufferPool, &buffer));
 
     if (!NT_SUCCESS(status)) {
         return;
@@ -64,14 +64,8 @@ static VOID OvpnTimerXmit(WDFTIMER timer)
 
     if (NT_SUCCESS(status)) {
         // start async send, completion handler will return ciphertext buffer to the pool
-        BOOLEAN wskSendCalled = FALSE;
-        LOG_IF_NOT_NT_SUCCESS(status = OvpnSocketSendTxBuffer(&device->Socket, buffer, &wskSendCalled));
-        if (!NT_SUCCESS(status)) {
-            if (!wskSendCalled) {
-                OvpnTxBufferPoolPut(buffer);
-            }
-        }
-        else {
+        LOG_IF_NOT_NT_SUCCESS(status = OvpnSocketSend(&device->Socket, buffer));
+        if (NT_SUCCESS(status)) {
             LOG_INFO("Ping sent");
         }
     }

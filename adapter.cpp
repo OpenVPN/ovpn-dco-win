@@ -22,7 +22,7 @@
 #include "adapter.h"
 #include "txqueue.h"
 #include "rxqueue.h"
-#include "driverhelper\trace.h"
+#include "trace.h"
 #include "driver.h"
 
 // maximum link speed for send and recv in bps

@@ -4,7 +4,7 @@
 
 ### Intro
 
-ovpn-dco-win stands for "OpenVPN Data Channel Offload for Windows". It is a modern Windows driver, which functions as virtual network adapter and implements required functionality to handle the OpenVPN data channel. When using ovpn-dco-win, the OpenVPN software doesn't send data traffic back and forth between user and kernel space (for encryption, decryption and routing), but operations on payload take place in Windows kernel. The driver is being developed using modern frameworks - WDF, NetAdapterCx and DMF. Because of that, the code is easier to read and maintain comparison to existing NDIS miniport drivers. Speed-wise the new driver performs significantly better comparison to tap-windows6, so it should eliminate the bottleneck which hampers the performance of OpenVPN on Windows.
+ovpn-dco-win stands for "OpenVPN Data Channel Offload for Windows". It is a modern Windows driver, which functions as virtual network adapter and implements required functionality to handle the OpenVPN data channel. When using ovpn-dco-win, the OpenVPN software doesn't send data traffic back and forth between user and kernel space (for encryption, decryption and routing), but operations on payload take place in Windows kernel. The driver is being developed using modern frameworks - WDF and NetAdapterCx. Because of that, the code is easier to read and maintain comparison to existing NDIS miniport drivers. Speed-wise the new driver performs significantly better comparison to tap-windows6, so it should eliminate the bottleneck which hampers the performance of OpenVPN on Windows.
 
 
 ### Installation
@@ -99,7 +99,7 @@ To use ovpn-dco-win with openvpn2, add the following lines to the .ovpn profile:
   tun-mtu 1428
 ```
 
-OpenVPN3 support is in progress and coming soon.
+OpenVPN3 already supports ovpn-dco-win in the latest master branch.
 
 ### Logging
 
@@ -145,7 +145,7 @@ If you have obtained a ovpn-dco.sys file, you can verify it as follows:
 
 ### Limitations
 
-* Minimum supported Windows version is Windows 10 20H1. This will unlikely to change.
+* Minimum supported Windows version is Windows 10 20H1.
 * The driver is under development and the code is not production quality yet.
 * Supported cipher are "none" (for testing only) and AES-128(-192-256)-GCM.
 * Driver is test-signed (properly signed binaries will be provided later).

@@ -24,9 +24,7 @@
 #include <wsk.h>
 #include <wdf.h>
 
-#include "driverhelper\buffers.h"
-
-#define OVPN_SOCKET_PACKET_BUFFER_SIZE 2048
+#include "bufferpool.h"
 
 struct OvpnSocketTcpState
 {
@@ -72,7 +70,7 @@ OvpnSocketClose(_In_ PWSK_SOCKET socket);
 
 _Must_inspect_result_
 NTSTATUS
-OvpnSocketSendTxBuffer(_In_ OvpnSocket* socket, _In_ OVPN_TX_BUFFER* buffer, _Out_ BOOLEAN* wskSendCalled);
+OvpnSocketSend(_In_ OvpnSocket* ovpnSocket, _In_ OVPN_TX_BUFFER* buffer);
 
 _Must_inspect_result_
 NTSTATUS

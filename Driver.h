@@ -29,7 +29,7 @@
 #include <wsk.h>
 
 #include "adapter.h"
-#include "driverhelper\buffers.h"
+#include "bufferpool.h"
 #include "crypto.h"
 #include "socket.h"
 #include "uapi\ovpn-dco.h"
@@ -68,8 +68,11 @@ struct OVPN_DEVICE {
     // buffer queue for received control channel packets
     OVPN_BUFFER_QUEUE ControlRxBufferQueue;
 
+    // pool for OVPN_RX_BUFFER entries
+    OVPN_RX_BUFFER_POOL RxBufferPool;
+
     // buffer pool for encrypted data channel and control channel packets to be sent
-    OVPN_BUFFER_POOL TxPool;
+    OVPN_TX_BUFFER_POOL TxBufferPool;
 
     OVPN_STATS Stats;
 
