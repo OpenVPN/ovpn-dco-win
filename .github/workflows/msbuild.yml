@@ -24,11 +24,11 @@ jobs:
       uses: microsoft/setup-msbuild@v1
 
     - name: Restore artifacts, or run vcpkg, build and cache artifacts
-      uses: lukka/run-vcpkg@main
+      uses: lukka/run-vcpkg@v7.4
       with:
         vcpkgArguments: 'asio'
         vcpkgTriplet: '${{ matrix.arch }}-windows'
-        vcpkgGitCommitId: 'a267ab118c09f56f3dae96c9a4b3410820ad2f0b'
+        vcpkgGitCommitId: '4474aba1e77be2d643eb684298b7d5479cad9a1f'
 
     - name: vcpkg integrate install
       shell: cmd
