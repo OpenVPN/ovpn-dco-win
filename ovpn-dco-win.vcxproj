@@ -236,6 +236,9 @@
       <AdditionalDependencies>Netio.lib;Bcrypt.lib;uuid.lib%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <Inf />
+    <DriverSign>
+      <FileDigestAlgorithm>SHA256</FileDigestAlgorithm>
+    </DriverSign>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
     <ClCompile>
@@ -256,6 +259,9 @@
     <Inf>
       <TimeStamp>$(OVPN_DCO_VERSION_MAJOR).$(OVPN_DCO_VERSION_MINOR)</TimeStamp>
     </Inf>
+    <DriverSign>
+      <FileDigestAlgorithm>SHA256</FileDigestAlgorithm>
+    </DriverSign>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>
@@ -279,6 +285,9 @@
       <Command>
       </Command>
     </PostBuildEvent>
+    <DriverSign>
+      <FileDigestAlgorithm>SHA256</FileDigestAlgorithm>
+    </DriverSign>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
@@ -299,6 +308,9 @@
     <Inf>
       <TimeStamp>$(OVPN_DCO_VERSION_MAJOR).$(OVPN_DCO_VERSION_MINOR)</TimeStamp>
     </Inf>
+    <DriverSign>
+      <FileDigestAlgorithm>SHA256</FileDigestAlgorithm>
+    </DriverSign>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|ARM'">
     <ClCompile>
@@ -313,6 +325,9 @@
       <AdditionalDependencies>Netio.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <Inf />
+    <DriverSign>
+      <FileDigestAlgorithm>SHA256</FileDigestAlgorithm>
+    </DriverSign>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|ARM'">
     <ClCompile>
@@ -333,6 +348,9 @@
     <Inf>
       <TimeStamp>$(OVPN_DCO_VERSION_MAJOR).$(OVPN_DCO_VERSION_MINOR)</TimeStamp>
     </Inf>
+    <DriverSign>
+      <FileDigestAlgorithm>SHA256</FileDigestAlgorithm>
+    </DriverSign>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'">
     <ClCompile>
@@ -353,6 +371,9 @@
     <Inf>
       <TimeStamp>$(OVPN_DCO_VERSION_MAJOR).$(OVPN_DCO_VERSION_MINOR)</TimeStamp>
     </Inf>
+    <DriverSign>
+      <FileDigestAlgorithm>SHA256</FileDigestAlgorithm>
+    </DriverSign>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|ARM64'">
     <ClCompile>
@@ -367,6 +388,9 @@
       <AdditionalDependencies>uuid.lib;Netio.lib;Ksecdd.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <Inf />
+    <DriverSign>
+      <FileDigestAlgorithm>SHA256</FileDigestAlgorithm>
+    </DriverSign>
   </ItemDefinitionGroup>
   <ItemGroup>
     <FilesToPackage Include="$(TargetPath)" />
