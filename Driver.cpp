@@ -46,6 +46,11 @@ OvpnEvtDriverContextCleanup(_In_ WDFOBJECT driverObject)
 {
     UNREFERENCED_PARAMETER(driverObject);
 
+    // TraceLoggingUnregister must be called at PASSIVE_LEVEL, but this function's annotation
+    // says it might be called at <= dispatch level. However, framework guarantees that
+    // for WDFDRIVER this will be called at PASSIVLE_LEVEL.
+
+#pragma warning(suppress: 28118)
     TraceLoggingUnregister(OpenVPNTraceProvider);
 }
 
