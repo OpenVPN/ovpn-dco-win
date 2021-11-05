@@ -236,7 +236,7 @@ OvpnSocketUdpReceiveFromEvent(_In_ PVOID socketContext, ULONG flags, _In_opt_ PW
     while (dataIndication != NULL) {
         PMDL mdl = dataIndication->Buffer.Mdl;
         ULONG offset = dataIndication->Buffer.Offset;
-        PUCHAR buf = (PUCHAR)MmGetSystemAddressForMdlSafe(mdl, LowPagePriority);
+        PUCHAR buf = (PUCHAR)MmGetSystemAddressForMdlSafe(mdl, LowPagePriority | MdlMappingNoExecute);
 
         SIZE_T bytesCopied = 0;
         SIZE_T bytesRemained = dataIndication->Buffer.Length;
@@ -246,7 +246,7 @@ OvpnSocketUdpReceiveFromEvent(_In_ PVOID socketContext, ULONG flags, _In_opt_ PW
             return STATUS_INSUFFICIENT_RESOURCES;
         }
         while ((bytesRemained > 0) && (mdl != NULL)) {
-            buf = (PUCHAR)MmGetSystemAddressForMdlSafe(mdl, LowPagePriority);
+            buf = (PUCHAR)MmGetSystemAddressForMdlSafe(mdl, LowPagePriority | MdlMappingNoExecute);
             if (buf == NULL) {
                 return STATUS_INSUFFICIENT_RESOURCES;
             }
@@ -305,7 +305,7 @@ OvpnSocketTcpReceiveEvent(_In_opt_ PVOID socketContext, _In_ ULONG flags, _In_op
         // iterate over MDLs
         while (dataIndicationLen > 0 && mdl != NULL) {
             SIZE_T mdlDataLen = min(dataIndicationLen, MmGetMdlByteCount(mdl) - offset);
-            PUCHAR sysAddr = (PUCHAR)MmGetSystemAddressForMdlSafe(mdl, LowPagePriority);
+            PUCHAR sysAddr = (PUCHAR)MmGetSystemAddressForMdlSafe(mdl, LowPagePriority | MdlMappingNoExecute);
 
             if (sysAddr == NULL) {
                 return STATUS_INSUFFICIENT_RESOURCES;
