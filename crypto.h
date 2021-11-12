@@ -62,7 +62,7 @@ _IRQL_requires_max_(DISPATCH_LEVEL)
 _Must_inspect_result_
 typedef
 NTSTATUS
-OVPN_CRYPTO_ENCRYPT(_In_ OvpnCryptoKeySlot* keySlot, OVPN_TX_BUFFER* buffer);
+OVPN_CRYPTO_ENCRYPT(_In_ OvpnCryptoKeySlot* keySlot, _In_ UCHAR* buf, _In_ SIZE_T len);
 typedef OVPN_CRYPTO_ENCRYPT* POVPN_CRYPTO_ENCRYPT;
 
 _Function_class_(OVPN_CRYPTO_DECRYPT)
@@ -70,8 +70,7 @@ _IRQL_requires_max_(DISPATCH_LEVEL)
 _Must_inspect_result_
 typedef
 NTSTATUS
-OVPN_CRYPTO_DECRYPT(_In_ OvpnCryptoKeySlot* keySlot, _In_reads_(cipherTextSize) UCHAR* cipherTextBuffer,
-    _Out_writes_(plainTextBufferMaxSize) UCHAR* plainTextBuffer, SIZE_T cipherTextSize, SIZE_T plainTextBufferMaxSize, _Out_ SIZE_T* plainTextBufferFinalSize);
+OVPN_CRYPTO_DECRYPT(_In_ OvpnCryptoKeySlot* keySlot, _In_ UCHAR* bufIn, _In_ SIZE_T len, _In_ UCHAR* bufOut);
 typedef OVPN_CRYPTO_DECRYPT* POVPN_CRYPTO_DECRYPT;
 
 struct OvpnCryptoContext
@@ -83,6 +82,8 @@ struct OvpnCryptoContext
 
     POVPN_CRYPTO_ENCRYPT Encrypt;
     POVPN_CRYPTO_DECRYPT Decrypt;
+
+    SIZE_T CryptoOverhead;
 };
 
 _Must_inspect_result_

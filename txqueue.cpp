@@ -49,8 +49,6 @@ OvpnTxSendPacket(_In_ POVPN_DEVICE device, _In_ POVPN_TXQUEUE queue, _In_ NET_RI
         return STATUS_INSUFFICIENT_RESOURCES;
     }
 
-    UINT64 bytesCopied = 0;
-
     // gather fragments into single buffer
     while (NetFragmentIteratorHasAny(&fi)) {
         // get fragment payload
@@ -61,16 +59,17 @@ OvpnTxSendPacket(_In_ POVPN_DEVICE device, _In_ POVPN_TXQUEUE queue, _In_ NET_RI
         RtlCopyMemory(OvpnTxBufferPut(buffer, fragment->ValidLength),
             (UCHAR const*)virtualAddr->VirtualAddress + fragment->Offset, fragment->ValidLength);
 
-        bytesCopied += fragment->ValidLength;
-
         NetFragmentIteratorAdvance(&fi);
     }
 
-    InterlockedExchangeAddNoFence64(&device->Stats.TunBytesSent, bytesCopied);
+    InterlockedExchangeAddNoFence64(&device->Stats.TunBytesSent, buffer->Len);
 
     if (device->CryptoContext.Encrypt) {
+        // make space to crypto overhead
+        OvpnTxBufferPush(buffer, device->CryptoContext.CryptoOverhead);
+
         // in-place encrypt, always with primary key
-        status = device->CryptoContext.Encrypt(&device->CryptoContext.Primary, buffer);
+        status = device->CryptoContext.Encrypt(&device->CryptoContext.Primary, buffer->Data, buffer->Len);
     }
     else {
         status = STATUS_INVALID_DEVICE_STATE;

@@ -162,7 +162,8 @@ VOID OvpnSocketDataPacketReceived(_In_ POVPN_DEVICE device, UCHAR op, _In_reads_
         }
         else {
             // decrypt into plaintext buffer
-            status = device->CryptoContext.Decrypt(keySlot, buf, buffer->Data, len, OVPN_SOCKET_PACKET_BUFFER_SIZE, &buffer->Len);
+            status = device->CryptoContext.Decrypt(keySlot, buf, len, buffer->Data);
+            buffer->Len = len - device->CryptoContext.CryptoOverhead;
         }
     }
     else {
@@ -228,6 +229,12 @@ NTSTATUS
 OvpnSocketUdpReceiveFromEvent(_In_ PVOID socketContext, ULONG flags, _In_opt_ PWSK_DATAGRAM_INDICATION dataIndication)
 {
     POVPN_DEVICE device = (POVPN_DEVICE)socketContext;
+
+    // could happen on uninit
+    if (device->Socket.Socket == NULL) {
+        LOG_ERROR("TransportSocket is not initialized");
+        return STATUS_SUCCESS;
+    }
 
     // buffer where we assemble fragmented datagram
     PUCHAR packetBuf = device->Socket.UdpState.PacketBuf;

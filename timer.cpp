@@ -54,8 +54,11 @@ static VOID OvpnTimerXmit(WDFTIMER timer)
 
     KIRQL kiqrl = ExAcquireSpinLockShared(&device->SpinLock);
     if (device->CryptoContext.Encrypt) {
+        // make space to crypto overhead
+        OvpnTxBufferPush(buffer, device->CryptoContext.CryptoOverhead);
+
         // in-place encrypt, always with primary key
-        status = device->CryptoContext.Encrypt(&device->CryptoContext.Primary, buffer);
+        status = device->CryptoContext.Encrypt(&device->CryptoContext.Primary, buffer->Data, buffer->Len);
     }
     else {
         status = STATUS_INVALID_DEVICE_STATE;

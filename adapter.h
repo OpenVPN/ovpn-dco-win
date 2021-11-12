@@ -55,3 +55,5 @@ OvpnAdapterDestroy(NETADAPTER netAdapter);
 // notify NetAdapter (if it is ready) that more packets are available
 NTSTATUS
 OvpnAdapterNotifyRx(NETADAPTER netAdapter);
+
+#define OVPN_PAYLOAD_BACKFILL 26 // 2 + 4 + 4 + 16 -> tcp packet size + data_v2 + pktid + auth-tag;
