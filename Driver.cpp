@@ -38,38 +38,34 @@ TRACELOGGING_DEFINE_PROVIDER(OpenVPNTraceProvider, "Ovpn", (0x4970f9cf, 0x2c0c, 
 // to the WskClientEvent callback function
 const WSK_CLIENT_DISPATCH WskAppDispatch = { MAKE_WSK_VERSION(1,0), 0, NULL };
 
-EVT_WDF_OBJECT_CONTEXT_CLEANUP OvpnEvtDriverContextCleanup;
+EVT_WDF_DRIVER_UNLOAD OvpnEvtDriverUnload;
 
 _Use_decl_annotations_
 VOID
-OvpnEvtDriverContextCleanup(_In_ WDFOBJECT driverObject)
+OvpnEvtDriverUnload(_In_ WDFDRIVER driver)
 {
-    UNREFERENCED_PARAMETER(driverObject);
+    UNREFERENCED_PARAMETER(driver);
 
-    // TraceLoggingUnregister must be called at PASSIVE_LEVEL, but this function's annotation
-    // says it might be called at <= dispatch level. However, framework guarantees that
-    // for WDFDRIVER this will be called at PASSIVLE_LEVEL.
-
-#pragma warning(suppress: 28118)
     TraceLoggingUnregister(OpenVPNTraceProvider);
 }
 
 NTSTATUS
 DriverEntry(_In_ PDRIVER_OBJECT driverObject, _In_ PUNICODE_STRING registryPath)
 {
-    TraceLoggingRegister(OpenVPNTraceProvider);
+    WSK_CLIENT_NPI wskClientNpi = {};
+
+    NTSTATUS status;
+    BOOLEAN traceLoggingRegistered = FALSE;
+    GOTO_IF_NOT_NT_SUCCESS(done, status, TraceLoggingRegister(OpenVPNTraceProvider));
+    traceLoggingRegistered = TRUE;
 
     WDF_OBJECT_ATTRIBUTES driverAttrs;
     WDF_OBJECT_ATTRIBUTES_INIT(&driverAttrs);
-    driverAttrs.EvtCleanupCallback = OvpnEvtDriverContextCleanup;
     WDF_OBJECT_ATTRIBUTES_SET_CONTEXT_TYPE(&driverAttrs, OVPN_DRIVER);
 
     WDF_DRIVER_CONFIG driverConfig;
     WDF_DRIVER_CONFIG_INIT(&driverConfig, OvpnEvtDeviceAdd);
-
-    WSK_CLIENT_NPI wskClientNpi = {};
-
-    NTSTATUS status;
+    driverConfig.EvtDriverUnload = OvpnEvtDriverUnload;
     GOTO_IF_NOT_NT_SUCCESS(done, status, WdfDriverCreate(driverObject, registryPath, &driverAttrs, &driverConfig, WDF_NO_HANDLE));
 
     // Register the WSK application
@@ -81,6 +77,12 @@ DriverEntry(_In_ PDRIVER_OBJECT driverObject, _In_ PUNICODE_STRING registryPath)
     GOTO_IF_NOT_NT_SUCCESS(done, status, WskRegister(&wskClientNpi, &driverCtx->WskRegistration));
 
 done:
+    if (traceLoggingRegistered) {
+        if (!NT_SUCCESS(status)) {
+            TraceLoggingUnregister(OpenVPNTraceProvider);
+        }
+    }
+
     return status;
 }
 
