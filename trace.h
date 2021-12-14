@@ -28,13 +28,13 @@
 #include <evntrace.h>
 #include <TraceLoggingProvider.h>
 
-TRACELOGGING_DECLARE_PROVIDER(OpenVPNTraceProvider);
+TRACELOGGING_DECLARE_PROVIDER(g_hOvpnEtwProvider);
 
 #define TraceLoggingFunctionName() TraceLoggingWideString(__FUNCTIONW__, "Func")
 
 #define LOG_NTSTATUS(Status, ...) do {\
         TraceLoggingWrite( \
-            OpenVPNTraceProvider, \
+            g_hOvpnEtwProvider, \
             "Status", \
             TraceLoggingLevel(TRACE_LEVEL_ERROR), \
             TraceLoggingFunctionName(), \
@@ -45,7 +45,7 @@ TRACELOGGING_DECLARE_PROVIDER(OpenVPNTraceProvider);
 
 #define LOG_ERROR(Error, ...) do {\
         TraceLoggingWrite( \
-            OpenVPNTraceProvider, \
+            g_hOvpnEtwProvider, \
             "Error", \
             TraceLoggingLevel(TRACE_LEVEL_ERROR), \
             TraceLoggingFunctionName(), \
@@ -56,7 +56,7 @@ TRACELOGGING_DECLARE_PROVIDER(OpenVPNTraceProvider);
 
 #define LOG_WARN(Info, ...) do {\
         TraceLoggingWrite( \
-            OpenVPNTraceProvider, \
+            g_hOvpnEtwProvider, \
             "Warn", \
             TraceLoggingLevel(TRACE_LEVEL_WARNING), \
             TraceLoggingFunctionName(), \
@@ -67,7 +67,7 @@ TRACELOGGING_DECLARE_PROVIDER(OpenVPNTraceProvider);
 
 #define LOG_INFO(Info, ...) do {\
         TraceLoggingWrite( \
-            OpenVPNTraceProvider, \
+            g_hOvpnEtwProvider, \
             "Info", \
             TraceLoggingLevel(TRACE_LEVEL_INFORMATION), \
             TraceLoggingFunctionName(), \

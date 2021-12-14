@@ -31,7 +31,9 @@
 #include "uapi\ovpn-dco.h"
 #include "socket.h"
 
-TRACELOGGING_DEFINE_PROVIDER(OpenVPNTraceProvider, "Ovpn", (0x4970f9cf, 0x2c0c, 0x4f11, 0xb1, 0xcc, 0xe3, 0xa1, 0xe9, 0x95, 0x88, 0x33));
+TRACELOGGING_DEFINE_PROVIDER(g_hOvpnEtwProvider,
+  "OpenVPN.OvpnDCO",
+  (0x4970f9cf, 0x2c0c, 0x4f11, 0xb1, 0xcc, 0xe3, 0xa1, 0xe9, 0x95, 0x88, 0x33));
 
 // WSK Client Dispatch table that denotes the WSK version
 // that the WSK application wants to use and optionally a pointer
@@ -46,7 +48,7 @@ OvpnEvtDriverUnload(_In_ WDFDRIVER driver)
 {
     UNREFERENCED_PARAMETER(driver);
 
-    TraceLoggingUnregister(OpenVPNTraceProvider);
+    TraceLoggingUnregister(g_hOvpnEtwProvider);
 }
 
 NTSTATUS
@@ -56,7 +58,7 @@ DriverEntry(_In_ PDRIVER_OBJECT driverObject, _In_ PUNICODE_STRING registryPath)
 
     NTSTATUS status;
     BOOLEAN traceLoggingRegistered = FALSE;
-    GOTO_IF_NOT_NT_SUCCESS(done, status, TraceLoggingRegister(OpenVPNTraceProvider));
+    GOTO_IF_NOT_NT_SUCCESS(done, status, TraceLoggingRegister(g_hOvpnEtwProvider));
     traceLoggingRegistered = TRUE;
 
     WDF_OBJECT_ATTRIBUTES driverAttrs;
@@ -79,7 +81,7 @@ DriverEntry(_In_ PDRIVER_OBJECT driverObject, _In_ PUNICODE_STRING registryPath)
 done:
     if (traceLoggingRegistered) {
         if (!NT_SUCCESS(status)) {
-            TraceLoggingUnregister(OpenVPNTraceProvider);
+            TraceLoggingUnregister(g_hOvpnEtwProvider);
         }
     }
 
