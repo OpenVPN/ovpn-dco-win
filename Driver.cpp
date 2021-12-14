@@ -51,6 +51,13 @@ OvpnEvtDriverUnload(_In_ WDFDRIVER driver)
     TraceLoggingUnregister(g_hOvpnEtwProvider);
 }
 
+EXTERN_C DRIVER_INITIALIZE DriverEntry;
+
+#ifdef ALLOC_PRAGMA
+#pragma alloc_text (INIT, DriverEntry)
+#endif
+
+_Use_decl_annotations_
 NTSTATUS
 DriverEntry(_In_ PDRIVER_OBJECT driverObject, _In_ PUNICODE_STRING registryPath)
 {
