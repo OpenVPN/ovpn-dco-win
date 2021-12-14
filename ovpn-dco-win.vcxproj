@@ -230,9 +230,8 @@
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>
-      <WppEnabled>false</WppEnabled>
-      <WppRecorderEnabled>true</WppRecorderEnabled>
-      <WppScanConfigurationData Condition="'%(ClCompile.ScanConfigurationData)' == ''">driverhelper\tracewpp.h</WppScanConfigurationData>
+      <WppScanConfigurationData Condition="'%(ClCompile.ScanConfigurationData)' == ''">
+      </WppScanConfigurationData>
       <WppKernelMode>true</WppKernelMode>
       <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>OVPN_DCO_VERSION_MAJOR=$(OVPN_DCO_VERSION_MAJOR);OVPN_DCO_VERSION_MINOR=$(OVPN_DCO_VERSION_MINOR);OVPN_DCO_VERSION_STR=$(OVPN_DCO_VERSION_MAJOR).$(OVPN_DCO_VERSION_MINOR);%(PreprocessorDefinitions)</PreprocessorDefinitions>
@@ -247,9 +246,8 @@
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
     <ClCompile>
-      <WppEnabled>false</WppEnabled>
-      <WppRecorderEnabled>true</WppRecorderEnabled>
-      <WppScanConfigurationData Condition="'%(ClCompile.ScanConfigurationData)' == ''">driverhelper\tracewpp.h</WppScanConfigurationData>
+      <WppScanConfigurationData Condition="'%(ClCompile.ScanConfigurationData)' == ''">
+      </WppScanConfigurationData>
       <WppKernelMode>true</WppKernelMode>
       <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>OVPN_DCO_VERSION_MAJOR=$(OVPN_DCO_VERSION_MAJOR);OVPN_DCO_VERSION_MINOR=$(OVPN_DCO_VERSION_MINOR);OVPN_DCO_VERSION_STR=$(OVPN_DCO_VERSION_MAJOR).$(OVPN_DCO_VERSION_MINOR);%(PreprocessorDefinitions)</PreprocessorDefinitions>
@@ -270,9 +268,8 @@
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>
-      <WppEnabled>false</WppEnabled>
-      <WppRecorderEnabled>true</WppRecorderEnabled>
-      <WppScanConfigurationData Condition="'%(ClCompile.ScanConfigurationData)' == ''">driverhelper\tracewpp.h</WppScanConfigurationData>
+      <WppScanConfigurationData Condition="'%(ClCompile.ScanConfigurationData)' == ''">
+      </WppScanConfigurationData>
       <WppKernelMode>true</WppKernelMode>
       <EnablePREfast>true</EnablePREfast>
       <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
@@ -296,9 +293,8 @@
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
-      <WppEnabled>false</WppEnabled>
-      <WppRecorderEnabled>true</WppRecorderEnabled>
-      <WppScanConfigurationData Condition="'%(ClCompile.ScanConfigurationData)' == ''">driverhelper\tracewpp.h</WppScanConfigurationData>
+      <WppScanConfigurationData Condition="'%(ClCompile.ScanConfigurationData)' == ''">
+      </WppScanConfigurationData>
       <WppKernelMode>true</WppKernelMode>
       <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>OVPN_DCO_VERSION_MAJOR=$(OVPN_DCO_VERSION_MAJOR);OVPN_DCO_VERSION_MINOR=$(OVPN_DCO_VERSION_MINOR);OVPN_DCO_VERSION_STR=$(OVPN_DCO_VERSION_MAJOR).$(OVPN_DCO_VERSION_MINOR);%(PreprocessorDefinitions)</PreprocessorDefinitions>
@@ -319,9 +315,8 @@
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|ARM'">
     <ClCompile>
-      <WppEnabled>false</WppEnabled>
-      <WppRecorderEnabled>true</WppRecorderEnabled>
-      <WppScanConfigurationData Condition="'%(ClCompile.ScanConfigurationData)' == ''">driverhelper\tracewpp.h</WppScanConfigurationData>
+      <WppScanConfigurationData Condition="'%(ClCompile.ScanConfigurationData)' == ''">
+      </WppScanConfigurationData>
       <WppKernelMode>true</WppKernelMode>
       <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>OVPN_DCO_VERSION_MAJOR=$(OVPN_DCO_VERSION_MAJOR);OVPN_DCO_VERSION_MINOR=$(OVPN_DCO_VERSION_MINOR);OVPN_DCO_VERSION_STR=$(OVPN_DCO_VERSION_MAJOR).$(OVPN_DCO_VERSION_MINOR);%(PreprocessorDefinitions)</PreprocessorDefinitions>
@@ -336,9 +331,8 @@
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|ARM'">
     <ClCompile>
-      <WppEnabled>false</WppEnabled>
-      <WppRecorderEnabled>true</WppRecorderEnabled>
-      <WppScanConfigurationData Condition="'%(ClCompile.ScanConfigurationData)' == ''">driverhelper\tracewpp.h</WppScanConfigurationData>
+      <WppScanConfigurationData Condition="'%(ClCompile.ScanConfigurationData)' == ''">
+      </WppScanConfigurationData>
       <WppKernelMode>true</WppKernelMode>
       <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>OVPN_DCO_VERSION_MAJOR=$(OVPN_DCO_VERSION_MAJOR);OVPN_DCO_VERSION_MINOR=$(OVPN_DCO_VERSION_MINOR);OVPN_DCO_VERSION_STR=$(OVPN_DCO_VERSION_MAJOR).$(OVPN_DCO_VERSION_MINOR);%(PreprocessorDefinitions)</PreprocessorDefinitions>
@@ -359,9 +353,8 @@
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'">
     <ClCompile>
-      <WppEnabled>false</WppEnabled>
-      <WppRecorderEnabled>true</WppRecorderEnabled>
-      <WppScanConfigurationData Condition="'%(ClCompile.ScanConfigurationData)' == ''">driverhelper\tracewpp.h</WppScanConfigurationData>
+      <WppScanConfigurationData Condition="'%(ClCompile.ScanConfigurationData)' == ''">
+      </WppScanConfigurationData>
       <WppKernelMode>true</WppKernelMode>
       <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>OVPN_DCO_VERSION_MAJOR=$(OVPN_DCO_VERSION_MAJOR);OVPN_DCO_VERSION_MINOR=$(OVPN_DCO_VERSION_MINOR);OVPN_DCO_VERSION_STR=$(OVPN_DCO_VERSION_MAJOR).$(OVPN_DCO_VERSION_MINOR);%(PreprocessorDefinitions)</PreprocessorDefinitions>
@@ -382,9 +375,8 @@
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|ARM64'">
     <ClCompile>
-      <WppEnabled>false</WppEnabled>
-      <WppRecorderEnabled>true</WppRecorderEnabled>
-      <WppScanConfigurationData Condition="'%(ClCompile.ScanConfigurationData)' == ''">driverhelper\tracewpp.h</WppScanConfigurationData>
+      <WppScanConfigurationData Condition="'%(ClCompile.ScanConfigurationData)' == ''">
+      </WppScanConfigurationData>
       <WppKernelMode>true</WppKernelMode>
       <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>OVPN_DCO_VERSION_MAJOR=$(OVPN_DCO_VERSION_MAJOR);OVPN_DCO_VERSION_MINOR=$(OVPN_DCO_VERSION_MINOR);OVPN_DCO_VERSION_STR=$(OVPN_DCO_VERSION_MAJOR).$(OVPN_DCO_VERSION_MINOR);%(PreprocessorDefinitions)</PreprocessorDefinitions>
