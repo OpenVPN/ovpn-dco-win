@@ -19,6 +19,7 @@
  *  51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
+#include <intrin.h>
 #include <ntddk.h>
 #include <wsk.h>
 #include <wdf.h>
@@ -49,6 +50,10 @@ OvpnEvtDriverUnload(_In_ WDFDRIVER driver)
     UNREFERENCED_PARAMETER(driver);
 
     TraceLoggingUnregister(g_hOvpnEtwProvider);
+
+    // tail call optimization incorrectly eliminates TraceLoggingUnregister() call
+    // add __nop() to prevent TCO
+    __nop();
 }
 
 EXTERN_C DRIVER_INITIALIZE DriverEntry;
