@@ -249,7 +249,7 @@
       </WppScanConfigurationData>
       <WppKernelMode>true</WppKernelMode>
       <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <PreprocessorDefinitions>OVPN_DCO_VERSION_MAJOR=$(OVPN_DCO_VERSION_MAJOR);OVPN_DCO_VERSION_MINOR=$(OVPN_DCO_VERSION_MINOR);OVPN_DCO_VERSION_STR=$(OVPN_DCO_VERSION_MAJOR).$(OVPN_DCO_VERSION_MINOR);%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>OVPN_DCO_VERSION_MAJOR=$(OVPN_DCO_VERSION_MAJOR);OVPN_DCO_VERSION_MINOR=$(OVPN_DCO_VERSION_MINOR);OVPN_DCO_VERSION_PATCH=$(OVPN_DCO_VERSION_PATCH);OVPN_DCO_VERSION_STR=$(OVPN_DCO_VERSION_MAJOR).$(OVPN_DCO_VERSION_MINOR).$(OVPN_DCO_VERSION_PATCH);%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <Link>
       <AdditionalDependencies>Netio.lib;Bcrypt.lib;uuid.lib%(AdditionalDependencies)</AdditionalDependencies>
@@ -265,7 +265,7 @@
       </WppScanConfigurationData>
       <WppKernelMode>true</WppKernelMode>
       <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <PreprocessorDefinitions>OVPN_DCO_VERSION_MAJOR=$(OVPN_DCO_VERSION_MAJOR);OVPN_DCO_VERSION_MINOR=$(OVPN_DCO_VERSION_MINOR);OVPN_DCO_VERSION_STR=$(OVPN_DCO_VERSION_MAJOR).$(OVPN_DCO_VERSION_MINOR);%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>OVPN_DCO_VERSION_MAJOR=$(OVPN_DCO_VERSION_MAJOR);OVPN_DCO_VERSION_MINOR=$(OVPN_DCO_VERSION_MINOR);OVPN_DCO_VERSION_PATCH=$(OVPN_DCO_VERSION_PATCH);OVPN_DCO_VERSION_STR=$(OVPN_DCO_VERSION_MAJOR).$(OVPN_DCO_VERSION_MINOR).$(OVPN_DCO_VERSION_PATCH);%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <UseFullPaths>false</UseFullPaths>
     </ClCompile>
     <Link>
@@ -287,7 +287,7 @@
       </WppScanConfigurationData>
       <WppKernelMode>true</WppKernelMode>
       <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <PreprocessorDefinitions>OVPN_DCO_VERSION_MAJOR=$(OVPN_DCO_VERSION_MAJOR);OVPN_DCO_VERSION_MINOR=$(OVPN_DCO_VERSION_MINOR);OVPN_DCO_VERSION_STR=$(OVPN_DCO_VERSION_MAJOR).$(OVPN_DCO_VERSION_MINOR);%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>OVPN_DCO_VERSION_MAJOR=$(OVPN_DCO_VERSION_MAJOR);OVPN_DCO_VERSION_MINOR=$(OVPN_DCO_VERSION_MINOR);OVPN_DCO_VERSION_PATCH=$(OVPN_DCO_VERSION_PATCH);OVPN_DCO_VERSION_STR=$(OVPN_DCO_VERSION_MAJOR).$(OVPN_DCO_VERSION_MINOR).$(OVPN_DCO_VERSION_PATCH);%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <Link>
       <AdditionalDependencies>uuid.lib;Netio.lib;Ksecdd.lib;%(AdditionalDependencies)</AdditionalDependencies>
@@ -311,7 +311,7 @@
       </WppScanConfigurationData>
       <WppKernelMode>true</WppKernelMode>
       <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <PreprocessorDefinitions>OVPN_DCO_VERSION_MAJOR=$(OVPN_DCO_VERSION_MAJOR);OVPN_DCO_VERSION_MINOR=$(OVPN_DCO_VERSION_MINOR);OVPN_DCO_VERSION_STR=$(OVPN_DCO_VERSION_MAJOR).$(OVPN_DCO_VERSION_MINOR);%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>OVPN_DCO_VERSION_MAJOR=$(OVPN_DCO_VERSION_MAJOR);OVPN_DCO_VERSION_MINOR=$(OVPN_DCO_VERSION_MINOR);OVPN_DCO_VERSION_PATCH=$(OVPN_DCO_VERSION_PATCH);OVPN_DCO_VERSION_STR=$(OVPN_DCO_VERSION_MAJOR).$(OVPN_DCO_VERSION_MINOR).$(OVPN_DCO_VERSION_PATCH);%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <UseFullPaths>false</UseFullPaths>
     </ClCompile>
     <Link>
@@ -333,7 +333,7 @@
       </WppScanConfigurationData>
       <WppKernelMode>true</WppKernelMode>
       <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <PreprocessorDefinitions>OVPN_DCO_VERSION_MAJOR=$(OVPN_DCO_VERSION_MAJOR);OVPN_DCO_VERSION_MINOR=$(OVPN_DCO_VERSION_MINOR);OVPN_DCO_VERSION_STR=$(OVPN_DCO_VERSION_MAJOR).$(OVPN_DCO_VERSION_MINOR);%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>OVPN_DCO_VERSION_MAJOR=$(OVPN_DCO_VERSION_MAJOR);OVPN_DCO_VERSION_MINOR=$(OVPN_DCO_VERSION_MINOR);OVPN_DCO_VERSION_PATCH=$(OVPN_DCO_VERSION_PATCH);OVPN_DCO_VERSION_STR=$(OVPN_DCO_VERSION_MAJOR).$(OVPN_DCO_VERSION_MINOR).$(OVPN_DCO_VERSION_PATCH);%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <Link>
       <AdditionalDependencies>Netio.lib;%(AdditionalDependencies)</AdditionalDependencies>
@@ -349,7 +349,7 @@
       </WppScanConfigurationData>
       <WppKernelMode>true</WppKernelMode>
       <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <PreprocessorDefinitions>OVPN_DCO_VERSION_MAJOR=$(OVPN_DCO_VERSION_MAJOR);OVPN_DCO_VERSION_MINOR=$(OVPN_DCO_VERSION_MINOR);OVPN_DCO_VERSION_STR=$(OVPN_DCO_VERSION_MAJOR).$(OVPN_DCO_VERSION_MINOR);%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>OVPN_DCO_VERSION_MAJOR=$(OVPN_DCO_VERSION_MAJOR);OVPN_DCO_VERSION_MINOR=$(OVPN_DCO_VERSION_MINOR);OVPN_DCO_VERSION_PATCH=$(OVPN_DCO_VERSION_PATCH);OVPN_DCO_VERSION_STR=$(OVPN_DCO_VERSION_MAJOR).$(OVPN_DCO_VERSION_MINOR).$(OVPN_DCO_VERSION_PATCH);%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <UseFullPaths>false</UseFullPaths>
     </ClCompile>
     <Link>
@@ -371,7 +371,7 @@
       </WppScanConfigurationData>
       <WppKernelMode>true</WppKernelMode>
       <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <PreprocessorDefinitions>OVPN_DCO_VERSION_MAJOR=$(OVPN_DCO_VERSION_MAJOR);OVPN_DCO_VERSION_MINOR=$(OVPN_DCO_VERSION_MINOR);OVPN_DCO_VERSION_STR=$(OVPN_DCO_VERSION_MAJOR).$(OVPN_DCO_VERSION_MINOR);%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>OVPN_DCO_VERSION_MAJOR=$(OVPN_DCO_VERSION_MAJOR);OVPN_DCO_VERSION_MINOR=$(OVPN_DCO_VERSION_MINOR);OVPN_DCO_VERSION_PATCH=$(OVPN_DCO_VERSION_PATCH);OVPN_DCO_VERSION_STR=$(OVPN_DCO_VERSION_MAJOR).$(OVPN_DCO_VERSION_MINOR).$(OVPN_DCO_VERSION_PATCH);%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <UseFullPaths>false</UseFullPaths>
     </ClCompile>
     <Link>
@@ -393,7 +393,7 @@
       </WppScanConfigurationData>
       <WppKernelMode>true</WppKernelMode>
       <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <PreprocessorDefinitions>OVPN_DCO_VERSION_MAJOR=$(OVPN_DCO_VERSION_MAJOR);OVPN_DCO_VERSION_MINOR=$(OVPN_DCO_VERSION_MINOR);OVPN_DCO_VERSION_STR=$(OVPN_DCO_VERSION_MAJOR).$(OVPN_DCO_VERSION_MINOR);%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>OVPN_DCO_VERSION_MAJOR=$(OVPN_DCO_VERSION_MAJOR);OVPN_DCO_VERSION_MINOR=$(OVPN_DCO_VERSION_MINOR);OVPN_DCO_VERSION_PATCH=$(OVPN_DCO_VERSION_PATCH);OVPN_DCO_VERSION_STR=$(OVPN_DCO_VERSION_MAJOR).$(OVPN_DCO_VERSION_MINOR).$(OVPN_DCO_VERSION_PATCH);%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <Link>
       <AdditionalDependencies>uuid.lib;Netio.lib;Ksecdd.lib;%(AdditionalDependencies)</AdditionalDependencies>
