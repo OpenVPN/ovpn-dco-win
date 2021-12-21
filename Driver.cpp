@@ -73,6 +73,8 @@ DriverEntry(_In_ PDRIVER_OBJECT driverObject, _In_ PUNICODE_STRING registryPath)
     GOTO_IF_NOT_NT_SUCCESS(done, status, TraceLoggingRegister(g_hOvpnEtwProvider));
     traceLoggingRegistered = TRUE;
 
+    LOG_INFO("Driver Version", TraceLoggingValue(OVPN_DCO_VERSION_MAJOR, "Major"), TraceLoggingValue(OVPN_DCO_VERSION_MINOR, "Minor"), TraceLoggingValue(OVPN_DCO_VERSION_PATCH, "Patch"));
+
     WDF_OBJECT_ATTRIBUTES driverAttrs;
     WDF_OBJECT_ATTRIBUTES_INIT(&driverAttrs);
     WDF_OBJECT_ATTRIBUTES_SET_CONTEXT_TYPE(&driverAttrs, OVPN_DRIVER);
