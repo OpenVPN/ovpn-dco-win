@@ -221,7 +221,7 @@
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <DebuggerFlavor>DbgengKernelDebugger</DebuggerFlavor>
     <IncludePath>$(SolutionDir)dmf\dmf;$(IncludePath);$(NETADAPTER_INC_PATH);$(SolutionDir)driverhelper</IncludePath>
-    <RunCodeAnalysis>true</RunCodeAnalysis>
+    <RunCodeAnalysis>false</RunCodeAnalysis>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|ARM'">
     <DebuggerFlavor>DbgengKernelDebugger</DebuggerFlavor>
@@ -286,7 +286,6 @@
       <WppScanConfigurationData Condition="'%(ClCompile.ScanConfigurationData)' == ''">
       </WppScanConfigurationData>
       <WppKernelMode>true</WppKernelMode>
-      <EnablePREfast>true</EnablePREfast>
       <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>OVPN_DCO_VERSION_MAJOR=$(OVPN_DCO_VERSION_MAJOR);OVPN_DCO_VERSION_MINOR=$(OVPN_DCO_VERSION_MINOR);OVPN_DCO_VERSION_STR=$(OVPN_DCO_VERSION_MAJOR).$(OVPN_DCO_VERSION_MINOR);%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
