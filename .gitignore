@@ -51,8 +51,20 @@ Thumbs.db
 # Visual Studio
 .vs
 Debug
+Release
 x64
+Win32
 sdv
 ARM64
 amd64
 obj
+vc*.pdb
+
+# CodeQL
+codeql_db
+*.sarif
+codeql.build.bat
+
+# SDV 
+smvstats.txt
+*.DVL.XML
