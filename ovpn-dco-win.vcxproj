@@ -166,6 +166,9 @@
     <NETADAPTER_VERSION_MAJOR>2</NETADAPTER_VERSION_MAJOR>
     <NETADAPTER_VERSION_MINOR>0</NETADAPTER_VERSION_MINOR>
   </PropertyGroup>
+  <PropertyGroup>
+    <CustomBuildAfterTargets>dvl</CustomBuildAfterTargets>
+  </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
   <ImportGroup Label="ExtensionSettings">
   </ImportGroup>
@@ -264,6 +267,11 @@
       <PreprocessorDefinitions>OVPN_DCO_VERSION_MAJOR=$(OVPN_DCO_VERSION_MAJOR);OVPN_DCO_VERSION_MINOR=$(OVPN_DCO_VERSION_MINOR);OVPN_DCO_VERSION_PATCH=$(OVPN_DCO_VERSION_PATCH);OVPN_DCO_VERSION_STR=$(OVPN_DCO_VERSION_MAJOR).$(OVPN_DCO_VERSION_MINOR).$(OVPN_DCO_VERSION_PATCH);%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <UseFullPaths>false</UseFullPaths>
     </ClCompile>
+    <CustomBuildStep>
+      <Command>copy /Y $(ProjectDir)ovpn-dco.DVL.XML $(ProjectDir)$(Platform)\$(ConfigurationName)</Command>
+      <Inputs>$(ProjectDir)ovpn-dco.DVL.XML</Inputs>
+      <Outputs>$(ProjectDir)$(Platform)\$(ConfigurationName)\ovpn-dco.DVL.XML</Outputs>
+    </CustomBuildStep>
     <Link>
       <AdditionalDependencies>Netio.lib;Bcrypt.lib;uuid.lib%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalOptions>/Brepro %(AdditionalOptions)</AdditionalOptions>
@@ -310,6 +318,11 @@
       <PreprocessorDefinitions>OVPN_DCO_VERSION_MAJOR=$(OVPN_DCO_VERSION_MAJOR);OVPN_DCO_VERSION_MINOR=$(OVPN_DCO_VERSION_MINOR);OVPN_DCO_VERSION_PATCH=$(OVPN_DCO_VERSION_PATCH);OVPN_DCO_VERSION_STR=$(OVPN_DCO_VERSION_MAJOR).$(OVPN_DCO_VERSION_MINOR).$(OVPN_DCO_VERSION_PATCH);%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <UseFullPaths>false</UseFullPaths>
     </ClCompile>
+    <CustomBuildStep>
+      <Command>copy /Y $(ProjectDir)ovpn-dco.DVL.XML $(ProjectDir)$(Platform)\$(ConfigurationName)</Command>
+      <Inputs>$(ProjectDir)ovpn-dco.DVL.XML</Inputs>
+      <Outputs>$(ProjectDir)$(Platform)\$(ConfigurationName)\ovpn-dco.DVL.XML</Outputs>
+    </CustomBuildStep>
     <Link>
       <AdditionalDependencies>uuid.lib;Netio.lib;Ksecdd.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalOptions>/Brepro %(AdditionalOptions)</AdditionalOptions>
@@ -370,6 +383,11 @@
       <PreprocessorDefinitions>OVPN_DCO_VERSION_MAJOR=$(OVPN_DCO_VERSION_MAJOR);OVPN_DCO_VERSION_MINOR=$(OVPN_DCO_VERSION_MINOR);OVPN_DCO_VERSION_PATCH=$(OVPN_DCO_VERSION_PATCH);OVPN_DCO_VERSION_STR=$(OVPN_DCO_VERSION_MAJOR).$(OVPN_DCO_VERSION_MINOR).$(OVPN_DCO_VERSION_PATCH);%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <UseFullPaths>false</UseFullPaths>
     </ClCompile>
+    <CustomBuildStep>
+      <Command>copy /Y $(ProjectDir)ovpn-dco.DVL.XML $(ProjectDir)$(Platform)\$(ConfigurationName)</Command>
+      <Inputs>$(ProjectDir)ovpn-dco.DVL.XML</Inputs>
+      <Outputs>$(ProjectDir)$(Platform)\$(ConfigurationName)\ovpn-dco.DVL.XML</Outputs>
+    </CustomBuildStep>
     <Link>
       <AdditionalDependencies>uuid.lib;Netio.lib;Ksecdd.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalOptions>/Brepro %(AdditionalOptions)</AdditionalOptions>
