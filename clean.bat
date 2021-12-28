@@ -3,10 +3,12 @@ setlocal
 
 call :rmdir .\Win32
 call :rmdir .\x64
+call :rmdir .\ARM64
 call :rmdir .\Debug
 call :rmdir .\Release
 
 call :rmdir .\ovpn-cli\x64
+call :rmdir .\ovpn-cli\ARM64
 call :rmdir .\ovpn-cli\Debug
 call :rmdir .\ovpn-cli\Release
 
