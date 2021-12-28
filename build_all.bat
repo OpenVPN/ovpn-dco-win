@@ -12,7 +12,7 @@ set SOLUTION_FILE=ovpn-dco-win.sln
 set DRIVER_PROJECT_FILE=ovpn-dco-win.vcxproj
 
 for %%C in ( Release Debug ) do (
-  for %%P in ( x64 x86 ) do (
+  for %%P in ( x64 x86 arm64 ) do (
     echo Building %SOLUTION_FILE%, configuration %%C, platform %%P
     call :runbuild %SOLUTION_FILE% %%C %%P
   )
@@ -23,12 +23,12 @@ if not "%BUILD_DISABLE_SDV%"=="" (
   goto :end
 )
 
-echo Running SDV for %DRIVER_PROJECT_FILE%, configuration "Release", platform x64
-call :runsdv %DRIVER_PROJECT_FILE% "Release" x64
-call :runql %DRIVER_PROJECT_FILE% "Release" x64
-call :runca %DRIVER_PROJECT_FILE% "Release" x64
-
-call :rundvl %DRIVER_PROJECT_FILE% "Release" x64
+for %%P in ( x64 x86 arm64 ) do (
+  call :runsdv %DRIVER_PROJECT_FILE% "Release" %%P
+  call :runql %DRIVER_PROJECT_FILE% "Release" %%P
+  call :runca %DRIVER_PROJECT_FILE% "Release" %%P
+  call :rundvl %DRIVER_PROJECT_FILE% "Release" %%P
+)
 
 :end:
 
@@ -43,6 +43,7 @@ msbuild.exe "%~1" /p:Configuration="%~2" /P:Platform=%3
 goto :eof
 
 :runsdv
+echo Running SDV for %DRIVER_PROJECT_FILE%, configuration "%~2", platform %3
 msbuild.exe "%~1" /t:clean /p:Configuration="%~2" /P:Platform=%3
 
 IF ERRORLEVEL 1 (
@@ -65,6 +66,7 @@ goto :eof
 
 :runql
 
+echo Running CodeQL for %DRIVER_PROJECT_FILE%, configuration "%~2", platform %3
 echo "Removing previously created rules database"
 rmdir /s/q codeql_db
 
@@ -89,6 +91,7 @@ IF ERRORLEVEL 1 (
 goto :eof
 
 :runca
+echo Running Code Analysis for %DRIVER_PROJECT_FILE%, configuration "%~2", platform %3
 msbuild.exe "%~1" /p:Configuration="%~2" /P:Platform=%3 /P:RunCodeAnalysisOnce=True
 
 IF ERRORLEVEL 1 (
@@ -98,6 +101,7 @@ IF ERRORLEVEL 1 (
 goto :eof
 
 :rundvl
+echo Creating Driver Verification Log for %DRIVER_PROJECT_FILE%, configuration "%~2", platform %3
 msbuild.exe "%~1" /t:dvl /p:Configuration="%~2" /P:Platform=%3
 
 IF ERRORLEVEL 1 (
