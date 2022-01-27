@@ -27,7 +27,7 @@ jobs:
       with:
         vcpkgArguments: 'asio'
         vcpkgTriplet: '${{ matrix.arch }}-windows'
-        vcpkgGitCommitId: '4474aba1e77be2d643eb684298b7d5479cad9a1f'
+        vcpkgGitCommitId: '8b62f6fff30c4321945f1e498d85929285d7083a'
 
     - name: vcpkg integrate install
       shell: cmd
