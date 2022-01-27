@@ -279,7 +279,7 @@
       <Profile>false</Profile>
     </Link>
     <Inf>
-      <TimeStamp>$(OVPN_DCO_VERSION_MAJOR).$(OVPN_DCO_VERSION_MINOR)</TimeStamp>
+      <TimeStamp>$(OVPN_DCO_VERSION_MAJOR).$(OVPN_DCO_VERSION_MINOR).$(OVPN_DCO_VERSION_PATCH)</TimeStamp>
     </Inf>
     <DriverSign>
       <FileDigestAlgorithm>SHA256</FileDigestAlgorithm>
@@ -368,7 +368,7 @@
       <Profile>false</Profile>
     </Link>
     <Inf>
-      <TimeStamp>$(OVPN_DCO_VERSION_MAJOR).$(OVPN_DCO_VERSION_MINOR)</TimeStamp>
+      <TimeStamp>$(OVPN_DCO_VERSION_MAJOR).$(OVPN_DCO_VERSION_MINOR).$(OVPN_DCO_VERSION_PATCH)</TimeStamp>
     </Inf>
     <DriverSign>
       <FileDigestAlgorithm>SHA256</FileDigestAlgorithm>
@@ -395,7 +395,7 @@
       <Profile>false</Profile>
     </Link>
     <Inf>
-      <TimeStamp>$(OVPN_DCO_VERSION_MAJOR).$(OVPN_DCO_VERSION_MINOR)</TimeStamp>
+      <TimeStamp>$(OVPN_DCO_VERSION_MAJOR).$(OVPN_DCO_VERSION_MINOR).$(OVPN_DCO_VERSION_PATCH)</TimeStamp>
     </Inf>
     <DriverSign>
       <FileDigestAlgorithm>SHA256</FileDigestAlgorithm>
