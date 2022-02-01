@@ -88,9 +88,8 @@ To send and receive control channel packets, client uses Read/WriteFile calls. I
 
 ### OpenVPN support
 
-Thanks to Arne Schwabe, there is now a beta version of the openvpn-gui client with dco-win support.
-Installer could be found here: https://swupdate.openvpn.net/beta-downloads/win-dco/openvpn-install-dco-preview-Win10.exe
-It was built from "dco" branch in Arne's github repo https://github.com/schwabe/openvpn/tree/dco. See https://github.com/schwabe/openvpn/blob/dco/README.dco.md for more info about current and general limitations.
+OpenVPN Windows installers with ovpn-dco-win and openssl3 support could be downloaded from 
+Installer could be found https://build.openvpn.net/downloads/temp/ovpn-dco-win/msi/
 
 To use ovpn-dco-win with openvpn2, add the following lines to the .ovpn profile:
 
