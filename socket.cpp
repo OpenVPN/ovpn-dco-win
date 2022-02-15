@@ -603,7 +603,11 @@ OvpnSocketFinalizeTxBuffer(_In_ OVPN_TX_BUFFER* buffer, NTSTATUS ioStatus, ULONG
     }
 
 done:
-    OvpnTxBufferPoolPut(buffer);
+    while (buffer != NULL) {
+        OVPN_TX_BUFFER* next = (OVPN_TX_BUFFER*)buffer->WskBufList.Next;
+        OvpnTxBufferPoolPut(buffer);
+        buffer = next;
+    }
 }
 
 _Function_class_(IO_COMPLETION_ROUTINE)
@@ -662,17 +666,17 @@ OvpnSocketSend(OvpnSocket* ovpnSocket, OVPN_TX_BUFFER* buffer) {
         *(UINT16*)OvpnTxBufferPush(buffer, 2) = len;
     }
 
-    WSK_BUF wskBuf = {};
-    wskBuf.Length = buffer->Len;
-    wskBuf.Mdl = buffer->Mdl;
-    wskBuf.Offset = FIELD_OFFSET(OVPN_TX_BUFFER, Head) + (ULONG)(buffer->Data - buffer->Head);
-
     NTSTATUS status;
     if (ovpnSocket->Tcp) {
+        WSK_BUF wskBuf{ buffer->Mdl, FIELD_OFFSET(OVPN_TX_BUFFER, Head) + (ULONG)(buffer->Data - buffer->Head), buffer->Len };
         PWSK_PROVIDER_CONNECTION_DISPATCH connectionDispatch = (PWSK_PROVIDER_CONNECTION_DISPATCH)socket->Dispatch;
         LOG_IF_NOT_NT_SUCCESS(status = connectionDispatch->WskSend(socket, &wskBuf, 0, irp));
     }
-    else {
+    else if (buffer->WskBufList.Buffer.Length != 0) {
+        PWSK_PROVIDER_DATAGRAM_DISPATCH datagramDispatch = (PWSK_PROVIDER_DATAGRAM_DISPATCH)socket->Dispatch;
+        LOG_IF_NOT_NT_SUCCESS(status = datagramDispatch->WskSendMessages(socket, &buffer->WskBufList, 0, NULL, 0, NULL, irp));
+    } else {
+        WSK_BUF wskBuf{ buffer->Mdl, FIELD_OFFSET(OVPN_TX_BUFFER, Head) + (ULONG)(buffer->Data - buffer->Head), buffer->Len };
         PWSK_PROVIDER_DATAGRAM_DISPATCH datagramDispatch = (PWSK_PROVIDER_DATAGRAM_DISPATCH)socket->Dispatch;
         LOG_IF_NOT_NT_SUCCESS(status = datagramDispatch->WskSendTo(socket, &wskBuf, 0, NULL, 0, NULL, irp));
     }
