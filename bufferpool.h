@@ -24,6 +24,7 @@
 #include <ntdef.h>
 #include <wdftypes.h>
 #include <wdm.h>
+#include <wsk.h>
 
 #define OVPN_SOCKET_PACKET_BUFFER_SIZE 2048
 
@@ -35,6 +36,8 @@ DECLARE_HANDLE(OVPN_BUFFER_QUEUE);
 
 struct OVPN_TX_BUFFER
 {
+    WSK_BUF_LIST WskBufList;
+
     // points to the beginning of data
     PUCHAR Data;
 

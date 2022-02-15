@@ -37,7 +37,8 @@ _Must_inspect_result_
 _Requires_shared_lock_held_(device->SpinLock)
 static
 NTSTATUS
-OvpnTxSendPacket(_In_ POVPN_DEVICE device, _In_ POVPN_TXQUEUE queue, _In_ NET_RING_PACKET_ITERATOR *pi)
+OvpnTxProcessPacket(_In_ POVPN_DEVICE device, _In_ POVPN_TXQUEUE queue, _In_ NET_RING_PACKET_ITERATOR *pi,
+    _Inout_ OVPN_TX_BUFFER **head, _Inout_ OVPN_TX_BUFFER** tail)
 {
     NET_RING_FRAGMENT_ITERATOR fi = NetPacketIteratorGetFragments(pi);
 
@@ -78,7 +79,26 @@ OvpnTxSendPacket(_In_ POVPN_DEVICE device, _In_ POVPN_TXQUEUE queue, _In_ NET_RI
 
     if (NT_SUCCESS(status)) {
         // start async send, this will return ciphertext buffer to the pool
-        status = OvpnSocketSend(&device->Socket, buffer);
+        if (device->Socket.Tcp) {
+            status = OvpnSocketSend(&device->Socket, buffer);
+        }
+        else {
+            // for UDP we use SendMessages to send multiple datagrams at once
+            // here we only append WSK_BUF to the list
+
+            buffer->WskBufList.Buffer.Length = buffer->Len;
+            buffer->WskBufList.Buffer.Mdl = buffer->Mdl;
+            buffer->WskBufList.Buffer.Offset = FIELD_OFFSET(OVPN_TX_BUFFER, Head) + (ULONG)(buffer->Data - buffer->Head);
+
+            if (*head == NULL) {
+                *head = buffer;
+            }
+            else {
+                (*tail)->WskBufList.Next = &buffer->WskBufList;
+            }
+
+            *tail = buffer;
+        }
     }
     else {
         OvpnTxBufferPoolPut(buffer);
@@ -105,10 +125,13 @@ OvpnEvtTxQueueAdvance(NETPACKETQUEUE netPacketQueue)
 
     KIRQL kirql = ExAcquireSpinLockShared(&device->SpinLock);
 
+    OVPN_TX_BUFFER* txBufferHead = NULL;
+    OVPN_TX_BUFFER* txBufferTail = NULL;
+
     while (NetPacketIteratorHasAny(&pi)) {
         NET_PACKET* packet = NetPacketIteratorGetPacket(&pi);
         if (!packet->Ignore && !packet->Scratch) {
-            NTSTATUS status = OvpnTxSendPacket(device, queue, &pi);
+            NTSTATUS status = OvpnTxProcessPacket(device, queue, &pi, &txBufferHead, &txBufferTail);
             if (!NT_SUCCESS(status)) {
                 InterlockedIncrementNoFence(&device->Stats.LostOutDataPackets);
                 break;
@@ -125,6 +148,11 @@ OvpnEvtTxQueueAdvance(NETPACKETQUEUE netPacketQueue)
     // reset keepalive timer
     if (packetSent) {
         OvpnTimerReset(device->KeepaliveXmitTimer, device->KeepaliveInterval);
+
+        if (!device->Socket.Tcp) {
+            // this will use WskSendMessages to send buffers list which we constructed before
+            LOG_IF_NOT_NT_SUCCESS(OvpnSocketSend(&device->Socket, txBufferHead));
+        }
     }
 
     ExReleaseSpinLockShared(&device->SpinLock, kirql);
