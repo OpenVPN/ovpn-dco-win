@@ -57,20 +57,10 @@ ServiceType    = 1               ; SERVICE_KERNEL_DRIVER
 StartType      = 3               ; SERVICE_DEMAND_START
 ErrorControl   = 1               ; SERVICE_ERROR_NORMAL
 ServiceBinary  = %12%\ovpn-dco.sys
-AddReg         = KMDFVerifierAddReg
-
-[KMDFVerifierAddReg]
-HKR, Parameters\Wdf,VerifierOn,0x00010001,1
-HKR, Parameters\Wdf,VerboseOn,0x00010001,1
-HKR, Parameters\Wdf,DbgBreakOnError,0x00010001,1
-HKR, Parameters\Wdf,TrackPower ,0x00010001,2
 
 [ovpn-dco_Device.NT.CoInstallers]
-AddReg=ovpn-dco_Device_CoInstaller_AddReg, ovpn-dco_Verifier
+AddReg=ovpn-dco_Device_CoInstaller_AddReg
 CopyFiles=ovpn-dco_Device_CoInstaller_CopyFiles
-
-[ovpn-dco_verifier]
-
 
 [ovpn-dco_Device_CoInstaller_AddReg]
 HKR,,CoInstallers32,0x00010000, "WdfCoInstaller$KMDFCOINSTALLERVERSION$.dll,WdfCoInstaller"
