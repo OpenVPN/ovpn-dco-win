@@ -75,7 +75,8 @@ typedef OVPN_CRYPTO_DECRYPT* POVPN_CRYPTO_DECRYPT;
 
 struct OvpnCryptoContext
 {
-    BCRYPT_ALG_HANDLE AlgHandle;
+    BCRYPT_ALG_HANDLE AesAlgHandle;
+    BCRYPT_ALG_HANDLE ChachaAlgHandle;
 
     OvpnCryptoKeySlot Primary;
     OvpnCryptoKeySlot Secondary;
@@ -89,7 +90,11 @@ struct OvpnCryptoContext
 _Must_inspect_result_
 _IRQL_requires_(PASSIVE_LEVEL)
 NTSTATUS
-OvpnCryptoInitAlgHandle(_Outptr_ BCRYPT_ALG_HANDLE* algHandle);
+OvpnCryptoInitAlgHandles(_Outptr_ BCRYPT_ALG_HANDLE* aesAlgHandle, _Outptr_ BCRYPT_ALG_HANDLE* chachaAlgHandle);
+
+_IRQL_requires_(PASSIVE_LEVEL)
+VOID
+OvpnCryptoUninitAlgHandles(_In_ BCRYPT_ALG_HANDLE aesAlgHandle, BCRYPT_ALG_HANDLE chachaAlgHandle);
 
 VOID
 OvpnCryptoUninit(_In_ OvpnCryptoContext* cryptoContext);

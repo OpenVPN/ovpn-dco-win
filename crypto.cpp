@@ -86,14 +86,29 @@ OvpnCryptoEncryptNone(OvpnCryptoKeySlot* keySlot, UCHAR* buf, SIZE_T len)
 
 _Use_decl_annotations_
 NTSTATUS
-OvpnCryptoInitAlgHandle(BCRYPT_ALG_HANDLE* algHandle)
+OvpnCryptoInitAlgHandles(BCRYPT_ALG_HANDLE* aesAlgHandle, BCRYPT_ALG_HANDLE* chachaAlgHandle)
 {
     NTSTATUS status;
-    GOTO_IF_NOT_NT_SUCCESS(done, status, BCryptOpenAlgorithmProvider(algHandle, BCRYPT_AES_ALGORITHM, NULL, BCRYPT_PROV_DISPATCH));
-    GOTO_IF_NOT_NT_SUCCESS(done, status, BCryptSetProperty(*algHandle, BCRYPT_CHAINING_MODE, (PUCHAR)BCRYPT_CHAIN_MODE_GCM, sizeof(BCRYPT_CHAIN_MODE_GCM), 0));
+    GOTO_IF_NOT_NT_SUCCESS(done, status, BCryptOpenAlgorithmProvider(aesAlgHandle, BCRYPT_AES_ALGORITHM, NULL, BCRYPT_PROV_DISPATCH));
+    GOTO_IF_NOT_NT_SUCCESS(done, status, BCryptSetProperty(*aesAlgHandle, BCRYPT_CHAINING_MODE, (PUCHAR)BCRYPT_CHAIN_MODE_GCM, sizeof(BCRYPT_CHAIN_MODE_GCM), 0));
 
+    // available starting from Windows 11
+    LOG_IF_NOT_NT_SUCCESS(BCryptOpenAlgorithmProvider(chachaAlgHandle, BCRYPT_CHACHA20_POLY1305_ALGORITHM, NULL, BCRYPT_PROV_DISPATCH));
 done:
     return status;
+}
+
+_Use_decl_annotations_
+VOID
+OvpnCryptoUninitAlgHandles(_In_ BCRYPT_ALG_HANDLE aesAlgHandle, BCRYPT_ALG_HANDLE chachaAlgHandle)
+{
+    if (aesAlgHandle) {
+        LOG_IF_NOT_NT_SUCCESS(BCryptCloseAlgorithmProvider(aesAlgHandle, 0));
+    }
+
+    if (chachaAlgHandle) {
+        LOG_IF_NOT_NT_SUCCESS(BCryptCloseAlgorithmProvider(chachaAlgHandle, 0));
+    }
 }
 
 #define GET_SYSTEM_ADDRESS_MDL(buf, mdl) { \
@@ -222,7 +237,7 @@ OvpnCryptoNewKey(OvpnCryptoContext* cryptoContext, POVPN_CRYPTO_DATA cryptoData)
         return STATUS_INVALID_DEVICE_REQUEST;
     }
 
-    if (cryptoData->CipherAlg == OVPN_CIPHER_ALG_AES_GCM) {
+    if ((cryptoData->CipherAlg == OVPN_CIPHER_ALG_AES_GCM) || (cryptoData->CipherAlg == OVPN_CIPHER_ALG_CHACHA20_POLY1305)) {
         // destroy previous keys
         if (keySlot->EncKey) {
             BCryptDestroyKey(keySlot->EncKey);
@@ -234,9 +249,22 @@ OvpnCryptoNewKey(OvpnCryptoContext* cryptoContext, POVPN_CRYPTO_DATA cryptoData)
             keySlot->DecKey = NULL;
         }
 
+        BCRYPT_ALG_HANDLE algHandle = NULL;
+        if (cryptoData->CipherAlg == OVPN_CIPHER_ALG_AES_GCM) {
+            algHandle = cryptoContext->AesAlgHandle;
+        }
+        else {
+            if (cryptoContext->ChachaAlgHandle == NULL) {
+                LOG_ERROR("CHACHA20-POLY1305 is not available");
+                status = STATUS_INVALID_DEVICE_REQUEST;
+                goto done;
+            }
+            algHandle = cryptoContext->ChachaAlgHandle;
+        }
+
         // generate keys from key materials
-        GOTO_IF_NOT_NT_SUCCESS(done, status, BCryptGenerateSymmetricKey(cryptoContext->AlgHandle, &keySlot->EncKey, NULL, 0, cryptoData->Encrypt.Key, cryptoData->Encrypt.KeyLen, 0));
-        GOTO_IF_NOT_NT_SUCCESS(done, status, BCryptGenerateSymmetricKey(cryptoContext->AlgHandle, &keySlot->DecKey, NULL, 0, cryptoData->Decrypt.Key, cryptoData->Decrypt.KeyLen, 0));
+        GOTO_IF_NOT_NT_SUCCESS(done, status, BCryptGenerateSymmetricKey(algHandle, &keySlot->EncKey, NULL, 0, cryptoData->Encrypt.Key, cryptoData->Encrypt.KeyLen, 0));
+        GOTO_IF_NOT_NT_SUCCESS(done, status, BCryptGenerateSymmetricKey(algHandle, &keySlot->DecKey, NULL, 0, cryptoData->Decrypt.Key, cryptoData->Decrypt.KeyLen, 0));
 
         // copy nonce tails
         RtlCopyMemory(keySlot->EncNonceTail, cryptoData->Encrypt.NonceTail, sizeof(cryptoData->Encrypt.NonceTail));
@@ -250,7 +278,8 @@ OvpnCryptoNewKey(OvpnCryptoContext* cryptoContext, POVPN_CRYPTO_DATA cryptoData)
 
         cryptoContext->CryptoOverhead = AEAD_CRYPTO_OVERHEAD;
 
-        LOG_INFO("Key installed", TraceLoggingValue(cryptoData->KeyId, "KeyId"), TraceLoggingValue(cryptoData->KeyId, "PeerId"));
+        LOG_INFO("New key", TraceLoggingValue(cryptoData->CipherAlg == OVPN_CIPHER_ALG_AES_GCM ? "aes-gcm" : "chacha20-poly1305", "alg"),
+            TraceLoggingValue(cryptoData->KeyId, "KeyId"), TraceLoggingValue(cryptoData->KeyId, "PeerId"));
     }
     else if (cryptoData->CipherAlg == OVPN_CIPHER_ALG_NONE) {
         cryptoContext->Encrypt = OvpnCryptoEncryptNone;
