@@ -72,12 +72,13 @@ OvpnPeerNew(POVPN_DEVICE device, WDFREQUEST request)
     GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnSocketInit(&driver->WskProviderNpi, peer->Local.Addr4.sin_family, proto_tcp, (PSOCKADDR)&peer->Local,
         (PSOCKADDR)&peer->Remote, remoteAddrSize, device, &socket));
 
-    BCRYPT_ALG_HANDLE algHandle;
-    GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnCryptoInitAlgHandle(&algHandle));
+    BCRYPT_ALG_HANDLE aesAlgHandle = NULL, chachaAlgHandle = NULL;
+    GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnCryptoInitAlgHandles(&aesAlgHandle, &chachaAlgHandle));
 
     KIRQL kirql = ExAcquireSpinLockExclusive(&device->SpinLock);
     RtlZeroMemory(&device->CryptoContext, sizeof(OvpnCryptoContext));
-    device->CryptoContext.AlgHandle = algHandle;
+    device->CryptoContext.AesAlgHandle = aesAlgHandle;
+    device->CryptoContext.ChachaAlgHandle = chachaAlgHandle;
     device->Socket.Socket = socket;
     device->Socket.Tcp = proto_tcp;
     RtlZeroMemory(&device->Socket.TcpState, sizeof(OvpnSocketTcpState));
@@ -221,6 +222,8 @@ OvpnPeerUninit(POVPN_DEVICE device)
 
     LOG_INFO("Uninitializing peer");
 
+    BCRYPT_ALG_HANDLE aesAlgHandle = NULL, chachaAlgHandle = NULL;
+
     KIRQL kirql = ExAcquireSpinLockExclusive(&device->SpinLock);
 
     PWSK_SOCKET socket = device->Socket.Socket;
@@ -229,12 +232,17 @@ OvpnPeerUninit(POVPN_DEVICE device)
     OvpnTimerDestroy(&device->KeepaliveXmitTimer);
     OvpnTimerDestroy(&device->KeepaliveRecvTimer);
 
+    aesAlgHandle = device->CryptoContext.AesAlgHandle;
+    chachaAlgHandle = device->CryptoContext.ChachaAlgHandle;
+
     OvpnCryptoUninit(&device->CryptoContext);
 
     InterlockedExchange(&device->UserspacePid, 0);
 
     // OvpnAdapterDestroy and OvpnUdpCloseSocket require PASSIVE_LEVEL, so must release lock
     ExReleaseSpinLockExclusive(&device->SpinLock, kirql);
+
+    OvpnCryptoUninitAlgHandles(aesAlgHandle, chachaAlgHandle);
 
     LOG_IF_NOT_NT_SUCCESS(OvpnSocketClose(socket));
 
