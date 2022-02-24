@@ -130,11 +130,11 @@ OvpnEvtTxQueueAdvance(NETPACKETQUEUE netPacketQueue)
 
     while (NetPacketIteratorHasAny(&pi)) {
         NET_PACKET* packet = NetPacketIteratorGetPacket(&pi);
+        NTSTATUS status = STATUS_SUCCESS;
         if (!packet->Ignore && !packet->Scratch) {
-            NTSTATUS status = OvpnTxProcessPacket(device, queue, &pi, &txBufferHead, &txBufferTail);
+            status = OvpnTxProcessPacket(device, queue, &pi, &txBufferHead, &txBufferTail);
             if (!NT_SUCCESS(status)) {
                 InterlockedIncrementNoFence(&device->Stats.LostOutDataPackets);
-                break;
             }
             else {
                 packetSent = true;
@@ -142,6 +142,9 @@ OvpnEvtTxQueueAdvance(NETPACKETQUEUE netPacketQueue)
         }
 
         NetPacketIteratorAdvance(&pi);
+        if (!NT_SUCCESS(status)) {
+            break;
+        }
     }
     NetPacketIteratorSet(&pi);
 
