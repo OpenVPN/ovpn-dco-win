@@ -46,7 +46,7 @@ OvpnEvtRxQueueAdvance(NETPACKETQUEUE netPacketQueue)
         if (entry == NULL)
             break;
 
-        OVPN_RX_BUFFER* buffer = CONTAINING_RECORD(entry, OVPN_RX_BUFFER, ListEntry);
+        OVPN_RX_BUFFER* buffer = CONTAINING_RECORD(entry, OVPN_RX_BUFFER, QueueListEntry);
 
         NET_FRAGMENT* fragment = NetFragmentIteratorGetFragment(&fi);
         fragment->ValidLength = buffer->Len;

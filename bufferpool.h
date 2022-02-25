@@ -52,6 +52,8 @@ struct OVPN_TX_BUFFER
 
     OVPN_TX_BUFFER_POOL Pool;
 
+    LIST_ENTRY PoolListEntry;
+
     // used when sending from EvtIoWrite
     WDFQUEUE IoQueue;
 
@@ -61,7 +63,9 @@ struct OVPN_TX_BUFFER
 
 struct OVPN_RX_BUFFER
 {
-    LIST_ENTRY ListEntry;
+    LIST_ENTRY PoolListEntry;
+
+    LIST_ENTRY QueueListEntry;
 
     SIZE_T Len;
 
@@ -115,7 +119,10 @@ LIST_ENTRY*
 OvpnBufferQueueDequeue(OVPN_BUFFER_QUEUE handle);
 
 VOID
-OvpnBufferPoolDelete(OVPN_BUFFER_POOL handle);
+OvpnRxBufferPoolDelete(OVPN_BUFFER_POOL handle);
+
+VOID
+OvpnTxBufferPoolDelete(OVPN_BUFFER_POOL handle);
 
 VOID
 OvpnBufferQueueDelete(OVPN_BUFFER_QUEUE handle);

@@ -33,8 +33,9 @@ struct OVPN_BUFFER_POOL_IMPL
     LIST_ENTRY ListHead;
     KSPIN_LOCK Lock;
     UINT32 ItemSize;
+    LONG PoolSize;
     VOID* Context;
-    UCHAR* Mem;
+    CHAR* Tag;
 };
 
 struct OVPN_BUFFER_QUEUE_IMPL
@@ -86,7 +87,7 @@ OvpnBufferQueueDequeue(OVPN_BUFFER_QUEUE handle)
 
 static
 NTSTATUS
-OvpnBufferPoolCreate(OVPN_BUFFER_POOL* handle, UINT32 itemSize, UINT32 itemsCount, VOID* ctx)
+OvpnBufferPoolCreate(OVPN_BUFFER_POOL* handle, UINT32 itemSize, CHAR* tag, VOID* ctx)
 {
     NTSTATUS status = STATUS_SUCCESS;
     *handle = NULL;
@@ -101,31 +102,18 @@ OvpnBufferPoolCreate(OVPN_BUFFER_POOL* handle, UINT32 itemSize, UINT32 itemsCoun
     InitializeListHead(&pool->ListHead);
     KeInitializeSpinLock(&pool->Lock);
 
-    pool->Mem = (UCHAR*)ExAllocatePool2(POOL_FLAG_NON_PAGED, itemsCount * (sizeof(LIST_ENTRY) + itemSize), 'ovpn');
-    if (!pool->Mem) {
-        status = STATUS_MEMORY_NOT_ALLOCATED;
-        goto error;
-    }
-
-    for (UINT32 i = 0; i < itemsCount; ++i) {
-        LIST_ENTRY* entry = (LIST_ENTRY*)(pool->Mem + ((sizeof(LIST_ENTRY) + itemSize) * i));
-        ExInterlockedInsertTailList(&pool->ListHead, entry, &pool->Lock);
-    }
-
     *handle = (OVPN_BUFFER_POOL)pool;
 
     pool->ItemSize = itemSize;
-
+    pool->Tag = tag;
     pool->Context = ctx;
 
     goto done;
 
 error:
     if (pool) {
-        if (pool->Mem)
-            ExFreePoolWithTag(pool->Mem, 'ovpn');
-
         ExFreePoolWithTag(pool, 'ovpn');
+        pool = NULL;
     }
 
 done:
@@ -136,7 +124,7 @@ _Use_decl_annotations_
 NTSTATUS
 OvpnTxBufferPoolCreate(OVPN_TX_BUFFER_POOL* handle, VOID* ctx)
 {
-    return OvpnBufferPoolCreate((OVPN_BUFFER_POOL*)handle, sizeof(OVPN_TX_BUFFER) + OVPN_SOCKET_PACKET_BUFFER_SIZE, 1024, ctx);
+    return OvpnBufferPoolCreate((OVPN_BUFFER_POOL*)handle, sizeof(OVPN_TX_BUFFER) + OVPN_SOCKET_PACKET_BUFFER_SIZE, "tx", ctx);
 }
 
 VOID*
@@ -146,31 +134,32 @@ OvpnTxBufferPoolGetContext(OVPN_TX_BUFFER_POOL handle)
     return pool->Context;
 }
 
+template<class POOL_ENTRY>
 static
-VOID*
-OvpnBufferPoolGet(OVPN_BUFFER_POOL handle) {
+VOID
+OvpnBufferPoolGet(OVPN_BUFFER_POOL handle, POOL_ENTRY** entry) {
     OVPN_BUFFER_POOL_IMPL* pool = (OVPN_BUFFER_POOL_IMPL*)handle;
-    LIST_ENTRY* entry = NULL;
 
-    entry = ExInterlockedRemoveHeadList(&pool->ListHead, &pool->Lock);
-
-    if (entry != NULL) {
-        UCHAR* buf = (UCHAR*)entry + sizeof(LIST_ENTRY);
-        return buf;
+    LIST_ENTRY* slist_entry = ExInterlockedRemoveHeadList(&pool->ListHead, &pool->Lock);
+    if (slist_entry) {
+        *entry = CONTAINING_RECORD(slist_entry, POOL_ENTRY, PoolListEntry);
+    } else {
+        *entry = (POOL_ENTRY*)ExAllocatePool2(POOL_FLAG_NON_PAGED, pool->ItemSize, 'ovpn');
+        InterlockedIncrement(&pool->PoolSize);
+        if ((pool->PoolSize % 64) == 0) {
+            LOG_INFO("Pool size", TraceLoggingValue(pool->Tag, "tag"), TraceLoggingValue(pool->PoolSize, "size"));
+        }
     }
-    else
-        return NULL;
 }
 
 _Use_decl_annotations_
 NTSTATUS
 OvpnTxBufferPoolGet(OVPN_TX_BUFFER_POOL handle, OVPN_TX_BUFFER** buffer)
 {
-    VOID* buf = OvpnBufferPoolGet((OVPN_BUFFER_POOL)handle);
-    if (buf == NULL)
+    OvpnBufferPoolGet((OVPN_BUFFER_POOL)handle, buffer);
+    if (*buffer == NULL)
         return STATUS_INSUFFICIENT_RESOURCES;
 
-    *buffer = (OVPN_TX_BUFFER*)buf;
     (*buffer)->Mdl = IoAllocateMdl(*buffer, sizeof(OVPN_TX_BUFFER) + OVPN_SOCKET_PACKET_BUFFER_SIZE, FALSE, FALSE, NULL);
     MmBuildMdlForNonPagedPool((*buffer)->Mdl);
 
@@ -192,11 +181,9 @@ _Use_decl_annotations_
 NTSTATUS
 OvpnRxBufferPoolGet(OVPN_RX_BUFFER_POOL handle, OVPN_RX_BUFFER** buffer)
 {
-    VOID* buf = OvpnBufferPoolGet((OVPN_BUFFER_POOL)handle);
-    if (buf == NULL)
+    OvpnBufferPoolGet((OVPN_BUFFER_POOL)handle, buffer);
+    if (*buffer == NULL)
         return STATUS_INSUFFICIENT_RESOURCES;
-
-    *buffer = (OVPN_RX_BUFFER*)buf;
 
     (*buffer)->Pool = handle;
     (*buffer)->Len = 0;
@@ -204,14 +191,14 @@ OvpnRxBufferPoolGet(OVPN_RX_BUFFER_POOL handle, OVPN_RX_BUFFER** buffer)
     return STATUS_SUCCESS;
 }
 
+template<class POOL_ENTRY>
 static
 VOID
-OvpnBufferPoolPut(OVPN_BUFFER_POOL handle, VOID* data)
+OvpnBufferPoolPut(POOL_ENTRY* pool_entry)
 {
-    OVPN_BUFFER_POOL_IMPL* pool = (OVPN_BUFFER_POOL_IMPL*)handle;
+    OVPN_BUFFER_POOL_IMPL* pool = (OVPN_BUFFER_POOL_IMPL*)pool_entry->Pool;
 
-    LIST_ENTRY* entry = (LIST_ENTRY*)((PUCHAR)data - sizeof(LIST_ENTRY));
-    ExInterlockedInsertTailList(&pool->ListHead, entry, &pool->Lock);
+    ExInterlockedInsertTailList(&pool->ListHead, &(pool_entry->PoolListEntry), &pool->Lock);
 }
 
 _Use_decl_annotations_
@@ -220,25 +207,43 @@ OvpnTxBufferPoolPut(OVPN_TX_BUFFER* buffer)
 {
     IoFreeMdl(buffer->Mdl);
 
-    OvpnBufferPoolPut((OVPN_BUFFER_POOL)buffer->Pool, buffer);
+    OvpnBufferPoolPut(buffer);
 }
 
 _Use_decl_annotations_
 VOID
 OvpnRxBufferPoolPut(_In_ OVPN_RX_BUFFER* buffer)
 {
-    OvpnBufferPoolPut((OVPN_BUFFER_POOL)buffer->Pool, &buffer->ListEntry);
+    OvpnBufferPoolPut(buffer);
 }
 
+
+template<class POOL_ENTRY>
+static
 VOID
 OvpnBufferPoolDelete(OVPN_BUFFER_POOL handle)
 {
     OVPN_BUFFER_POOL_IMPL* pool = (OVPN_BUFFER_POOL_IMPL*)handle;
 
-    if (pool->Mem)
-        ExFreePoolWithTag(pool->Mem, 'ovpn');
+    LIST_ENTRY* list_entry = NULL;
+    while ((list_entry = ExInterlockedRemoveHeadList(&pool->ListHead, &pool->Lock)) != NULL) {
+        POOL_ENTRY* entry = CONTAINING_RECORD(list_entry, POOL_ENTRY, PoolListEntry);
+        ExFreePoolWithTag(entry, 'ovpn');
+    }
 
     ExFreePoolWithTag(pool, 'ovpn');
+}
+
+VOID
+OvpnRxBufferPoolDelete(OVPN_BUFFER_POOL handle)
+{
+    OvpnBufferPoolDelete<OVPN_RX_BUFFER>(handle);
+}
+
+VOID
+OvpnTxBufferPoolDelete(OVPN_BUFFER_POOL handle)
+{
+    OvpnBufferPoolDelete<OVPN_TX_BUFFER>(handle);
 }
 
 _Use_decl_annotations_
@@ -266,7 +271,7 @@ _Use_decl_annotations_
 NTSTATUS
 OvpnRxBufferPoolCreate(OVPN_RX_BUFFER_POOL* handle)
 {
-    return OvpnBufferPoolCreate((OVPN_BUFFER_POOL*)handle, sizeof(OVPN_RX_BUFFER), 1024, NULL);
+    return OvpnBufferPoolCreate((OVPN_BUFFER_POOL*)handle, sizeof(OVPN_RX_BUFFER), "rx", NULL);
 }
 
 VOID

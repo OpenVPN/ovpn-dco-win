@@ -115,7 +115,7 @@ OvpnSocketControlPacketReceived(_In_ POVPN_DEVICE device, _In_reads_(len) PUCHAR
         buffer->Len = len;
 
         // enqueue buffer, it will be dequeued when read request arrives
-        OvpnBufferQueueEnqueue(device->ControlRxBufferQueue, &buffer->ListEntry);
+        OvpnBufferQueueEnqueue(device->ControlRxBufferQueue, &buffer->QueueListEntry);
     }
     else {
         // service IO request right away
@@ -184,7 +184,7 @@ VOID OvpnSocketDataPacketReceived(_In_ POVPN_DEVICE device, UCHAR op, _In_reads_
         }
         else {
             // enqueue plaintext buffer, it will be dequeued by NetAdapter RX datapath
-            OvpnBufferQueueEnqueue(device->DataRxBufferQueue, &buffer->ListEntry);
+            OvpnBufferQueueEnqueue(device->DataRxBufferQueue, &buffer->QueueListEntry);
 
             OvpnAdapterNotifyRx(device->Adapter);
         }
