@@ -151,7 +151,4 @@ VOID OvpnTimerReset(WDFTIMER timer, ULONG dueTime)
         // if timer has already been created this will reset "due time" value to the new one
         WdfTimerStart(timer, WDF_REL_TIMEOUT_IN_SEC(dueTime));
     }
-    else {
-        LOG_ERROR("Timer not initialized");
-    }
 }
