@@ -250,7 +250,7 @@ OvpnPeerUninit(POVPN_DEVICE device)
 
     // flush buffers in control queue so that client won't get control channel messages from previous session
     while (LIST_ENTRY* entry = OvpnBufferQueueDequeue(device->ControlRxBufferQueue)) {
-        OVPN_RX_BUFFER* buffer = CONTAINING_RECORD(entry, OVPN_RX_BUFFER, ListEntry);
+        OVPN_RX_BUFFER* buffer = CONTAINING_RECORD(entry, OVPN_RX_BUFFER, QueueListEntry);
         // return buffer back to pool
         OvpnRxBufferPoolPut(buffer);
     }

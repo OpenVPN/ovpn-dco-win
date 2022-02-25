@@ -120,7 +120,7 @@ OvpnEvtIoRead(WDFQUEUE queue, WDFREQUEST request, size_t length)
         return;
     }
 
-    OVPN_RX_BUFFER* buffer = CONTAINING_RECORD(entry, OVPN_RX_BUFFER, ListEntry);
+    OVPN_RX_BUFFER* buffer = CONTAINING_RECORD(entry, OVPN_RX_BUFFER, QueueListEntry);
 
     NTSTATUS status;
 
@@ -285,8 +285,8 @@ VOID OvpnEvtDeviceCleanup(WDFOBJECT obj) {
 
     OVPN_DEVICE* device = OvpnGetDeviceContext(obj);
 
-    OvpnBufferPoolDelete((OVPN_BUFFER_POOL)device->TxBufferPool);
-    OvpnBufferPoolDelete((OVPN_BUFFER_POOL)device->RxBufferPool);
+    OvpnTxBufferPoolDelete((OVPN_BUFFER_POOL)device->TxBufferPool);
+    OvpnRxBufferPoolDelete((OVPN_BUFFER_POOL)device->RxBufferPool);
 
     OvpnBufferQueueDelete(device->ControlRxBufferQueue);
     OvpnBufferQueueDelete(device->DataRxBufferQueue);
