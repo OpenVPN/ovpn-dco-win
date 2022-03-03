@@ -140,7 +140,7 @@ OvpnSocketControlPacketReceived(_In_ POVPN_DEVICE device, _In_reads_(len) PUCHAR
 
 static
 _Requires_shared_lock_held_(device->SpinLock)
-VOID OvpnSocketDataPacketReceived(_In_ POVPN_DEVICE device, UCHAR op, _In_reads_(len) PUCHAR buf, SIZE_T len)
+VOID OvpnSocketDataPacketReceived(_In_ POVPN_DEVICE device, UCHAR op, _In_reads_(len) PUCHAR cipherTextBuf, SIZE_T len)
 {
     OVPN_RX_BUFFER* buffer;
 
@@ -162,7 +162,7 @@ VOID OvpnSocketDataPacketReceived(_In_ POVPN_DEVICE device, UCHAR op, _In_reads_
         }
         else {
             // decrypt into plaintext buffer
-            status = device->CryptoContext.Decrypt(keySlot, buf, len, buffer->Data);
+            status = device->CryptoContext.Decrypt(keySlot, cipherTextBuf, len, buffer->Data);
             buffer->Len = len - device->CryptoContext.CryptoOverhead;
         }
     }
@@ -175,8 +175,11 @@ VOID OvpnSocketDataPacketReceived(_In_ POVPN_DEVICE device, UCHAR op, _In_reads_
     if (NT_SUCCESS(status)) {
         OvpnTimerReset(device->KeepaliveRecvTimer, device->KeepaliveTimeout);
 
+        // points to the beginning of plaintext
+        UCHAR* buf = buffer->Data + device->CryptoContext.CryptoOverhead;
+
         // ping packet?
-        if (OvpnTimerIsKeepaliveMessage(buffer->Data, buffer->Len)) {
+        if (OvpnTimerIsKeepaliveMessage(buf, buffer->Len)) {
             LOG_INFO("Ping received");
 
             // no need to inject ping packet into OS, return buffer to the pool
