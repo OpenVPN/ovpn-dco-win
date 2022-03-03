@@ -25,6 +25,7 @@
 #include "adapter.h"
 #include "crypto.h"
 #include "driver.h"
+#include "mss.h"
 #include "trace.h"
 #include "rxqueue.h"
 #include "timer.h"
@@ -186,6 +187,12 @@ VOID OvpnSocketDataPacketReceived(_In_ POVPN_DEVICE device, UCHAR op, _In_reads_
             OvpnRxBufferPoolPut(buffer);
         }
         else {
+            if (OvpnMssIsIPv4(buf, buffer->Len)) {
+                OvpnMssDoIPv4(buf, buffer->Len, device->MSS);
+            } else if (OvpnMssIsIPv6(buf, buffer->Len)) {
+                OvpnMssDoIPv6(buf, buffer->Len, device->MSS);
+            }
+
             // enqueue plaintext buffer, it will be dequeued by NetAdapter RX datapath
             OvpnBufferQueueEnqueue(device->DataRxBufferQueue, &buffer->QueueListEntry);
 

@@ -97,6 +97,7 @@ typedef struct _OVPN_CRYPTO_DATA {
 typedef struct _OVPN_SET_PEER {
 	LONG KeepaliveInterval;
 	LONG KeepaliveTimeout;
+	LONG MSS;
 } OVPN_SET_PEER, * POVPN_SET_PEER;
 
 #define OVPN_IOCTL_NEW_PEER     CTL_CODE(FILE_DEVICE_UNKNOWN, 1, METHOD_BUFFERED, FILE_ANY_ACCESS)

@@ -131,6 +131,7 @@ _Use_decl_annotations_
 NTSTATUS OvpnTimerXmitCreate(WDFOBJECT parent, ULONG period, WDFTIMER* timer)
 {
     NTSTATUS status;
+    LOG_INFO("Create xmit timer", TraceLoggingValue(period, "period"));
     LOG_IF_NOT_NT_SUCCESS(status = OvpnTimerCreate(parent, period, OvpnTimerXmit, timer));
 
     return status;
@@ -140,6 +141,7 @@ _Use_decl_annotations_
 NTSTATUS OvpnTimerRecvCreate(WDFOBJECT parent, WDFTIMER* timer)
 {
     NTSTATUS status;
+    LOG_INFO("Create recv timer");
     LOG_IF_NOT_NT_SUCCESS(status = OvpnTimerCreate(parent, 0, OvpnTimerRecv, timer));
 
     return status;
