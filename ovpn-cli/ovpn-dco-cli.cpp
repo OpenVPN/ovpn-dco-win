@@ -79,7 +79,7 @@ private:
 
 		setup_crypto(key_file, key_direction);
 
-		setup_keepalive();
+		setup_keepalive(5, 60, 0);
 
 		start_vpn();
 
@@ -94,10 +94,11 @@ private:
 		}
 	}
 
-	void setup_keepalive() {
+	void setup_keepalive(int interval, int timeout, int mss) {
 		OVPN_SET_PEER peer;
-		peer.KeepaliveInterval = 10;
-		peer.KeepaliveTimeout = 300;
+		peer.KeepaliveInterval = interval;
+		peer.KeepaliveTimeout = timeout;
+		peer.MSS = mss;
 
 		DWORD bytes_returned = 0;
 		if (!DeviceIoControl(handle_->native_handle(), OVPN_IOCTL_SET_PEER, &peer, sizeof(peer), NULL, NULL, &bytes_returned, NULL)) {
@@ -245,7 +246,7 @@ private:
 			tick_();
 		});
 
-		send_("hello, world!");
+		//send_("hello, world!");
 	};
 
 	void queue_read_() {

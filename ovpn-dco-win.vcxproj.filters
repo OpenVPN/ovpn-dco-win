@@ -64,6 +64,9 @@
     <ClInclude Include="bufferpool.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="mss.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="driver.cpp">
@@ -94,6 +97,9 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="bufferpool.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="mss.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>

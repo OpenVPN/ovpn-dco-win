@@ -92,6 +92,10 @@ struct OVPN_DEVICE {
     _Guarded_by_(SpinLock)
     WDFTIMER KeepaliveRecvTimer;
 
+    // set from the userspace, defines TCP Maximum Segment Size
+    _Guarded_by_(SpinLock)
+    UINT16 MSS;
+
     _Guarded_by_(SpinLock)
     OvpnCryptoContext CryptoContext;
 

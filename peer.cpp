@@ -105,21 +105,43 @@ NTSTATUS OvpnPeerSet(POVPN_DEVICE device, WDFREQUEST request)
 
     POVPN_SET_PEER peer = NULL;
     NTSTATUS status;
-
     GOTO_IF_NOT_NT_SUCCESS(done, status, WdfRequestRetrieveInputBuffer(request, sizeof(OVPN_SET_PEER), (PVOID*)&peer, nullptr));
 
-    device->KeepaliveInterval = peer->KeepaliveInterval;
-    device->KeepaliveTimeout = peer->KeepaliveTimeout;
+    LOG_INFO("Set peer", TraceLoggingValue(peer->KeepaliveInterval, "interval"),
+        TraceLoggingValue(peer->KeepaliveTimeout, "timeout"),
+        TraceLoggingValue(peer->MSS, "MSS"));
 
-    // keepalive xmit timer, sends ping packets
-    GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnTimerXmitCreate(device->WdfDevice, peer->KeepaliveInterval, &device->KeepaliveXmitTimer));
-    OvpnTimerReset(device->KeepaliveXmitTimer, peer->KeepaliveInterval);
+    if (peer->MSS != -1) {
+        device->MSS = (UINT16)peer->MSS;
+    }
 
-    // keepalive recv timer, detects keepalive timeout
-    GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnTimerRecvCreate(device->WdfDevice, &device->KeepaliveRecvTimer));
-    OvpnTimerReset(device->KeepaliveRecvTimer, peer->KeepaliveTimeout);
+    if (peer->KeepaliveInterval != -1) {
+        device->KeepaliveInterval = peer->KeepaliveInterval;
 
-    LOG_INFO("Keepalive", TraceLoggingValue(peer->KeepaliveInterval, "interval"), TraceLoggingValue(peer->KeepaliveTimeout, "timeout"));
+        if (device->KeepaliveInterval > 0) {
+            // keepalive xmit timer, sends ping packets
+            GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnTimerXmitCreate(device->WdfDevice, peer->KeepaliveInterval, &device->KeepaliveXmitTimer));
+            OvpnTimerReset(device->KeepaliveXmitTimer, peer->KeepaliveInterval);
+        }
+        else {
+            LOG_INFO("Destroy xmit timer");
+            OvpnTimerDestroy(&device->KeepaliveXmitTimer);
+        }
+    }
+
+    if (peer->KeepaliveTimeout != -1) {
+        device->KeepaliveTimeout = peer->KeepaliveTimeout;
+
+        if (device->KeepaliveTimeout > 0) {
+            // keepalive recv timer, detects keepalive timeout
+            GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnTimerRecvCreate(device->WdfDevice, &device->KeepaliveRecvTimer));
+            OvpnTimerReset(device->KeepaliveRecvTimer, peer->KeepaliveTimeout);
+        }
+        else {
+            LOG_INFO("Destroy recv timer");
+            OvpnTimerDestroy(&device->KeepaliveRecvTimer);
+        }
+    }
 
 done:
     return status;

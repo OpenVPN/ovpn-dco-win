@@ -27,6 +27,7 @@
 
 #include "crypto.h"
 #include "driver.h"
+#include "mss.h"
 #include "trace.h"
 #include "netringiterator.h"
 #include "timer.h"
@@ -61,6 +62,12 @@ OvpnTxProcessPacket(_In_ POVPN_DEVICE device, _In_ POVPN_TXQUEUE queue, _In_ NET
             (UCHAR const*)virtualAddr->VirtualAddress + fragment->Offset, fragment->ValidLength);
 
         NetFragmentIteratorAdvance(&fi);
+    }
+
+    if (OvpnMssIsIPv4(buffer->Data, buffer->Len)) {
+        OvpnMssDoIPv4(buffer->Data, buffer->Len, device->MSS);
+    } else if (OvpnMssIsIPv6(buffer->Data, buffer->Len)) {
+        OvpnMssDoIPv6(buffer->Data, buffer->Len, device->MSS);
     }
 
     InterlockedExchangeAddNoFence64(&device->Stats.TunBytesSent, buffer->Len);
