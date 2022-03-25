@@ -23,6 +23,7 @@
 #include <wdf.h>
 #include <netadaptercx.h>
 #include <net/virtualaddress.h>
+#include <net/checksum.h>
 
 #include "driver.h"
 #include "bufferpool.h"
@@ -30,6 +31,35 @@
 #include "netringiterator.h"
 
 EVT_PACKET_QUEUE_ADVANCE OvpnEvtRxQueueAdvance;
+
+static inline UINT8
+OvpnRxQueueGetLayer4Type(const VOID* buf, size_t len)
+{
+    UINT8 ret = NetPacketLayer4TypeUnspecified;
+
+    if (len < sizeof(IPV4_HEADER))
+        return ret;
+
+    const auto ipv4hdr = (IPV4_HEADER*)buf;
+    if (ipv4hdr->Version == IPV4_VERSION) {
+        if (ipv4hdr->Protocol == IPPROTO_TCP)
+            ret = NetPacketLayer4TypeTcp;
+        else if (ipv4hdr->Protocol == IPPROTO_UDP)
+            ret = NetPacketLayer4TypeUdp;
+    }
+    else if (ipv4hdr->Version == 6)  {
+        if (len < sizeof(IPV6_HEADER))
+            return ret;
+
+        const auto ipv6hdr = (IPV6_HEADER*)buf;
+        if (ipv6hdr->NextHeader == IPPROTO_TCP)
+            ret = NetPacketLayer4TypeTcp;
+        else if (ipv6hdr->NextHeader == IPPROTO_UDP)
+            ret = NetPacketLayer4TypeUdp;
+    }
+
+    return ret;
+}
 
 _Use_decl_annotations_
 VOID
@@ -61,6 +91,15 @@ OvpnEvtRxQueueAdvance(NETPACKETQUEUE netPacketQueue)
         packet->FragmentCount = 1;
 
         packet->Layout = {};
+
+        const auto checksum = NetExtensionGetPacketChecksum(&queue->ChecksumExtension, NetPacketIteratorGetIndex(&pi));
+
+        // Win11/2022 and newer
+        if (checksum) {
+            checksum->Layer3 = NetPacketRxChecksumEvaluationValid; // IP checksum
+            checksum->Layer4 = NetPacketRxChecksumEvaluationValid; // TCP/UDP checksum
+            packet->Layout.Layer4Type = OvpnRxQueueGetLayer4Type(virtualAddr->VirtualAddress, buffer->Len);
+        }
 
         NetFragmentIteratorAdvance(&fi);
         NetPacketIteratorAdvance(&pi);
@@ -112,4 +151,8 @@ OvpnRxQueueInitialize(NETPACKETQUEUE netPacketQueue, POVPN_ADAPTER adapter)
     NET_EXTENSION_QUERY extension;
     NET_EXTENSION_QUERY_INIT(&extension, NET_FRAGMENT_EXTENSION_VIRTUAL_ADDRESS_NAME, NET_FRAGMENT_EXTENSION_VIRTUAL_ADDRESS_VERSION_1, NetExtensionTypeFragment);
     NetRxQueueGetExtension(netPacketQueue, &extension, &queue->VirtualAddressExtension);
+
+    // Query checksum packet extension offset and store it in the context
+    NET_EXTENSION_QUERY_INIT(&extension, NET_PACKET_EXTENSION_CHECKSUM_NAME, NET_PACKET_EXTENSION_CHECKSUM_VERSION_1, NetExtensionTypePacket);
+    NetRxQueueGetExtension(netPacketQueue, &extension, &queue->ChecksumExtension);
 }

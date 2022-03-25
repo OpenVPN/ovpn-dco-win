@@ -12,7 +12,7 @@ jobs:
     strategy:
       matrix:
         arch: [x64, x86, ARM64]
-        build_conf: [Debug, Release]
+        build_conf: [Debug, Release, Debug-Win11, Release-Win11]
 
     steps:
     - uses: actions/checkout@v2

@@ -30,6 +30,7 @@ typedef struct _OVPN_RXQUEUE
     NET_RING_COLLECTION const * Rings;
 
     NET_EXTENSION VirtualAddressExtension;
+    NET_EXTENSION ChecksumExtension;
 
     LONG NotificationEnabled = 0;
 } OVPN_RXQUEUE, * POVPN_RXQUEUE;
