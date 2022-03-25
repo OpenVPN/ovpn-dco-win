@@ -28,7 +28,41 @@
 // maximum link speed for send and recv in bps
 #define OVPN_MEDIA_MAX_SPEED 1'000'000'000
 
-static void
+#if (NETADAPTER_VERSION_MAJOR >= 2) && (NETADAPTER_VERSION_MINOR >= 1)
+
+EVT_NET_ADAPTER_OFFLOAD_SET_RX_CHECKSUM OvpnEvtAdapterOffloadSetRxChecksum;
+
+_Use_decl_annotations_
+VOID
+OvpnEvtAdapterOffloadSetRxChecksum(NETADAPTER netAdapter, NETOFFLOAD offload)
+{
+    UNREFERENCED_PARAMETER(netAdapter);
+
+    LOG_INFO("Checksum offload settings changed",
+        TraceLoggingValue(NetOffloadIsRxChecksumIPv4Enabled(offload), "ipv4"),
+        TraceLoggingValue(NetOffloadIsRxChecksumTcpEnabled(offload), "tcp"),
+        TraceLoggingValue(NetOffloadIsRxChecksumUdpEnabled(offload), "udp"));
+
+    // we don't really care about those settings, since we always report tunnel checksums as valid
+}
+
+static
+VOID
+OvpnAdapterSetOffloadCapabilities(_In_ POVPN_ADAPTER adapter)
+{
+    // Configure the hardware's Rx checksum offload capabilities
+    NET_ADAPTER_OFFLOAD_RX_CHECKSUM_CAPABILITIES rxChecksumOffloadCapabilities;
+
+    NET_ADAPTER_OFFLOAD_RX_CHECKSUM_CAPABILITIES_INIT(&rxChecksumOffloadCapabilities, OvpnEvtAdapterOffloadSetRxChecksum);
+
+    // Set the current Rx checksum offload capabilities and register the callback for future changes in active capabilities
+    NetAdapterOffloadSetRxChecksumCapabilities(adapter->NetAdapter, &rxChecksumOffloadCapabilities);
+}
+
+#endif
+
+static
+VOID
 OvpnAdapterSetDatapathCapabilities(_In_ POVPN_ADAPTER adapter)
 {
     NET_ADAPTER_TX_CAPABILITIES txCapabilities;
@@ -41,7 +75,7 @@ OvpnAdapterSetDatapathCapabilities(_In_ POVPN_ADAPTER adapter)
 }
 
 static
-void
+VOID
 OvpnAdapterSetLinkLayerCapabilities(_In_ POVPN_ADAPTER adapter)
 {
     ULONG64 maxXmitLinkSpeed = OVPN_MEDIA_MAX_SPEED;
@@ -57,7 +91,7 @@ OvpnAdapterSetLinkLayerCapabilities(_In_ POVPN_ADAPTER adapter)
 }
 
 static
-void
+VOID
 OvpnAdapterSetLinkState(_In_ POVPN_ADAPTER adapter)
 {
     NET_ADAPTER_LINK_STATE linkState;
@@ -149,8 +183,6 @@ OvpnAdapterCreate(OVPN_DEVICE * device) {
     NET_ADAPTER_DATAPATH_CALLBACKS_INIT(&datapathCallbacks, OvpnEvtAdapterCreateTxQueue, OvpnEvtAdapterCreateRxQueue);
     NetAdapterInitSetDatapathCallbacks(adapterInit, &datapathCallbacks);
 
-    NetAdapterInitSetDatapathCallbacks(adapterInit, &datapathCallbacks);
-
     WDF_OBJECT_ATTRIBUTES adapterAttributes;
     WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&adapterAttributes, OVPN_ADAPTER);
 
@@ -166,6 +198,10 @@ OvpnAdapterCreate(OVPN_DEVICE * device) {
 
     OvpnAdapterSetDatapathCapabilities(adapter);
     OvpnAdapterSetLinkLayerCapabilities(adapter);
+
+#if (NETADAPTER_VERSION_MAJOR >= 2) && (NETADAPTER_VERSION_MINOR >= 1)
+    OvpnAdapterSetOffloadCapabilities(adapter);
+#endif
 
     OvpnAdapterSetLinkState(adapter);
 

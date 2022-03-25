@@ -4,9 +4,7 @@
   <PropertyGroup Label="UserMacros">
     <OVPN_DCO_VERSION_MAJOR>0</OVPN_DCO_VERSION_MAJOR>
     <OVPN_DCO_VERSION_MINOR>7</OVPN_DCO_VERSION_MINOR>
-    <OVPN_DCO_VERSION_PATCH>0</OVPN_DCO_VERSION_PATCH>
-    <NETADAPTER_INC_PATH>$(DDK_INC_PATH)\netcx\kmdf\adapter\2.0\</NETADAPTER_INC_PATH>
-    <NETADAPTER_LIB_PATH>$(DDK_LIB_PATH)\netcx\kmdf\adapter\2.0\</NETADAPTER_LIB_PATH>
+    <OVPN_DCO_VERSION_PATCH>1</OVPN_DCO_VERSION_PATCH>
   </PropertyGroup>
   <PropertyGroup />
   <ItemDefinitionGroup>
@@ -28,14 +26,6 @@
     </BuildMacro>
     <BuildMacro Include="OVPN_DCO_VERSION_PATCH">
       <Value>$(OVPN_DCO_VERSION_PATCH)</Value>
-      <EnvironmentVariable>true</EnvironmentVariable>
-    </BuildMacro>
-    <BuildMacro Include="NETADAPTER_INC_PATH">
-      <Value>$(NETADAPTER_INC_PATH)</Value>
-      <EnvironmentVariable>true</EnvironmentVariable>
-    </BuildMacro>
-    <BuildMacro Include="NETADAPTER_LIB_PATH">
-      <Value>$(NETADAPTER_LIB_PATH)</Value>
       <EnvironmentVariable>true</EnvironmentVariable>
     </BuildMacro>
   </ItemGroup>
