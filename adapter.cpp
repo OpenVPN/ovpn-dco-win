@@ -90,14 +90,14 @@ OvpnAdapterSetLinkLayerCapabilities(_In_ POVPN_ADAPTER adapter)
     NetAdapterSetLinkLayerMtuSize(adapter->NetAdapter, 0xFFFF);
 }
 
-static
+_Use_decl_annotations_
 VOID
-OvpnAdapterSetLinkState(_In_ POVPN_ADAPTER adapter)
+OvpnAdapterSetLinkState(POVPN_ADAPTER adapter, NET_IF_MEDIA_CONNECT_STATE state)
 {
     NET_ADAPTER_LINK_STATE linkState;
     NET_ADAPTER_LINK_STATE_INIT(&linkState,
                                 OVPN_MEDIA_MAX_SPEED,
-                                NET_IF_MEDIA_CONNECT_STATE::MediaConnectStateConnected,
+                                state,
                                 NET_IF_MEDIA_DUPLEX_STATE::MediaDuplexStateFull,
                                 NET_ADAPTER_PAUSE_FUNCTION_TYPE::NetAdapterPauseFunctionTypeUnsupported,
                                 NET_ADAPTER_AUTO_NEGOTIATION_FLAGS::NetAdapterAutoNegotiationFlagNone);
@@ -176,7 +176,8 @@ OvpnAdapterCreate(OVPN_DEVICE * device) {
 
     NETADAPTER_INIT* adapterInit = NetAdapterInitAllocate(device->WdfDevice);
     if (adapterInit == NULL) {
-        return status;
+        LOG_ERROR("NetAdapterInitAllocate() failed");
+        return STATUS_MEMORY_NOT_ALLOCATED;
     }
 
     NET_ADAPTER_DATAPATH_CALLBACKS datapathCallbacks;
@@ -203,7 +204,7 @@ OvpnAdapterCreate(OVPN_DEVICE * device) {
     OvpnAdapterSetOffloadCapabilities(adapter);
 #endif
 
-    OvpnAdapterSetLinkState(adapter);
+    OvpnAdapterSetLinkState(adapter, MediaConnectStateDisconnected);
 
     status = NetAdapterStart(adapter->NetAdapter);
 

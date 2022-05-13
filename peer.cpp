@@ -190,10 +190,9 @@ OvpnPeerStartVPN(POVPN_DEVICE device)
 
     LOG_INFO("Start VPN");
 
-    NTSTATUS status;
-    LOG_IF_NOT_NT_SUCCESS(status = OvpnAdapterCreate(device));
+    OvpnAdapterSetLinkState(OvpnGetAdapterContext(device->Adapter), MediaConnectStateConnected);
 
-    return status;
+    return STATUS_SUCCESS;
 }
 
 _Use_decl_annotations_
@@ -261,14 +260,14 @@ OvpnPeerUninit(POVPN_DEVICE device)
 
     InterlockedExchange(&device->UserspacePid, 0);
 
-    // OvpnAdapterDestroy and OvpnUdpCloseSocket require PASSIVE_LEVEL, so must release lock
+    OvpnAdapterSetLinkState(OvpnGetAdapterContext(device->Adapter), MediaConnectStateDisconnected);
+
+    // OvpnUdpCloseSocket require PASSIVE_LEVEL, so must release lock
     ExReleaseSpinLockExclusive(&device->SpinLock, kirql);
 
     OvpnCryptoUninitAlgHandles(aesAlgHandle, chachaAlgHandle);
 
     LOG_IF_NOT_NT_SUCCESS(OvpnSocketClose(socket));
-
-    OvpnAdapterDestroy(device->Adapter);
 
     // flush buffers in control queue so that client won't get control channel messages from previous session
     while (LIST_ENTRY* entry = OvpnBufferQueueDequeue(device->ControlRxBufferQueue)) {
