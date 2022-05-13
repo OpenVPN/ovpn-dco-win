@@ -290,8 +290,9 @@ VOID OvpnEvtDeviceCleanup(WDFOBJECT obj) {
 
     OvpnBufferQueueDelete(device->ControlRxBufferQueue);
     OvpnBufferQueueDelete(device->DataRxBufferQueue);
-}
 
+    OvpnAdapterDestroy(device->Adapter);
+}
 
 EVT_WDF_DRIVER_DEVICE_ADD OvpnEvtDeviceAdd;
 
@@ -363,6 +364,8 @@ OvpnEvtDeviceAdd(WDFDRIVER wdfDriver, PWDFDEVICE_INIT deviceInit) {
 
     GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnBufferQueueCreate(&device->ControlRxBufferQueue));
     GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnBufferQueueCreate(&device->DataRxBufferQueue));
+
+    LOG_IF_NOT_NT_SUCCESS(status = OvpnAdapterCreate(device));
 
 done:
     return status;
