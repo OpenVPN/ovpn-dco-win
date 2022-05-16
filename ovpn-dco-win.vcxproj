@@ -479,7 +479,7 @@
     <Link>
       <AdditionalDependencies>Netio.lib;Bcrypt.lib;uuid.lib%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalOptions>/Brepro %(AdditionalOptions)</AdditionalOptions>
-      <GenerateDebugInformation>false</GenerateDebugInformation>
+      <GenerateDebugInformation>DebugFull</GenerateDebugInformation>
       <Profile>false</Profile>
     </Link>
     <Inf>
@@ -506,7 +506,7 @@
     <Link>
       <AdditionalDependencies>Netio.lib;Bcrypt.lib;uuid.lib%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalOptions>/Brepro %(AdditionalOptions)</AdditionalOptions>
-      <GenerateDebugInformation>false</GenerateDebugInformation>
+      <GenerateDebugInformation>DebugFull</GenerateDebugInformation>
       <Profile>false</Profile>
     </Link>
     <Inf>
@@ -581,7 +581,7 @@
     <Link>
       <AdditionalDependencies>uuid.lib;Netio.lib;Ksecdd.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalOptions>/Brepro %(AdditionalOptions)</AdditionalOptions>
-      <GenerateDebugInformation>false</GenerateDebugInformation>
+      <GenerateDebugInformation>DebugFull</GenerateDebugInformation>
       <Profile>false</Profile>
     </Link>
     <Inf>
@@ -608,7 +608,7 @@
     <Link>
       <AdditionalDependencies>uuid.lib;Netio.lib;Ksecdd.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalOptions>/Brepro %(AdditionalOptions)</AdditionalOptions>
-      <GenerateDebugInformation>false</GenerateDebugInformation>
+      <GenerateDebugInformation>DebugFull</GenerateDebugInformation>
       <Profile>false</Profile>
     </Link>
     <Inf>
@@ -662,7 +662,7 @@
     <Link>
       <AdditionalDependencies>Netio.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalOptions>/Brepro %(AdditionalOptions)</AdditionalOptions>
-      <GenerateDebugInformation>false</GenerateDebugInformation>
+      <GenerateDebugInformation>DebugFull</GenerateDebugInformation>
       <Profile>false</Profile>
     </Link>
     <Inf>
@@ -684,7 +684,7 @@
     <Link>
       <AdditionalDependencies>Netio.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalOptions>/Brepro %(AdditionalOptions)</AdditionalOptions>
-      <GenerateDebugInformation>false</GenerateDebugInformation>
+      <GenerateDebugInformation>DebugFull</GenerateDebugInformation>
       <Profile>false</Profile>
     </Link>
     <Inf>
@@ -711,7 +711,7 @@
     <Link>
       <AdditionalDependencies>uuid.lib;Netio.lib;Ksecdd.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalOptions>/Brepro %(AdditionalOptions)</AdditionalOptions>
-      <GenerateDebugInformation>false</GenerateDebugInformation>
+      <GenerateDebugInformation>DebugFull</GenerateDebugInformation>
       <Profile>false</Profile>
     </Link>
     <Inf>
@@ -738,7 +738,7 @@
     <Link>
       <AdditionalDependencies>uuid.lib;Netio.lib;Ksecdd.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalOptions>/Brepro %(AdditionalOptions)</AdditionalOptions>
-      <GenerateDebugInformation>false</GenerateDebugInformation>
+      <GenerateDebugInformation>DebugFull</GenerateDebugInformation>
       <Profile>false</Profile>
     </Link>
     <Inf>
