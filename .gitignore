@@ -68,3 +68,5 @@ codeql.build.bat
 # SDV 
 smvstats.txt
 *.DVL.XML
+
+*.cab
