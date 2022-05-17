@@ -119,7 +119,9 @@ OvpnAdapterDestroy(NETADAPTER netAdapter)
     device->Adapter = WDF_NO_HANDLE;
     ExReleaseSpinLockExclusive(&device->SpinLock, irql);
 
-    NetAdapterStop(netAdapter);
+    // TODO: this breaks on Windows 10 when called from EvtCleanupCallback, is this call even needed?
+    // NetAdapterStop(netAdapter);
+
     WdfObjectDelete(netAdapter);
 }
 
