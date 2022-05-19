@@ -291,7 +291,9 @@ VOID OvpnEvtDeviceCleanup(WDFOBJECT obj) {
     OvpnBufferQueueDelete(device->ControlRxBufferQueue);
     OvpnBufferQueueDelete(device->DataRxBufferQueue);
 
-    OvpnAdapterDestroy(device->Adapter);
+    KIRQL irql = ExAcquireSpinLockExclusive(&device->SpinLock);
+    device->Adapter = WDF_NO_HANDLE;
+    ExReleaseSpinLockExclusive(&device->SpinLock, irql);
 }
 
 EVT_WDF_DRIVER_DEVICE_ADD OvpnEvtDeviceAdd;

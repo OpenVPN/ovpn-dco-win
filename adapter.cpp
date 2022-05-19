@@ -104,27 +104,6 @@ OvpnAdapterSetLinkState(POVPN_ADAPTER adapter, NET_IF_MEDIA_CONNECT_STATE state)
     NetAdapterSetLinkState(adapter->NetAdapter, &linkState);
 }
 
-
-_Use_decl_annotations_
-VOID
-OvpnAdapterDestroy(NETADAPTER netAdapter)
-{
-    if (netAdapter == WDF_NO_HANDLE)
-        return;
-
-    POVPN_ADAPTER adapter = OvpnGetAdapterContext(netAdapter);
-    POVPN_DEVICE device = OvpnGetDeviceContext(adapter->WdfDevice);
-
-    KIRQL irql = ExAcquireSpinLockExclusive(&device->SpinLock);
-    device->Adapter = WDF_NO_HANDLE;
-    ExReleaseSpinLockExclusive(&device->SpinLock, irql);
-
-    // TODO: this breaks on Windows 10 when called from EvtCleanupCallback, is this call even needed?
-    // NetAdapterStop(netAdapter);
-
-    WdfObjectDelete(netAdapter);
-}
-
 EVT_NET_ADAPTER_CREATE_TXQUEUE OvpnEvtAdapterCreateTxQueue;
 
 _Use_decl_annotations_

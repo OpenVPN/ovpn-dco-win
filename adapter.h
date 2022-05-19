@@ -48,10 +48,6 @@ _IRQL_requires_same_
 NTSTATUS
 OvpnAdapterCreate(OVPN_DEVICE* device);
 
-_IRQL_requires_(PASSIVE_LEVEL)
-VOID
-OvpnAdapterDestroy(NETADAPTER netAdapter);
-
 // notify NetAdapter (if it is ready) that more packets are available
 NTSTATUS
 OvpnAdapterNotifyRx(NETADAPTER netAdapter);
