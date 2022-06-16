@@ -423,7 +423,7 @@ OvpnSocketTcpDisconnectEvent(_In_opt_ PVOID socketContext, _In_ ULONG flags)
     NTSTATUS status = WdfIoQueueRetrieveNextRequest(device->PendingReadsQueue, &request);
     if (NT_SUCCESS(status)) {
         ULONG_PTR bytesCopied = 0;
-        WdfRequestCompleteWithInformation(request, STATUS_REMOTE_DISCONNECT, bytesCopied);
+        WdfRequestCompleteWithInformation(request, STATUS_CONNECTION_ABORTED, bytesCopied);
     }
     else {
         LOG_WARN("No pending read request, cannot inform userspace");
