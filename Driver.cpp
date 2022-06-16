@@ -231,9 +231,6 @@ OvpnEvtIoDeviceControl(WDFQUEUE queue, WDFREQUEST request, size_t outputBufferLe
 
     case OVPN_IOCTL_NEW_PEER:
         status = OvpnPeerNew(device, request);
-        if (status == STATUS_PENDING) {
-            LOG_IF_NOT_NT_SUCCESS(WdfRequestForwardToIoQueue(request, device->PendingNewPeerQueue));
-        }
         break;
 
     case OVPN_IOCTL_START_VPN:

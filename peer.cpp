@@ -87,6 +87,7 @@ OvpnPeerNew(POVPN_DEVICE device, WDFREQUEST request)
     OvpnPeerZeroStats(&device->Stats);
 
     if (proto_tcp) {
+        LOG_IF_NOT_NT_SUCCESS(status = WdfRequestForwardToIoQueue(request, device->PendingNewPeerQueue));
         // start async connect
         status = OvpnSocketTcpConnect(socket, device, (PSOCKADDR)&peer->Remote);
     }
