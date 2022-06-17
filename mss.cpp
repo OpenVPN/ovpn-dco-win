@@ -107,7 +107,7 @@ OvpnMssDoWork(_In_ UCHAR* buf, SIZE_T len, UINT16 maxmss)
                 TCP_OPT_MSS* opt_mss = (TCP_OPT_MSS*)opt;
                 UINT16 mssval = RtlUshortByteSwap(opt_mss->Mss);
                 if (mssval > maxmss) {
-                    LOG_INFO("Adjust MSS", TraceLoggingValue(mssval, "old"), TraceLoggingValue(maxmss, "new"));
+                    // LOG_INFO("Adjust MSS", TraceLoggingValue(mssval, "old"), TraceLoggingValue(maxmss, "new"));
                     int accumulate = opt_mss->Mss;
                     opt_mss->Mss = RtlUshortByteSwap(maxmss);
                     accumulate -= RtlUshortByteSwap(maxmss);
