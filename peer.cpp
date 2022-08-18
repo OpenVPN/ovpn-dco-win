@@ -56,8 +56,8 @@ OvpnPeerNew(POVPN_DEVICE device, WDFREQUEST request)
     LONG existingPid = InterlockedCompareExchange(&device->UserspacePid, 0, 0);
 
     if (existingPid != 0) {
-        LOG_ERROR("Peer already added by client pid <pid1>, denying request from client pid <pid2>", TraceLoggingValue(existingPid, "pid1"), TraceLoggingValue(newPid, "pid2"));
-        return STATUS_INVALID_DEVICE_REQUEST;
+        LOG_INFO("Peer already added, deleting existing peer");
+        LOG_IF_NOT_NT_SUCCESS(OvpnPeerDel(device));
     }
 
     InterlockedExchange(&device->UserspacePid, newPid);
@@ -82,6 +82,7 @@ OvpnPeerNew(POVPN_DEVICE device, WDFREQUEST request)
     device->Socket.Socket = socket;
     device->Socket.Tcp = proto_tcp;
     RtlZeroMemory(&device->Socket.TcpState, sizeof(OvpnSocketTcpState));
+    RtlZeroMemory(&device->Socket.UdpState, sizeof(OvpnSocketUdpState));
     ExReleaseSpinLockExclusive(&device->SpinLock, kirql);
 
     OvpnPeerZeroStats(&device->Stats);
@@ -94,6 +95,61 @@ OvpnPeerNew(POVPN_DEVICE device, WDFREQUEST request)
 
 done:
     return status;
+}
+
+_Use_decl_annotations_
+NTSTATUS
+OvpnPeerDel(POVPN_DEVICE device)
+{
+    if (InterlockedCompareExchange(&device->UserspacePid, 0, 0) == 0) {
+        LOG_INFO("Peer not added.");
+        return STATUS_INVALID_DEVICE_REQUEST;
+    }
+
+    LOG_INFO("Deleting peer, keeping adapter connected");
+
+    BCRYPT_ALG_HANDLE aesAlgHandle = NULL, chachaAlgHandle = NULL;
+
+    KIRQL kirql = ExAcquireSpinLockExclusive(&device->SpinLock);
+
+    OvpnTimerDestroy(&device->KeepaliveXmitTimer);
+    OvpnTimerDestroy(&device->KeepaliveRecvTimer);
+
+    aesAlgHandle = device->CryptoContext.AesAlgHandle;
+    chachaAlgHandle = device->CryptoContext.ChachaAlgHandle;
+
+    OvpnCryptoUninit(&device->CryptoContext);
+
+    InterlockedExchange(&device->UserspacePid, 0);
+
+    PWSK_SOCKET socket = device->Socket.Socket;
+    device->Socket.Socket = NULL;
+
+    RtlZeroMemory(&device->Socket.TcpState, sizeof(OvpnSocketTcpState));
+    RtlZeroMemory(&device->Socket.UdpState, sizeof(OvpnSocketUdpState));
+
+    // OvpnCryptoUninitAlgHandles and OvpnSocketClose require PASSIVE_LEVEL, so must release lock
+    ExReleaseSpinLockExclusive(&device->SpinLock, kirql);
+
+    OvpnCryptoUninitAlgHandles(aesAlgHandle, chachaAlgHandle);
+
+    LOG_IF_NOT_NT_SUCCESS(OvpnSocketClose(socket));
+
+    // flush buffers in control queue so that client won't get control channel messages from previous session
+    while (LIST_ENTRY* entry = OvpnBufferQueueDequeue(device->ControlRxBufferQueue)) {
+        OVPN_RX_BUFFER* buffer = CONTAINING_RECORD(entry, OVPN_RX_BUFFER, QueueListEntry);
+        // return buffer back to pool
+        OvpnRxBufferPoolPut(buffer);
+    }
+
+    WDFREQUEST request;
+    while (NT_SUCCESS(WdfIoQueueRetrieveNextRequest(device->PendingReadsQueue, &request))) {
+        ULONG_PTR bytesCopied = 0;
+        LOG_INFO("Cancel IO request from manual queue");
+        WdfRequestCompleteWithInformation(request, STATUS_CANCELLED, bytesCopied);
+    }
+
+    return STATUS_SUCCESS;
 }
 
 _Use_decl_annotations_
@@ -233,47 +289,9 @@ _Use_decl_annotations_
 VOID
 OvpnPeerUninit(POVPN_DEVICE device)
 {
-    LONG existingPid = InterlockedCompareExchange(&device->UserspacePid, 0, 0);
+    LOG_IF_NOT_NT_SUCCESS(OvpnPeerDel(device));
 
-    // by some reasons EVT_FILE_CLEANUP, which calls this function, is also called on driver reinstall,
-    // when peer hasn't been added. Catch this case.
-    if (existingPid == 0) {
-        LOG_INFO("Peer not added.");
-        return;
-    }
-
-    LOG_INFO("Uninitializing peer");
-
-    BCRYPT_ALG_HANDLE aesAlgHandle = NULL, chachaAlgHandle = NULL;
-
-    KIRQL kirql = ExAcquireSpinLockExclusive(&device->SpinLock);
-
-    PWSK_SOCKET socket = device->Socket.Socket;
-    device->Socket.Socket = NULL;
-
-    OvpnTimerDestroy(&device->KeepaliveXmitTimer);
-    OvpnTimerDestroy(&device->KeepaliveRecvTimer);
-
-    aesAlgHandle = device->CryptoContext.AesAlgHandle;
-    chachaAlgHandle = device->CryptoContext.ChachaAlgHandle;
-
-    OvpnCryptoUninit(&device->CryptoContext);
-
-    InterlockedExchange(&device->UserspacePid, 0);
+    LOG_INFO("Uninitializing device");
 
     OvpnAdapterSetLinkState(OvpnGetAdapterContext(device->Adapter), MediaConnectStateDisconnected);
-
-    // OvpnUdpCloseSocket require PASSIVE_LEVEL, so must release lock
-    ExReleaseSpinLockExclusive(&device->SpinLock, kirql);
-
-    OvpnCryptoUninitAlgHandles(aesAlgHandle, chachaAlgHandle);
-
-    LOG_IF_NOT_NT_SUCCESS(OvpnSocketClose(socket));
-
-    // flush buffers in control queue so that client won't get control channel messages from previous session
-    while (LIST_ENTRY* entry = OvpnBufferQueueDequeue(device->ControlRxBufferQueue)) {
-        OVPN_RX_BUFFER* buffer = CONTAINING_RECORD(entry, OVPN_RX_BUFFER, QueueListEntry);
-        // return buffer back to pool
-        OvpnRxBufferPoolPut(buffer);
-    }
 }

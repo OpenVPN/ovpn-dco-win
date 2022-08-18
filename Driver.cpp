@@ -233,6 +233,10 @@ OvpnEvtIoDeviceControl(WDFQUEUE queue, WDFREQUEST request, size_t outputBufferLe
         status = OvpnPeerNew(device, request);
         break;
 
+    case OVPN_IOCTL_DEL_PEER:
+        status = OvpnPeerDel(device);
+        break;
+
     case OVPN_IOCTL_START_VPN:
         status = OvpnPeerStartVPN(device);
         break;
@@ -271,7 +275,15 @@ _Use_decl_annotations_
 VOID OvpnEvtFileCleanup(WDFFILEOBJECT fileObject) {
     POVPN_DEVICE device = OvpnGetDeviceContext(WdfFileObjectGetDevice(fileObject));
 
-    OvpnPeerUninit(device);
+    NTSTATUS status = OvpnPeerDel(device);
+    if (!NT_SUCCESS(status))
+        return;
+
+    LOG_INFO("Uninitializing device");
+
+    InterlockedExchange(&device->UserspacePid, 0);
+
+    OvpnAdapterSetLinkState(OvpnGetAdapterContext(device->Adapter), MediaConnectStateDisconnected);
 }
 
 EVT_WDF_DEVICE_CONTEXT_CLEANUP OvpnEvtDeviceCleanup;

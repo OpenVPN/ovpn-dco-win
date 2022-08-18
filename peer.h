@@ -32,6 +32,11 @@ NTSTATUS
 OvpnPeerNew(_In_ POVPN_DEVICE device, WDFREQUEST request);
 
 _Must_inspect_result_
+_IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+OvpnPeerDel(_In_ POVPN_DEVICE device);
+
+_Must_inspect_result_
 _Requires_exclusive_lock_held_(device->SpinLock)
 NTSTATUS
 OvpnPeerSet(_In_ POVPN_DEVICE device, WDFREQUEST request);
