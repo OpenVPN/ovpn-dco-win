@@ -81,7 +81,7 @@ OvpnTxProcessPacket(_In_ POVPN_DEVICE device, _In_ POVPN_TXQUEUE queue, _In_ NET
     }
     else {
         status = STATUS_INVALID_DEVICE_STATE;
-        LOG_WARN("CryptoContext not initialized");
+        // LOG_WARN("CryptoContext not initialized");
     }
 
     if (NT_SUCCESS(status)) {
