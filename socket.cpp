@@ -170,7 +170,7 @@ VOID OvpnSocketDataPacketReceived(_In_ POVPN_DEVICE device, UCHAR op, _In_reads_
     else {
         status = STATUS_INVALID_DEVICE_STATE;
 
-        LOG_WARN("CryptoContext not yet initialized");
+        // LOG_WARN("CryptoContext not yet initialized");
     }
 
     if (NT_SUCCESS(status)) {

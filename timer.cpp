@@ -62,7 +62,7 @@ static VOID OvpnTimerXmit(WDFTIMER timer)
     }
     else {
         status = STATUS_INVALID_DEVICE_STATE;
-        LOG_WARN("CryptoContext not initialized");
+        // LOG_WARN("CryptoContext not initialized");
     }
 
     if (NT_SUCCESS(status)) {
