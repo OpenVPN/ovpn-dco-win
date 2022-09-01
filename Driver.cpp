@@ -127,19 +127,21 @@ OvpnEvtIoRead(WDFQUEUE queue, WDFREQUEST request, size_t length)
     // retrieve IO request buffer
     PVOID inputBuffer;
     size_t inputBufferLength;
-    ULONG_PTR bytesSent;
+
+    ULONG_PTR bytesSent = buffer->Len;
 
     LOG_IF_NOT_NT_SUCCESS(status = WdfRequestRetrieveOutputBuffer(request, buffer->Len, &inputBuffer, &inputBufferLength));
-
     if (NT_SUCCESS(status)) {
         // copy packet into IO request buffer
         RtlCopyMemory(inputBuffer, buffer->Data, buffer->Len);
-        bytesSent = buffer->Len;
-
         InterlockedIncrementNoFence(&device->Stats.ReceivedControlPackets);
     }
     else {
-        // likely userspace buffer is too small
+        if (status == STATUS_BUFFER_TOO_SMALL) {
+            LOG_ERROR("Buffer too small, packet size <pktsize>, buffer size <bufsize>",
+                TraceLoggingValue(buffer->Len, "pktsize"), TraceLoggingValue(inputBufferLength, "bufsize"));
+        }
+
         bytesSent = 0;
     }
 
