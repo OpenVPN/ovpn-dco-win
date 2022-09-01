@@ -187,31 +187,34 @@ VOID OvpnSocketDataPacketReceived(_In_ POVPN_DEVICE device, UCHAR op, _In_reads_
         // LOG_WARN("CryptoContext not yet initialized");
     }
 
-    if (NT_SUCCESS(status)) {
-        OvpnTimerReset(device->KeepaliveRecvTimer, device->KeepaliveTimeout);
+    if (!NT_SUCCESS(status)) {
+        OvpnRxBufferPoolPut(buffer);
+        return;
+    }
 
-        // points to the beginning of plaintext
-        UCHAR* buf = buffer->Data + device->CryptoContext.CryptoOverhead;
+    OvpnTimerReset(device->KeepaliveRecvTimer, device->KeepaliveTimeout);
 
-        // ping packet?
-        if (OvpnTimerIsKeepaliveMessage(buf, buffer->Len)) {
-            LOG_INFO("Ping received");
+    // points to the beginning of plaintext
+    UCHAR* buf = buffer->Data + device->CryptoContext.CryptoOverhead;
 
-            // no need to inject ping packet into OS, return buffer to the pool
-            OvpnRxBufferPoolPut(buffer);
+    // ping packet?
+    if (OvpnTimerIsKeepaliveMessage(buf, buffer->Len)) {
+        LOG_INFO("Ping received");
+
+        // no need to inject ping packet into OS, return buffer to the pool
+        OvpnRxBufferPoolPut(buffer);
+    }
+    else {
+        if (OvpnMssIsIPv4(buf, buffer->Len)) {
+            OvpnMssDoIPv4(buf, buffer->Len, device->MSS);
+        } else if (OvpnMssIsIPv6(buf, buffer->Len)) {
+            OvpnMssDoIPv6(buf, buffer->Len, device->MSS);
         }
-        else {
-            if (OvpnMssIsIPv4(buf, buffer->Len)) {
-                OvpnMssDoIPv4(buf, buffer->Len, device->MSS);
-            } else if (OvpnMssIsIPv6(buf, buffer->Len)) {
-                OvpnMssDoIPv6(buf, buffer->Len, device->MSS);
-            }
 
-            // enqueue plaintext buffer, it will be dequeued by NetAdapter RX datapath
-            OvpnBufferQueueEnqueue(device->DataRxBufferQueue, &buffer->QueueListEntry);
+        // enqueue plaintext buffer, it will be dequeued by NetAdapter RX datapath
+        OvpnBufferQueueEnqueue(device->DataRxBufferQueue, &buffer->QueueListEntry);
 
-            OvpnAdapterNotifyRx(device->Adapter);
-        }
+        OvpnAdapterNotifyRx(device->Adapter);
     }
 }
 
