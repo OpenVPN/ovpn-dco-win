@@ -111,31 +111,45 @@ OvpnSocketControlPacketReceived(_In_ POVPN_DEVICE device, _In_reads_(len) PUCHAR
             return;
         }
 
-        // copy control packet to buffer
-        RtlCopyMemory(buffer->Data, buf, len);
-        buffer->Len = len;
+        if (sizeof(buffer->Data) >= len) {
+            // copy control packet to buffer
+            RtlCopyMemory(buffer->Data, buf, len);
+            buffer->Len = len;
 
-        // enqueue buffer, it will be dequeued when read request arrives
-        OvpnBufferQueueEnqueue(device->ControlRxBufferQueue, &buffer->QueueListEntry);
+            // enqueue buffer, it will be dequeued when read request arrives
+            OvpnBufferQueueEnqueue(device->ControlRxBufferQueue, &buffer->QueueListEntry);
+        }
+        else {
+            LOG_ERROR("Buffer too small, packet len <pktlen>, buf len <buflen>",
+                TraceLoggingValue(len, "pktlen"), TraceLoggingValue(sizeof(buffer->Data), "buflen"));
+
+            OvpnRxBufferPoolPut(buffer);
+        }
     }
     else {
         // service IO request right away
         PVOID readBuffer;
         size_t readBufferLength;
-        LOG_IF_NOT_NT_SUCCESS(status = WdfRequestRetrieveOutputBuffer(request, 0, &readBuffer, &readBufferLength));
-        if (!NT_SUCCESS(status)) {
+
+        ULONG_PTR bytesSent = len;
+
+        LOG_IF_NOT_NT_SUCCESS(status = WdfRequestRetrieveOutputBuffer(request, len, &readBuffer, &readBufferLength));
+        if (NT_SUCCESS(status)) {
+            // copy control packet to read request buffer
+            RtlCopyMemory(readBuffer, buf, len);
+            InterlockedIncrementNoFence(&device->Stats.ReceivedControlPackets);
+        } else {
             InterlockedIncrementNoFence(&device->Stats.LostInControlPackets);
-            return;
+
+            if (status == STATUS_BUFFER_TOO_SMALL) {
+                LOG_ERROR("Buffer too small, packet len <pktlen>, buf len <buflen>",
+                    TraceLoggingValue(len, "pktlen"), TraceLoggingValue(readBufferLength, "buflen"));
+            }
+
+            bytesSent = 0;
         }
 
-        // copy control packet to read request buffer
-        RtlCopyMemory(readBuffer, buf, len);
-
-        // complete request
-        ULONG_PTR bytesSent = len;
         WdfRequestCompleteWithInformation(request, status, bytesSent);
-
-        InterlockedIncrementNoFence(&device->Stats.ReceivedControlPackets);
     }
 }
 
