@@ -260,12 +260,14 @@ OvpnSocketUdpReceiveFromEvent(_In_ PVOID socketContext, ULONG flags, _In_opt_ PW
         if (bytesRemained > OVPN_SOCKET_PACKET_BUFFER_SIZE) {
             LOG_ERROR("UDP datagram of size <size> is larged than buffer size <buf>", TraceLoggingValue(bytesRemained, "size"),
                 TraceLoggingValue(OVPN_SOCKET_PACKET_BUFFER_SIZE, "buf"));
-            return STATUS_INSUFFICIENT_RESOURCES;
+            RtlZeroMemory(&device->Socket.UdpState, sizeof(OvpnSocketUdpState));
+            return STATUS_SUCCESS;
         }
         while ((bytesRemained > 0) && (mdl != NULL)) {
             buf = (PUCHAR)MmGetSystemAddressForMdlSafe(mdl, LowPagePriority | MdlMappingNoExecute);
             if (buf == NULL) {
-                return STATUS_INSUFFICIENT_RESOURCES;
+                RtlZeroMemory(&device->Socket.UdpState, sizeof(OvpnSocketUdpState));
+                return STATUS_SUCCESS;
             }
             buf += offset;
 
@@ -325,7 +327,8 @@ OvpnSocketTcpReceiveEvent(_In_opt_ PVOID socketContext, _In_ ULONG flags, _In_op
             PUCHAR sysAddr = (PUCHAR)MmGetSystemAddressForMdlSafe(mdl, LowPagePriority | MdlMappingNoExecute);
 
             if (sysAddr == NULL) {
-                return STATUS_INSUFFICIENT_RESOURCES;
+                RtlZeroMemory(tcpState, sizeof(OvpnSocketTcpState));
+                return STATUS_SUCCESS;
             }
             sysAddr += offset;
 
@@ -342,7 +345,10 @@ OvpnSocketTcpReceiveEvent(_In_opt_ PVOID socketContext, _In_ ULONG flags, _In_op
                     if (tcpState->BytesRead == sizeof(tcpState->LenBuf)) {
                         USHORT len = RtlUshortByteSwap(*(USHORT*)tcpState->LenBuf);
                         if ((len == 0) || (len > OVPN_SOCKET_PACKET_BUFFER_SIZE)) {
-                            return STATUS_INVALID_BUFFER_SIZE;
+                            LOG_ERROR("TCP <payload size> is 0 or larger than <buffer size>", TraceLoggingValue(len, "payload size"),
+                                TraceLoggingValue(OVPN_SOCKET_PACKET_BUFFER_SIZE, "buffer size"));
+                            RtlZeroMemory(tcpState, sizeof(OvpnSocketTcpState));
+                            return STATUS_SUCCESS;
                         }
 
                         tcpState->PacketLength = len;
