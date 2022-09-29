@@ -61,8 +61,3 @@ _Must_inspect_result_
 _Requires_exclusive_lock_held_(device->SpinLock)
 NTSTATUS
 OvpnPeerSwapKeys(_In_ POVPN_DEVICE device);
-
-_IRQL_requires_same_
-_IRQL_requires_(PASSIVE_LEVEL)
-VOID
-OvpnPeerUninit(_In_ POVPN_DEVICE device);
