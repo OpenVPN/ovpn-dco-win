@@ -284,14 +284,3 @@ OvpnPeerSwapKeys(POVPN_DEVICE device)
 
     return STATUS_SUCCESS;
 }
-
-_Use_decl_annotations_
-VOID
-OvpnPeerUninit(POVPN_DEVICE device)
-{
-    LOG_IF_NOT_NT_SUCCESS(OvpnPeerDel(device));
-
-    LOG_INFO("Uninitializing device");
-
-    OvpnAdapterSetLinkState(OvpnGetAdapterContext(device->Adapter), MediaConnectStateDisconnected);
-}
