@@ -277,11 +277,10 @@ _Use_decl_annotations_
 VOID OvpnEvtFileCleanup(WDFFILEOBJECT fileObject) {
     POVPN_DEVICE device = OvpnGetDeviceContext(WdfFileObjectGetDevice(fileObject));
 
-    NTSTATUS status = OvpnPeerDel(device);
-    if (!NT_SUCCESS(status))
-        return;
-
     LOG_INFO("Uninitializing device");
+
+    // peer might already be deleted
+    (VOID)OvpnPeerDel(device);
 
     InterlockedExchange(&device->UserspacePid, 0);
 
