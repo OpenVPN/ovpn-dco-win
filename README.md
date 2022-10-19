@@ -88,17 +88,10 @@ To send and receive control channel packets, client uses Read/WriteFile calls. I
 
 ### OpenVPN support
 
-OpenVPN Windows installers with ovpn-dco-win and openssl3 support could be downloaded from 
-Installer could be found https://build.openvpn.net/downloads/temp/ovpn-dco-win/msi/
+ovpn-dco-win driver is already used by default in openvpn2 master and will be part of 2.6 release.
+MSI installers, build from master branch commits, could be found at https://build.openvpn.net/downloads/snapshots/github-actions/openvpn2/.
 
-To use ovpn-dco-win with openvpn2, add the following lines to the .ovpn profile:
-
-```
-  windows-driver ovpn-dco-win
-  tun-mtu 1428
-```
-
-OpenVPN3 already supports ovpn-dco-win in the latest master branch.
+OpenVPN3 also supports ovpn-dco-win in the latest master branch.
 
 ### Logging
 
