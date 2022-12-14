@@ -157,6 +157,8 @@ static
 _Requires_shared_lock_held_(device->SpinLock)
 VOID OvpnSocketDataPacketReceived(_In_ POVPN_DEVICE device, UCHAR op, _In_reads_(len) PUCHAR cipherTextBuf, SIZE_T len)
 {
+    InterlockedExchangeAddNoFence64(&device->Stats.TransportBytesReceived, len);
+
     OVPN_RX_BUFFER* buffer;
 
     // fetch buffer for plaintext
@@ -221,8 +223,6 @@ VOID OvpnSocketDataPacketReceived(_In_ POVPN_DEVICE device, UCHAR op, _In_reads_
 VOID
 OvpnSocketProcessIncomingPacket(_In_ POVPN_DEVICE device, _In_reads_(packetLength) PUCHAR buf, SIZE_T packetLength, BOOLEAN irqlDispatch)
 {
-    InterlockedExchangeAddNoFence64(&device->Stats.TransportBytesReceived, packetLength);
-
     // If we're at dispatch level, we can use a small optimization and use function
     // which is not calling KeRaiseIRQL to raise the IRQL to DISPATCH_LEVEL before attempting to acquire the lock
     KIRQL kirql = 0;
@@ -649,15 +649,20 @@ OvpnSocketSendComplete(_In_ PDEVICE_OBJECT deviceObj, _In_ PIRP irp, _In_ PVOID 
 {
     UNREFERENCED_PARAMETER(deviceObj);
 
+    OVPN_TX_BUFFER* buffer = (OVPN_TX_BUFFER*)ctx;
+    OVPN_DEVICE* device = (OVPN_DEVICE*)OvpnTxBufferPoolGetContext(buffer->Pool);
+    ULONG bytesSend = (ULONG)(irp->IoStatus.Information);
+
     if (irp->IoStatus.Status != STATUS_SUCCESS) {
         LOG_ERROR("Send failed", TraceLoggingNTStatus(irp->IoStatus.Status, "status"));
     }
+    else {
+        if (buffer->IoQueue == NULL) {
+            // this is data channel packet
+            InterlockedExchangeAddNoFence64(&device->Stats.TransportBytesSent, bytesSend);
+        }
+    }
 
-    OVPN_TX_BUFFER* buffer = (OVPN_TX_BUFFER*)ctx;
-
-    OVPN_DEVICE* device = (OVPN_DEVICE*)OvpnTxBufferPoolGetContext(buffer->Pool);
-
-    ULONG bytesSend = (ULONG)(irp->IoStatus.Information);
     if (device->Socket.Tcp)
         bytesSend -= 2;
     OvpnSocketFinalizeTxBuffer(buffer, irp->IoStatus.Status, bytesSend);

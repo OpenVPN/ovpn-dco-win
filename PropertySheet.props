@@ -4,7 +4,7 @@
   <PropertyGroup Label="UserMacros">
     <OVPN_DCO_VERSION_MAJOR>0</OVPN_DCO_VERSION_MAJOR>
     <OVPN_DCO_VERSION_MINOR>8</OVPN_DCO_VERSION_MINOR>
-    <OVPN_DCO_VERSION_PATCH>2</OVPN_DCO_VERSION_PATCH>
+    <OVPN_DCO_VERSION_PATCH>3</OVPN_DCO_VERSION_PATCH>
   </PropertyGroup>
   <PropertyGroup />
   <ItemDefinitionGroup>
