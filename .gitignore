@@ -70,3 +70,5 @@ smvstats.txt
 *.DVL.XML
 
 *.cab
+
+*.vcxproj.user

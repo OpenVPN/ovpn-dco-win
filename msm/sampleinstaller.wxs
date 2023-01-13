@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+    <Product Id="A5E5E44B-D0BD-485C-ABEB-B974DFA5F0DD" Name="ovpn-dco Sample Installer" Language="1033" Version="1.0.0.0" Manufacturer="OpenVPN, Inc" UpgradeCode="94C9F554-9B4F-4533-A2B0-FFBDBEC44561">
+        <Package InstallerVersion="500" Compressed="yes" InstallScope="perMachine" />
+
+        <Media Id="1" Cabinet="ovpn-dco.cab" EmbedCab="yes"/>
+
+        <Property Id="NETADAPTERCX21">
+            <DirectorySearch Id="searchAdvApiDir2" Path="[SystemFolder]" Depth="0">
+                <FileSearch Id="searchAdvApiDir2" Name="advapi32.dll" MinVersion="6.3.20348.0"/>
+            </DirectorySearch>
+        </Property>
+
+        <Directory Id="TARGETDIR" Name="SourceDir">
+            <Directory Id="$(var.PROGRAM_FILES_DIR)">
+                <Merge Id="OvpnDcoMergeModule" Language="1033" DiskId="1" SourceFile="ovpn-dco-$(var.PRODUCT_PLATFORM).msm">
+                    <ConfigurationData Name="NETADAPTERCX21_Property" Value="[NETADAPTERCX21]" />
+                </Merge>
+            </Directory>
+        </Directory>
+
+        <Property Id="WIN102004" Secure="yes">
+            <DirectorySearch Id="searchAdvApiDir" Path="[SystemFolder]" Depth="0">
+                <FileSearch Id="searchAdvApiFile" Name="advapi32.dll" MinVersion="6.3.19041.0"/>
+            </DirectorySearch>
+        </Property>
+
+        <Feature
+            Id="Drivers.OvpnDco"
+            Title="Data Channel Offload"
+            Description="The new network driver which implements data channel of the OpenVPN protocol in Windows kernel."
+            Level="1">
+            <MergeRef Id="OvpnDcoMergeModule"/>
+            <Condition Level="1">WIN102004</Condition>
+        </Feature>
+    </Product>
+
+</Wix>

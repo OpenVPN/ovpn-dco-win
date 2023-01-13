@@ -1,0 +1,74 @@
+<?xml version='1.0'?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+    <Module Id="OvpnDco" Language="1033" Version="1.0.0.0">
+        <Package Id="1057B5BE-89F7-469C-A3FD-D6662CD1D229" Description="OvpnDco merge module" Manufacturer="OpenVPN, Inc" InstallerVersion="500"/>
+
+        <!--
+            magic below is to get NETADAPTERCX21 from MSI to merge module as property
+            see https://wyrdfish.wordpress.com/2011/01/05/configurable-merge-modules/
+
+            defining property here just doesn't work
+        -->
+        <Configuration Name="NETADAPTERCX21_Property" Format="Text" NonNullable="yes" DefaultValue="defaultValue" />
+        <Property Id="NETADAPTERCX21" Value="unset"/>
+        <Substitution Table="CustomAction" Row="setnetadapter" Column="Target" Value="[=NETADAPTERCX21_Property]" />
+        <CustomAction Property="NETADAPTERCX21" Value="[NETADAPTERCX21]" Id="setnetadapter" Execute="immediate" />
+        <InstallExecuteSequence>
+            <Custom Action="setnetadapter" After="LaunchConditions" />
+        </InstallExecuteSequence>
+
+        <SetProperty Action="SetOvpnDcoWin10" Id="OVPNDCO" After="CostFinalize" Value="[OVPNDCOPARENT]Win10\" Sequence="execute"><![CDATA[NOT NETADAPTERCX21]]></SetProperty>
+        <SetProperty Action="SetOvpnDcoWin11" Id="OVPNDCO" After="CostFinalize" Value="[OVPNDCOPARENT]Win11\" Sequence="execute"><![CDATA[NETADAPTERCX21]]></SetProperty>
+
+        <Directory Id="TARGETDIR" Name="SourceDir">
+            <Directory Id="$(var.PROGRAM_FILES_DIR)">
+                <Directory Id="CommonFiles" Name="Common Files">
+                    <Directory Id="OVPNDCOPARENT" Name="ovpn-dco">
+                        <Component Id="CMP_ovpn_dco.inf" Guid="4BE20469-2292-4AE2-B953-49AA0DA4165E">
+                            <RegistryValue Root="HKLM" Key="Software\$(var.PRODUCT_NAME)" Type="string" Name="ovpn-dco" Value="" KeyPath="yes"/>
+                        </Component>
+                        <Directory Id="NX20" Name="Win10">
+                            <Component Id="CMP_ovpn_dco_nx20.inf" Guid="459CA7BC-939E-438C-B830-B1390F0C05A7">
+                                <Condition>NOT NETADAPTERCX21</Condition>
+                                <File Id="ovpndco.inf" Name="ovpn-dco.inf" Source="!(bindpath.ovpndco)\win10\ovpn-dco.inf" KeyPath="yes" />
+                            </Component>
+                            <Component Id="CMP_ovpn_dco_nx20.cat" Guid="EB59AE6E-191E-4FE1-B414-005217348183">
+                                <Condition>NOT NETADAPTERCX21</Condition>
+                                <File Id="ovpndco_nx20.cat" Name="ovpn-dco.cat" Source="!(bindpath.ovpndco)\win10\ovpn-dco.cat" KeyPath="yes" />
+                            </Component>
+                            <Component Id="CMP_ovpn_dco_nx20.sys" Guid="0007BFDB-42A9-4F67-BDD9-AB3B797DEF1F">
+                                <Condition>NOT NETADAPTERCX21</Condition>
+                                <File Id="ovpndco_nx20.sys" Name="ovpn-dco.sys" Source="!(bindpath.ovpndco)\win10\ovpn-dco.sys" KeyPath="yes" />
+                            </Component>
+                        </Directory>
+                        <Directory Id="NX21" Name="Win11">
+                            <Component Id="CMP_ovpn_dco_nx21.inf" Guid="369D943E-0849-449A-9D70-AFA7AA57B0C7">
+                                <Condition>NETADAPTERCX21</Condition>
+                                <File Id="ovpndco_nx21.inf" Name="ovpn-dco.inf" Source="!(bindpath.ovpndco)\win11\ovpn-dco.inf" KeyPath="yes" />
+                            </Component>
+                            <Component Id="CMP_ovpn_dco_nx21.cat" Guid="9E873D77-8685-4B60-9066-B94D94C0EEEB">
+                                <Condition>NETADAPTERCX21</Condition>
+                                <File Id="ovpndco_nx21.cat" Name="ovpn-dco.cat" Source="!(bindpath.ovpndco)\win11\ovpn-dco.cat" KeyPath="yes" />
+                            </Component>
+                            <Component Id="CMP_ovpn_dco_nx21.sys" Guid="FB24EBB2-8521-4365-90E2-BCB5F011669E">
+                                <Condition>NETADAPTERCX21</Condition>
+                                <File Id="ovpndco_nx21.sys" Name="ovpn-dco.sys" Source="!(bindpath.ovpndco)\win11\ovpn-dco.sys" KeyPath="yes" />
+                            </Component>
+                        </Directory>
+                    </Directory>
+                </Directory>
+
+            </Directory>
+        </Directory>
+
+        <Binary Id="installer.dll" SourceFile="!(bindpath.ARCH)\Release\installer.dll" />
+
+        <CustomAction Id="OvpnDco_Evaluate" SuppressModularization="yes" BinaryKey="installer.dll" DllEntry="MsiEvaluate" Execute="immediate" />
+        <CustomAction Id="OvpnDco_Process" SuppressModularization="yes" BinaryKey="installer.dll" DllEntry="MsiProcess" Execute="deferred" Impersonate="no" />
+        <InstallExecuteSequence>
+            <Custom Action="OvpnDco_Evaluate" Before="OvpnDco_Process" />
+            <Custom Action="OvpnDco_Process" After="InstallFiles" />
+        </InstallExecuteSequence>
+
+    </Module>
+</Wix>
