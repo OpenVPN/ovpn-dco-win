@@ -25,9 +25,15 @@ jobs:
     - name: Restore artifacts, or run vcpkg, build and cache artifacts
       uses: lukka/run-vcpkg@v7.4
       with:
+        vcpkgGitCommitId: 'cafd398be781144787573ca78390e951673c7055'
         vcpkgArguments: 'asio'
         vcpkgTriplet: '${{ matrix.arch }}-windows'
-        vcpkgGitCommitId: '8b62f6fff30c4321945f1e498d85929285d7083a'
+
+    - name: Install Wix 3.14
+      run: |
+        Invoke-WebRequest -Uri "https://build.openvpn.net/downloads/temp/wix314-toolset.zip" -OutFile wix.zip
+        Expand-Archive -Path .\wix.zip -DestinationPath wix
+        Move-Item '.\wix\WiX Toolset v3.14\bin' .\wix
 
     - name: vcpkg integrate install
       shell: cmd
@@ -39,9 +45,22 @@ jobs:
       run: |
         msbuild /m /p:Configuration=${{ matrix.build_conf }} /p:Platform="${{ matrix.arch }}" ${{env.SOLUTION_FILE_PATH}}
 
+    - name: Build MSM
+      working-directory: msm
+      if: ${{ matrix.build_conf == 'Release' }}
+      run: |
+        New-Item -Path dist\${{ matrix.arch }}\win10 -type directory -Force
+        New-Item -Path dist\${{ matrix.arch }}\win11 -type directory -Force
+        Copy-Item -Path ..\${{ matrix.arch }}\${{ matrix.build_conf }}\ovpn-dco\* -Destination dist\${{ matrix.arch }}\win10\ -Recurse
+        Copy-Item -Path ..\${{ matrix.arch }}\${{ matrix.build_conf }}\ovpn-dco\* -Destination dist\${{ matrix.arch }}\win11\ -Recurse 
+        .\build.ps1 -Arch ${{ matrix.arch }} -Wix ..\wix
+
     - uses: actions/upload-artifact@v2
       with:
         name: ovpn-dco_${{ matrix.arch }}_${{ matrix.build_conf }}
         path: |
           ${{ matrix.arch }}\${{matrix.build_conf}}\ovpn-dco\ovpn-dco.*
           ${{ matrix.arch }}\${{matrix.build_conf}}\ovpn-dco-cli.exe
+          msm\${{ matrix.arch }}\${{matrix.build_conf}}\installer.dll
+          msm\*.msi
+          msm\*.msm

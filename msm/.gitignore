@@ -1,0 +1,6 @@
+*.msi
+*.wixpdb
+*.wixobj
+*.msm
+dist\
+tmp\

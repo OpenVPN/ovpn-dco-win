@@ -108,6 +108,7 @@
     <Platform Condition="'$(Platform)' == ''">Win32</Platform>
     <RootNamespace>ovpn_dco_win</RootNamespace>
     <ProjectName>ovpn-dco</ProjectName>
+    <WindowsTargetPlatformVersion>$(LatestTargetPlatformVersion)</WindowsTargetPlatformVersion>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
@@ -248,13 +249,13 @@
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|ARM64'" Label="Configuration">
     <TargetVersion>Windows10</TargetVersion>
     <UseDebugLibraries>true</UseDebugLibraries>
-    <PlatformToolset>WindowsKernelModeDriver10.0</PlatformToolset>
     <ConfigurationType>Driver</ConfigurationType>
     <DriverType>KMDF</DriverType>
     <DriverTargetPlatform>Universal</DriverTargetPlatform>
     <NetAdapterDriver>true</NetAdapterDriver>
     <NETADAPTER_VERSION_MAJOR>2</NETADAPTER_VERSION_MAJOR>
     <NETADAPTER_VERSION_MINOR>0</NETADAPTER_VERSION_MINOR>
+    <PlatformToolset>WindowsKernelModeDriver10.0</PlatformToolset>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug-Win11|ARM64'" Label="Configuration">
     <TargetVersion>Windows10</TargetVersion>
@@ -352,26 +353,26 @@
     <DebuggerFlavor>DbgengKernelDebugger</DebuggerFlavor>
     <IncludePath>$(SolutionDir)dmf\dmf;$(IncludePath);$(NETADAPTER_INC_PATH)</IncludePath>
     <RunCodeAnalysis>false</RunCodeAnalysis>
-    <OutDir>$(SolutionDir)$(Platform)\$(ConfigurationName)\</OutDir>
+    <OutDir>$(SolutionDir)x86\$(ConfigurationName)\</OutDir>
     <IntDir>$(Platform)\$(ConfigurationName)\</IntDir>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug-Win11|Win32'">
     <DebuggerFlavor>DbgengKernelDebugger</DebuggerFlavor>
     <IncludePath>$(SolutionDir)dmf\dmf;$(IncludePath);$(NETADAPTER_INC_PATH)</IncludePath>
     <RunCodeAnalysis>false</RunCodeAnalysis>
-    <OutDir>$(SolutionDir)$(Platform)\$(ConfigurationName)\</OutDir>
+    <OutDir>$(SolutionDir)x86\$(ConfigurationName)\</OutDir>
     <IntDir>$(Platform)\$(ConfigurationName)\</IntDir>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
     <DebuggerFlavor>DbgengKernelDebugger</DebuggerFlavor>
     <IncludePath>$(SolutionDir)dmf\dmf;$(IncludePath);$(NETADAPTER_INC_PATH)</IncludePath>
-    <OutDir>$(SolutionDir)$(Platform)\$(ConfigurationName)\</OutDir>
+    <OutDir>$(SolutionDir)x86\$(ConfigurationName)\</OutDir>
     <IntDir>$(Platform)\$(ConfigurationName)\</IntDir>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release-Win11|Win32'">
     <DebuggerFlavor>DbgengKernelDebugger</DebuggerFlavor>
     <IncludePath>$(SolutionDir)dmf\dmf;$(IncludePath);$(NETADAPTER_INC_PATH)</IncludePath>
-    <OutDir>$(SolutionDir)$(Platform)\$(ConfigurationName)\</OutDir>
+    <OutDir>$(SolutionDir)x86\$(ConfigurationName)\</OutDir>
     <IntDir>$(Platform)\$(ConfigurationName)\</IntDir>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
