@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
-    <Product Id="A5E5E44B-D0BD-485C-ABEB-B974DFA5F0DD" Name="ovpn-dco Sample Installer" Language="1033" Version="1.0.0.0" Manufacturer="OpenVPN, Inc" UpgradeCode="94C9F554-9B4F-4533-A2B0-FFBDBEC44561">
+    <Product Id="A5E5E44B-D0BD-485C-ABEB-B974DFA5F0DD" Name="ovpn-dco Sample Installer" Language="0" Version="1.0.0.0" Manufacturer="OpenVPN, Inc" UpgradeCode="94C9F554-9B4F-4533-A2B0-FFBDBEC44561">
         <Package InstallerVersion="500" Compressed="yes" InstallScope="perMachine" />
 
         <Media Id="1" Cabinet="ovpn-dco.cab" EmbedCab="yes"/>
@@ -13,7 +13,7 @@
 
         <Directory Id="TARGETDIR" Name="SourceDir">
             <Directory Id="$(var.PROGRAM_FILES_DIR)">
-                <Merge Id="OvpnDcoMergeModule" Language="1033" DiskId="1" SourceFile="ovpn-dco-$(var.PRODUCT_PLATFORM).msm">
+                <Merge Id="OvpnDcoMergeModule" Language="0" DiskId="1" SourceFile="ovpn-dco-$(var.PRODUCT_PLATFORM).msm">
                     <ConfigurationData Name="NETADAPTERCX21_Property" Value="[NETADAPTERCX21]" />
                 </Merge>
             </Directory>
