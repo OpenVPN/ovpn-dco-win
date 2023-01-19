@@ -1,6 +1,6 @@
 <?xml version='1.0'?>
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
-    <Module Id="OvpnDco" Language="1033" Version="1.0.0.0">
+    <Module Id="OvpnDco" Language="0" Version="1.0.0.0">
         <Package Id="1057B5BE-89F7-469C-A3FD-D6662CD1D229" Description="OvpnDco merge module" Manufacturer="OpenVPN, Inc" InstallerVersion="500"/>
 
         <!--
