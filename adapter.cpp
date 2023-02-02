@@ -155,6 +155,8 @@ NTSTATUS
 OvpnAdapterCreate(OVPN_DEVICE * device) {
     NTSTATUS status = STATUS_SUCCESS;
 
+    LOG_ENTER();
+
     NETADAPTER_INIT* adapterInit = NetAdapterInitAllocate(device->WdfDevice);
     if (adapterInit == NULL) {
         LOG_ERROR("NetAdapterInitAllocate() failed");
@@ -200,6 +202,8 @@ createfailure:
     adapterInit = NULL;
 
 done:
+    LOG_EXIT();
+
     return status;
 }
 
