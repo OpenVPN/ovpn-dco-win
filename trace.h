@@ -65,6 +65,26 @@ TRACELOGGING_DECLARE_PROVIDER(g_hOvpnEtwProvider);
             __VA_ARGS__); \
 } while (0,0)
 
+#define LOG_ENTER() do {\
+        TraceLoggingWrite( \
+            g_hOvpnEtwProvider, \
+            "Info", \
+            TraceLoggingLevel(TRACE_LEVEL_INFORMATION), \
+            TraceLoggingFunctionName(), \
+            TraceLoggingUInt32(__LINE__, "Line"), \
+            TraceLoggingValue("Enter", "Msg")); \
+} while (0,0)
+
+#define LOG_EXIT() do {\
+        TraceLoggingWrite( \
+            g_hOvpnEtwProvider, \
+            "Info", \
+            TraceLoggingLevel(TRACE_LEVEL_INFORMATION), \
+            TraceLoggingFunctionName(), \
+            TraceLoggingUInt32(__LINE__, "Line"), \
+            TraceLoggingValue("Exit", "Msg")); \
+} while (0,0)
+
 #define LOG_INFO(Info, ...) do {\
         TraceLoggingWrite( \
             g_hOvpnEtwProvider, \

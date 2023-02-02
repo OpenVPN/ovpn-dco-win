@@ -48,6 +48,8 @@ _Use_decl_annotations_
 NTSTATUS
 OvpnPeerNew(POVPN_DEVICE device, WDFREQUEST request)
 {
+    LOG_ENTER();
+
     POVPN_NEW_PEER peer = NULL;
     NTSTATUS status;
     GOTO_IF_NOT_NT_SUCCESS(done, status, WdfRequestRetrieveInputBuffer(request, sizeof(OVPN_NEW_PEER), (PVOID*)&peer, nullptr));
@@ -94,6 +96,8 @@ OvpnPeerNew(POVPN_DEVICE device, WDFREQUEST request)
     }
 
 done:
+    LOG_EXIT();
+
     return status;
 }
 
@@ -101,12 +105,12 @@ _Use_decl_annotations_
 NTSTATUS
 OvpnPeerDel(POVPN_DEVICE device)
 {
+    LOG_ENTER();
+
     if (InterlockedCompareExchange(&device->UserspacePid, 0, 0) == 0) {
         LOG_INFO("Peer not added.");
         return STATUS_INVALID_DEVICE_REQUEST;
     }
-
-    LOG_INFO("Deleting peer, keeping adapter connected");
 
     BCRYPT_ALG_HANDLE aesAlgHandle = NULL, chachaAlgHandle = NULL;
 
@@ -149,12 +153,16 @@ OvpnPeerDel(POVPN_DEVICE device)
         WdfRequestCompleteWithInformation(request, STATUS_CANCELLED, bytesCopied);
     }
 
+    LOG_EXIT();
+
     return STATUS_SUCCESS;
 }
 
 _Use_decl_annotations_
 NTSTATUS OvpnPeerSet(POVPN_DEVICE device, WDFREQUEST request)
 {
+    LOG_ENTER();
+
     if (InterlockedCompareExchange(&device->UserspacePid, 0, 0) == 0) {
         LOG_ERROR("Peer not added");
         return STATUS_INVALID_DEVICE_REQUEST;
@@ -201,6 +209,7 @@ NTSTATUS OvpnPeerSet(POVPN_DEVICE device, WDFREQUEST request)
     }
 
 done:
+    LOG_EXIT();
     return status;
 }
 
@@ -208,6 +217,8 @@ _Use_decl_annotations_
 NTSTATUS
 OvpnPeerGetStats(POVPN_DEVICE device, WDFREQUEST request, ULONG_PTR* bytesReturned)
 {
+    LOG_ENTER();
+
     if (InterlockedCompareExchange(&device->UserspacePid, 0, 0) == 0) {
         LOG_ERROR("Peer not added");
         return STATUS_INVALID_DEVICE_REQUEST;
@@ -233,6 +244,8 @@ OvpnPeerGetStats(POVPN_DEVICE device, WDFREQUEST request, ULONG_PTR* bytesReturn
     *bytesReturned = sizeof(OVPN_STATS);
 
 done:
+    LOG_EXIT();
+
     return status;
 }
 
@@ -240,14 +253,16 @@ _Use_decl_annotations_
 NTSTATUS
 OvpnPeerStartVPN(POVPN_DEVICE device)
 {
+    LOG_ENTER();
+
     if (InterlockedCompareExchange(&device->UserspacePid, 0, 0) == 0) {
         LOG_ERROR("Peer not added");
         return STATUS_INVALID_DEVICE_REQUEST;
     }
 
-    LOG_INFO("Start VPN");
-
     OvpnAdapterSetLinkState(OvpnGetAdapterContext(device->Adapter), MediaConnectStateConnected);
+
+    LOG_EXIT();
 
     return STATUS_SUCCESS;
 }
@@ -256,6 +271,8 @@ _Use_decl_annotations_
 NTSTATUS
 OvpnPeerNewKey(POVPN_DEVICE device, WDFREQUEST request)
 {
+    LOG_ENTER();
+
     if (InterlockedCompareExchange(&device->UserspacePid, 0, 0) == 0) {
         LOG_ERROR("Peer not added");
         return STATUS_INVALID_DEVICE_REQUEST;
@@ -268,6 +285,8 @@ OvpnPeerNewKey(POVPN_DEVICE device, WDFREQUEST request)
     GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnCryptoNewKey(&device->CryptoContext, cryptoData));
 
 done:
+    LOG_EXIT();
+
     return status;
 }
 
@@ -275,12 +294,16 @@ _Use_decl_annotations_
 NTSTATUS
 OvpnPeerSwapKeys(POVPN_DEVICE device)
 {
+    LOG_ENTER();
+
     if (InterlockedCompareExchange(&device->UserspacePid, 0, 0) == 0) {
         LOG_ERROR("Peer not added");
         return STATUS_INVALID_DEVICE_REQUEST;
     }
 
     OvpnCryptoSwapKeys(&device->CryptoContext);
+
+    LOG_EXIT();
 
     return STATUS_SUCCESS;
 }

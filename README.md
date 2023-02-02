@@ -6,16 +6,16 @@
 
 ovpn-dco-win stands for "OpenVPN Data Channel Offload for Windows". It is a modern Windows driver, which functions as virtual network adapter and implements required functionality to handle the OpenVPN data channel. When using ovpn-dco-win, the OpenVPN software doesn't send data traffic back and forth between user and kernel space (for encryption, decryption and routing), but operations on payload take place in Windows kernel. The driver is being developed using modern frameworks - WDF and NetAdapterCx. Because of that, the code is easier to read and maintain comparison to existing NDIS miniport drivers. Speed-wise the new driver performs significantly better comparison to tap-windows6, so it should eliminate the bottleneck which hampers the performance of OpenVPN on Windows.
 
+ovpn-dco-win is a default driver starting from OpenVPN 2.6.
 
 ### Installation
 
-To use the driver, you must install it first. By default Windows doesn't load test-signed driver. To make Windows load the driver, run following command as Administrator:
+You can just install the latest [OpenVPN 2.6 release](https://openvpn.net/community-downloads/), which includes signed driver.
 
-```
-Bcdedit.exe -set TESTSIGNING ON
-```
 
-and restart. Then install the driver using devcon tool (available as part of WDK):
+Alternatively you can get releases from [GitHub](https://github.com/OpenVPN/ovpn-dco-win/releases).
+
+You can use devcon tool (available as part of WDK) to install the driver:
 
 ```
 devcon install ovpn-dco.inf ovpn-dco
@@ -88,8 +88,7 @@ To send and receive control channel packets, client uses Read/WriteFile calls. I
 
 ### OpenVPN support
 
-ovpn-dco-win driver is already used by default in openvpn2 master and will be part of 2.6 release.
-MSI installers, build from master branch commits, could be found at https://build.openvpn.net/downloads/snapshots/github-actions/openvpn2/.
+ovpn-dco-win driver is used by default OpenVPN starting from 2.6 release.
 
 OpenVPN3 also supports ovpn-dco-win in the latest master branch.
 
@@ -116,6 +115,9 @@ To see logs in attached debbuger (windbg), use `tracelog.exe` in administrator c
 
 * `tracelog -start MyTrace -guid #4970F9cf-2c0c-4f11-b1cc-e3a1e9958833 -rt -kd`
 
+If you experience boot issues, you might want to enable AutoLogger session. Run `ovpn-dco-autologger.reg` file, which will create neccessary registry keys, and then reboot.
+
+Driver logs will be stored in `%SystemRoot%\System32\LogFiles\WMI\ovpn-dco.etl`.
 
 ### Reproducible builds
 
@@ -138,9 +140,7 @@ If you have obtained a ovpn-dco.sys file, you can verify it as follows:
 ### Limitations
 
 * Minimum supported Windows version is Windows 10 20H1.
-* The driver is under development and the code is not production quality yet.
-* Supported cipher are "none" (for testing only) and AES-128(-192-256)-GCM.
-* Driver is test-signed (properly signed binaries will be provided later).
+* Supported cipher are AES-128(-192-256)-GCM and ChaCha20-Poly1305 (starting from Windows 11 / Server 2022)
 
 
 ### Questions
