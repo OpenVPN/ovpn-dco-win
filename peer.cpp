@@ -71,7 +71,7 @@ OvpnPeerNew(POVPN_DEVICE device, WDFREQUEST request)
     BOOLEAN proto_tcp = peer->Proto == OVPN_PROTO_TCP;
     SIZE_T remoteAddrSize = peer->Remote.Addr4.sin_family == AF_INET ? sizeof(peer->Remote.Addr4) : sizeof(peer->Remote.Addr6);
 
-    GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnSocketInit(&driver->WskProviderNpi, peer->Local.Addr4.sin_family, proto_tcp, (PSOCKADDR)&peer->Local,
+    GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnSocketInit(&driver->WskProviderNpi, &driver->WskRegistration, peer->Local.Addr4.sin_family, proto_tcp, (PSOCKADDR)&peer->Local,
         (PSOCKADDR)&peer->Remote, remoteAddrSize, device, &socket));
 
     BCRYPT_ALG_HANDLE aesAlgHandle = NULL, chachaAlgHandle = NULL;

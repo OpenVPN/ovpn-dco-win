@@ -223,6 +223,9 @@ static
 VOID
 OvpnBufferPoolDelete(OVPN_BUFFER_POOL handle)
 {
+    if (handle == NULL)
+        return;
+
     OVPN_BUFFER_POOL_IMPL* pool = (OVPN_BUFFER_POOL_IMPL*)handle;
 
     LIST_ENTRY* list_entry = NULL;
@@ -277,6 +280,9 @@ OvpnRxBufferPoolCreate(OVPN_RX_BUFFER_POOL* handle)
 VOID
 OvpnBufferQueueDelete(OVPN_BUFFER_QUEUE handle)
 {
+    if (handle == NULL)
+        return;
+
     OVPN_BUFFER_QUEUE_IMPL* queue = (OVPN_BUFFER_QUEUE_IMPL*)handle;
 
     ExFreePoolWithTag(queue, 'ovpn');

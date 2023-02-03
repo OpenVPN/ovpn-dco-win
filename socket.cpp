@@ -460,10 +460,17 @@ const WSK_CLIENT_CONNECTION_DISPATCH OvpnSocketTcpDispatch = { OvpnSocketTcpRece
 
 _Use_decl_annotations_
 NTSTATUS
-OvpnSocketInit(WSK_PROVIDER_NPI* wskProviderNpi, ADDRESS_FAMILY addressFamily, BOOLEAN tcp, PSOCKADDR localAddr,
+OvpnSocketInit(WSK_PROVIDER_NPI* wskProviderNpi, WSK_REGISTRATION* wskRegistration, ADDRESS_FAMILY addressFamily, BOOLEAN tcp, PSOCKADDR localAddr,
     PSOCKADDR remoteAddr, SIZE_T remoteAddrSize, PVOID deviceContext, PWSK_SOCKET* socket)
 {
+    NTSTATUS status;
     WSK_EVENT_CALLBACK_CONTROL eventCallbackControl = {};
+
+    // init WSK
+    if (wskProviderNpi->Client == NULL) {
+        LOG_INFO("Init WSK");
+        GOTO_IF_NOT_NT_SUCCESS(done, status, WskCaptureProviderNPI(wskRegistration, WSK_INFINITE_WAIT, wskProviderNpi));
+    }
 
     // create socket
 
@@ -472,7 +479,6 @@ OvpnSocketInit(WSK_PROVIDER_NPI* wskProviderNpi, ADDRESS_FAMILY addressFamily, B
     ULONG flags = tcp ? WSK_FLAG_CONNECTION_SOCKET : WSK_FLAG_DATAGRAM_SOCKET;
     PVOID dispatch = tcp ? (PVOID)&OvpnSocketTcpDispatch : (PVOID)&OvpnSocketUdpDispatch;
 
-    NTSTATUS status;
     GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnSocketSyncOp("CreateSocket", [&status, wskProviderNpi, addressFamily, socketType, proto, flags, deviceContext, dispatch](PIRP irp) {
         return wskProviderNpi->Dispatch->WskSocket(wskProviderNpi->Client, addressFamily, socketType, proto, flags, deviceContext,
             dispatch, NULL, NULL, NULL, irp);
