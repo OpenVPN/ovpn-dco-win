@@ -89,7 +89,6 @@ DriverEntry(_In_ PDRIVER_OBJECT driverObject, _In_ PUNICODE_STRING registryPath)
     wskClientNpi.Dispatch = &WskAppDispatch;
 
     POVPN_DRIVER driverCtx = OvpnGetDriverContext(WdfGetDriver());
-
     GOTO_IF_NOT_NT_SUCCESS(done, status, WskRegister(&wskClientNpi, &driverCtx->WskRegistration));
 
 done:
@@ -286,7 +285,9 @@ VOID OvpnEvtFileCleanup(WDFFILEOBJECT fileObject) {
 
     InterlockedExchange(&device->UserspacePid, 0);
 
-    OvpnAdapterSetLinkState(OvpnGetAdapterContext(device->Adapter), MediaConnectStateDisconnected);
+    if (device->Adapter != NULL) {
+        OvpnAdapterSetLinkState(OvpnGetAdapterContext(device->Adapter), MediaConnectStateDisconnected);
+    }
 
     LOG_EXIT();
 }
@@ -312,70 +313,13 @@ VOID OvpnEvtDeviceCleanup(WDFOBJECT obj) {
     LOG_EXIT();
 }
 
-EVT_WDF_DEVICE_PREPARE_HARDWARE OvpnEvtDevicePrepareHardware;
-EVT_WDF_DEVICE_RELEASE_HARDWARE OvpnEvtDeviceReleaseHardware;
-_No_competing_thread_ EVT_WDF_DEVICE_D0_ENTRY OvpnEvtDeviceD0Entry;
-_No_competing_thread_ EVT_WDF_DEVICE_D0_EXIT OvpnEvtDeviceD0Exit;
-
-_Use_decl_annotations_
-NTSTATUS
-OvpnEvtDevicePrepareHardware(_In_ WDFDEVICE wdfDevice, _In_ WDFCMRESLIST resourcesRaw, _In_ WDFCMRESLIST resourcesTranslated)
-{
-    UNREFERENCED_PARAMETER(wdfDevice);
-    UNREFERENCED_PARAMETER(resourcesRaw);
-    UNREFERENCED_PARAMETER(resourcesTranslated);
-
-    LOG_ENTER();
-    LOG_EXIT();
-    return STATUS_SUCCESS;
-}
-
-_Use_decl_annotations_
-NTSTATUS
-OvpnEvtDeviceReleaseHardware(_In_ WDFDEVICE wdfDevice, _In_ WDFCMRESLIST resourcesTranslated)
-{
-    UNREFERENCED_PARAMETER(wdfDevice);
-    UNREFERENCED_PARAMETER(resourcesTranslated);
-
-    LOG_ENTER();
-    LOG_EXIT();
-    return STATUS_SUCCESS;
-}
-
-_Use_decl_annotations_
-NTSTATUS
-OvpnEvtDeviceD0Entry(_In_ WDFDEVICE wdfDevice, WDF_POWER_DEVICE_STATE previousState)
-{
-    UNREFERENCED_PARAMETER(wdfDevice);
-
-    LOG_ENTER();
-
-    LOG_INFO("PreviousState", TraceLoggingUInt32(previousState, "PreviousState"));
-
-    LOG_EXIT();
-
-    return STATUS_SUCCESS;
-}
-
-_Use_decl_annotations_
-NTSTATUS
-OvpnEvtDeviceD0Exit(_In_ WDFDEVICE Device, _In_ WDF_POWER_DEVICE_STATE TargetState)
-{
-    UNREFERENCED_PARAMETER(Device);
-
-    LOG_ENTER();
-
-    LOG_INFO("TargetState", TraceLoggingUInt32(TargetState, "TargetState"));
-
-    LOG_EXIT();
-    return STATUS_SUCCESS;
-}
-
 EVT_WDF_DRIVER_DEVICE_ADD OvpnEvtDeviceAdd;
 
 _Use_decl_annotations_
 NTSTATUS
 OvpnEvtDeviceAdd(WDFDRIVER wdfDriver, PWDFDEVICE_INIT deviceInit) {
+    UNREFERENCED_PARAMETER(wdfDriver);
+
     LOG_ENTER();
 
     // make sure only one app can access driver at time
@@ -390,15 +334,6 @@ OvpnEvtDeviceAdd(WDFDRIVER wdfDriver, PWDFDEVICE_INIT deviceInit) {
 
     NTSTATUS status;
     GOTO_IF_NOT_NT_SUCCESS(done, status, NetDeviceInitConfig(deviceInit));
-
-    WDF_PNPPOWER_EVENT_CALLBACKS pnpPowerCallbacks;
-    WDF_PNPPOWER_EVENT_CALLBACKS_INIT(&pnpPowerCallbacks);
-    pnpPowerCallbacks.EvtDevicePrepareHardware = OvpnEvtDevicePrepareHardware;
-    pnpPowerCallbacks.EvtDeviceReleaseHardware = OvpnEvtDeviceReleaseHardware;
-    pnpPowerCallbacks.EvtDeviceD0Entry = OvpnEvtDeviceD0Entry;
-    pnpPowerCallbacks.EvtDeviceD0Exit = OvpnEvtDeviceD0Exit;
-
-    WdfDeviceInitSetPnpPowerEventCallbacks(deviceInit, &pnpPowerCallbacks);
 
     WDF_OBJECT_ATTRIBUTES objAttributes;
     WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&objAttributes, OVPN_DEVICE);
@@ -439,13 +374,6 @@ OvpnEvtDeviceAdd(WDFDRIVER wdfDriver, PWDFDEVICE_INIT deviceInit) {
     // create manual pending queue which handles async NewPeer requests (when proto is TCP, connect is async)
     WDF_IO_QUEUE_CONFIG_INIT(&queueConfig, WdfIoQueueDispatchManual);
     GOTO_IF_NOT_NT_SUCCESS(done, status, WdfIoQueueCreate(wdfDevice, &queueConfig, WDF_NO_OBJECT_ATTRIBUTES, &device->PendingNewPeerQueue));
-
-    POVPN_DRIVER driver = OvpnGetDriverContext(wdfDriver);
-
-    LOG_INFO("Before calling WskCaptureProviderNPI()");
-    // Capture the WSK Provider NPI. If WSK subsystem is not ready yet, wait until it becomes ready.
-    GOTO_IF_NOT_NT_SUCCESS(done, status, WskCaptureProviderNPI(&driver->WskRegistration, WSK_INFINITE_WAIT, &driver->WskProviderNpi));
-    LOG_INFO("After calling WskCaptureProviderNPI()");
 
     GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnTxBufferPoolCreate(&device->TxBufferPool, device));
     GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnRxBufferPoolCreate(&device->RxBufferPool));
