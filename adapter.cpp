@@ -132,11 +132,17 @@ _Use_decl_annotations_
 NTSTATUS
 OvpnEvtAdapterCreateRxQueue(NETADAPTER netAdapter, NETRXQUEUE_INIT* rxQueueInit)
 {
+    LOG_ENTER();
+
     WDF_OBJECT_ATTRIBUTES rxAttributes;
     NET_PACKET_QUEUE_CONFIG rxConfig;
 
     WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&rxAttributes, OVPN_RXQUEUE);
+    rxAttributes.EvtDestroyCallback = OvpnEvtRxQueueDestroy;
+
     NET_PACKET_QUEUE_CONFIG_INIT(&rxConfig, OvpnEvtRxQueueAdvance, OvpnEvtRxQueueSetNotificationEnabled, OvpnEvtRxQueueCancel);
+    rxConfig.EvtStart = OvpnEvtRxQueueStart;
+    rxConfig.EvtStop = OvpnEvtRxQueueStop;
 
     NETPACKETQUEUE netPacketQueue;
     NTSTATUS status;
@@ -144,9 +150,10 @@ OvpnEvtAdapterCreateRxQueue(NETADAPTER netAdapter, NETRXQUEUE_INIT* rxQueueInit)
 
     POVPN_ADAPTER adapterContext = OvpnGetAdapterContext(netAdapter);
     OvpnRxQueueInitialize(netPacketQueue, adapterContext);
-    adapterContext->RxQueue = netPacketQueue;
 
 done:
+    LOG_EXIT();
+
     return status;
 }
 
@@ -207,18 +214,20 @@ done:
     return status;
 }
 
-NTSTATUS OvpnAdapterNotifyRx(NETADAPTER netAdapter)
+VOID OvpnAdapterNotifyRx(NETADAPTER netAdapter)
 {
     if (netAdapter == WDF_NO_HANDLE) {
         LOG_ERROR("Adapter not initialized");
-        return STATUS_DEVICE_NOT_READY;
+        return;
     }
 
     NETPACKETQUEUE rxQueue = OvpnGetAdapterContext(netAdapter)->RxQueue;
-    POVPN_RXQUEUE queueContext = OvpnGetRxQueueContext(rxQueue);
+    if (rxQueue == WDF_NO_HANDLE) {
+        LOG_WARN("rxQueue not initialized");
+        return;
+    }
 
+    POVPN_RXQUEUE queueContext = OvpnGetRxQueueContext(rxQueue);
     if (InterlockedExchange(&queueContext->NotificationEnabled, FALSE) == TRUE)
         NetRxQueueNotifyMoreReceivedPacketsAvailable(rxQueue);
-
-    return STATUS_SUCCESS;
 }
