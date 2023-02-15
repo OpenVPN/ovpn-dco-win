@@ -49,7 +49,7 @@ NTSTATUS
 OvpnAdapterCreate(OVPN_DEVICE* device);
 
 // notify NetAdapter (if it is ready) that more packets are available
-NTSTATUS
+VOID
 OvpnAdapterNotifyRx(NETADAPTER netAdapter);
 
 VOID

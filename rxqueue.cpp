@@ -29,8 +29,41 @@
 #include "bufferpool.h"
 #include "rxqueue.h"
 #include "netringiterator.h"
+#include "trace.h"
 
 EVT_PACKET_QUEUE_ADVANCE OvpnEvtRxQueueAdvance;
+
+_Use_decl_annotations_
+VOID
+OvpnEvtRxQueueStart(NETPACKETQUEUE netPacketQueue)
+{
+    LOG_ENTER(TraceLoggingPointer(netPacketQueue, "RxQueue"));
+
+    POVPN_RXQUEUE queue = OvpnGetRxQueueContext(netPacketQueue);
+    queue->Adapter->RxQueue = netPacketQueue;
+
+    LOG_EXIT();
+}
+
+_Use_decl_annotations_
+VOID
+OvpnEvtRxQueueStop(NETPACKETQUEUE netPacketQueue)
+{
+    LOG_ENTER(TraceLoggingPointer(netPacketQueue, "RxQueue"));
+
+    POVPN_RXQUEUE queue = OvpnGetRxQueueContext(netPacketQueue);
+    queue->Adapter->RxQueue = WDF_NO_HANDLE;
+
+    LOG_EXIT();
+}
+
+_Use_decl_annotations_
+VOID
+OvpnEvtRxQueueDestroy(WDFOBJECT rxQueue)
+{
+    LOG_ENTER(TraceLoggingPointer(rxQueue, "RxQueue"));
+    LOG_EXIT();
+}
 
 static inline UINT8
 OvpnRxQueueGetLayer4Type(const VOID* buf, size_t len)
