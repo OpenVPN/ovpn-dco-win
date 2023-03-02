@@ -25,6 +25,8 @@
 #include <wdf.h>
 #include <netadaptercx.h>
 
+#define OVPN_DCO_MTU_MAX 1500
+
 // Context for NETADAPTER
 struct OVPN_ADAPTER
 {
