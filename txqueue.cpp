@@ -55,6 +55,17 @@ OvpnTxProcessPacket(_In_ POVPN_DEVICE device, _In_ POVPN_TXQUEUE queue, _In_ NET
     while (NetFragmentIteratorHasAny(&fi)) {
         // get fragment payload
         NET_FRAGMENT* fragment = NetFragmentIteratorGetFragment(&fi);
+
+        if ((buffer->Len + fragment->ValidLength) > OVPN_DCO_MTU_MAX) {
+            LOG_WARN("Packet max length exceeded, dropping",
+                     TraceLoggingValue(buffer->Len, "currentLen"),
+                     TraceLoggingValue(fragment->ValidLength, "lenToAdd"),
+                     TraceLoggingValue(OVPN_DCO_MTU_MAX - buffer->Len, "spaceLeft"));
+            OvpnTxBufferPoolPut(buffer);
+            status = STATUS_INVALID_BUFFER_SIZE;
+            goto out;
+        }
+
         NET_FRAGMENT_VIRTUAL_ADDRESS* virtualAddr = NetExtensionGetFragmentVirtualAddress(
             &queue->VirtualAddressExtension, NetFragmentIteratorGetIndex(&fi));
 
@@ -111,6 +122,7 @@ OvpnTxProcessPacket(_In_ POVPN_DEVICE device, _In_ POVPN_TXQUEUE queue, _In_ NET
         OvpnTxBufferPoolPut(buffer);
     }
 
+out:
     // update fragment ring's BeginIndex to indicate that we've processes all fragments
     NET_PACKET* packet = NetPacketIteratorGetPacket(pi);
     NET_RING* const fragmentRing = NetRingCollectionGetFragmentRing(fi.Iterator.Rings);

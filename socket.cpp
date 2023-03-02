@@ -274,9 +274,9 @@ OvpnSocketUdpReceiveFromEvent(_In_ PVOID socketContext, ULONG flags, _In_opt_ PW
 
         SIZE_T bytesCopied = 0;
         SIZE_T bytesRemained = dataIndication->Buffer.Length;
-        if (bytesRemained > OVPN_SOCKET_PACKET_BUFFER_SIZE) {
+        if (bytesRemained > OVPN_SOCKET_RX_PACKET_BUFFER_SIZE) {
             LOG_ERROR("UDP datagram of size <size> is larged than buffer size <buf>", TraceLoggingValue(bytesRemained, "size"),
-                TraceLoggingValue(OVPN_SOCKET_PACKET_BUFFER_SIZE, "buf"));
+                TraceLoggingValue(OVPN_SOCKET_RX_PACKET_BUFFER_SIZE, "buf"));
             RtlZeroMemory(&device->Socket.UdpState, sizeof(OvpnSocketUdpState));
             return STATUS_SUCCESS;
         }
@@ -361,9 +361,9 @@ OvpnSocketTcpReceiveEvent(_In_opt_ PVOID socketContext, _In_ ULONG flags, _In_op
                     // header fully read?
                     if (tcpState->BytesRead == sizeof(tcpState->LenBuf)) {
                         USHORT len = RtlUshortByteSwap(*(USHORT*)tcpState->LenBuf);
-                        if ((len == 0) || (len > OVPN_SOCKET_PACKET_BUFFER_SIZE)) {
+                        if ((len == 0) || (len > OVPN_SOCKET_RX_PACKET_BUFFER_SIZE)) {
                             LOG_ERROR("TCP <payload size> is 0 or larger than <buffer size>", TraceLoggingValue(len, "payload size"),
-                                TraceLoggingValue(OVPN_SOCKET_PACKET_BUFFER_SIZE, "buffer size"));
+                                TraceLoggingValue(OVPN_SOCKET_RX_PACKET_BUFFER_SIZE, "buffer size"));
                             RtlZeroMemory(tcpState, sizeof(OvpnSocketTcpState));
                             return STATUS_SUCCESS;
                         }

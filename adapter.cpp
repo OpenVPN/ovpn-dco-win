@@ -87,7 +87,7 @@ OvpnAdapterSetLinkLayerCapabilities(_In_ POVPN_ADAPTER adapter)
                                              maxRcvLinkSpeed);
 
     NetAdapterSetLinkLayerCapabilities(adapter->NetAdapter, &linkLayerCapabilities);
-    NetAdapterSetLinkLayerMtuSize(adapter->NetAdapter, 0xFFFF);
+    NetAdapterSetLinkLayerMtuSize(adapter->NetAdapter, OVPN_DCO_MTU_MAX);
 }
 
 _Use_decl_annotations_

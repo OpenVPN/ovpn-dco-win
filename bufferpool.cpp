@@ -23,10 +23,11 @@
 
 #include <wdm.h>
 
+#include "adapter.h"
 #include "bufferpool.h"
 #include "trace.h"
 
-#define OVPN_BUFFER_HEADROOM 256
+#define OVPN_BUFFER_HEADROOM 26 // we prepend TCP packet size (2 bytes) and crypto overhead (24 bytes)
 
 struct OVPN_BUFFER_POOL_IMPL
 {
@@ -124,7 +125,7 @@ _Use_decl_annotations_
 NTSTATUS
 OvpnTxBufferPoolCreate(OVPN_TX_BUFFER_POOL* handle, VOID* ctx)
 {
-    return OvpnBufferPoolCreate((OVPN_BUFFER_POOL*)handle, sizeof(OVPN_TX_BUFFER) + OVPN_SOCKET_PACKET_BUFFER_SIZE, "tx", ctx);
+    return OvpnBufferPoolCreate((OVPN_BUFFER_POOL*)handle, sizeof(OVPN_TX_BUFFER) + OVPN_DCO_MTU_MAX + OVPN_BUFFER_HEADROOM, "tx", ctx);
 }
 
 VOID*
@@ -160,7 +161,7 @@ OvpnTxBufferPoolGet(OVPN_TX_BUFFER_POOL handle, OVPN_TX_BUFFER** buffer)
     if (*buffer == NULL)
         return STATUS_INSUFFICIENT_RESOURCES;
 
-    (*buffer)->Mdl = IoAllocateMdl(*buffer, sizeof(OVPN_TX_BUFFER) + OVPN_SOCKET_PACKET_BUFFER_SIZE, FALSE, FALSE, NULL);
+    (*buffer)->Mdl = IoAllocateMdl(*buffer, ((OVPN_BUFFER_POOL_IMPL*)handle)->ItemSize, FALSE, FALSE, NULL);
     MmBuildMdlForNonPagedPool((*buffer)->Mdl);
 
     (*buffer)->Pool = handle;
