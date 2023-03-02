@@ -217,8 +217,6 @@ _Use_decl_annotations_
 NTSTATUS
 OvpnPeerGetStats(POVPN_DEVICE device, WDFREQUEST request, ULONG_PTR* bytesReturned)
 {
-    LOG_ENTER();
-
     if (InterlockedCompareExchange(&device->UserspacePid, 0, 0) == 0) {
         LOG_ERROR("Peer not added");
         return STATUS_INVALID_DEVICE_REQUEST;
@@ -244,8 +242,6 @@ OvpnPeerGetStats(POVPN_DEVICE device, WDFREQUEST request, ULONG_PTR* bytesReturn
     *bytesReturned = sizeof(OVPN_STATS);
 
 done:
-    LOG_EXIT();
-
     return status;
 }
 
