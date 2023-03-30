@@ -440,7 +440,7 @@
       <PreprocessorDefinitions>OVPN_DCO_VERSION_MAJOR=$(OVPN_DCO_VERSION_MAJOR);OVPN_DCO_VERSION_MINOR=$(OVPN_DCO_VERSION_MINOR);OVPN_DCO_VERSION_PATCH=$(OVPN_DCO_VERSION_PATCH);OVPN_DCO_VERSION_STR=$(OVPN_DCO_VERSION_MAJOR).$(OVPN_DCO_VERSION_MINOR).$(OVPN_DCO_VERSION_PATCH);NETADAPTER_VERSION_MAJOR=$(NETADAPTER_VERSION_MAJOR);NETADAPTER_VERSION_MINOR=$(NETADAPTER_VERSION_MINOR);%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>Netio.lib;Bcrypt.lib;uuid.lib%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>uuid.lib;Netio.lib;cng.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <Inf />
     <DriverSign>
@@ -456,7 +456,7 @@
       <PreprocessorDefinitions>OVPN_DCO_VERSION_MAJOR=$(OVPN_DCO_VERSION_MAJOR);OVPN_DCO_VERSION_MINOR=$(OVPN_DCO_VERSION_MINOR);OVPN_DCO_VERSION_PATCH=$(OVPN_DCO_VERSION_PATCH);OVPN_DCO_VERSION_STR=$(OVPN_DCO_VERSION_MAJOR).$(OVPN_DCO_VERSION_MINOR).$(OVPN_DCO_VERSION_PATCH);NETADAPTER_VERSION_MAJOR=$(NETADAPTER_VERSION_MAJOR);NETADAPTER_VERSION_MINOR=$(NETADAPTER_VERSION_MINOR);%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>Netio.lib;Bcrypt.lib;uuid.lib%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>uuid.lib;Netio.lib;cng.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <Inf />
     <DriverSign>
@@ -478,7 +478,7 @@
       <Outputs>$(ProjectDir)$(Platform)\$(ConfigurationName)\ovpn-dco.DVL.XML</Outputs>
     </CustomBuildStep>
     <Link>
-      <AdditionalDependencies>Netio.lib;Bcrypt.lib;uuid.lib%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>uuid.lib;Netio.lib;cng.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalOptions>/Brepro %(AdditionalOptions)</AdditionalOptions>
       <GenerateDebugInformation>DebugFull</GenerateDebugInformation>
       <Profile>false</Profile>
@@ -505,7 +505,7 @@
       <Outputs>$(ProjectDir)$(Platform)\$(ConfigurationName)\ovpn-dco.DVL.XML</Outputs>
     </CustomBuildStep>
     <Link>
-      <AdditionalDependencies>Netio.lib;Bcrypt.lib;uuid.lib%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>uuid.lib;Netio.lib;cng.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalOptions>/Brepro %(AdditionalOptions)</AdditionalOptions>
       <GenerateDebugInformation>DebugFull</GenerateDebugInformation>
       <Profile>false</Profile>
@@ -526,7 +526,7 @@
       <PreprocessorDefinitions>OVPN_DCO_VERSION_MAJOR=$(OVPN_DCO_VERSION_MAJOR);OVPN_DCO_VERSION_MINOR=$(OVPN_DCO_VERSION_MINOR);OVPN_DCO_VERSION_PATCH=$(OVPN_DCO_VERSION_PATCH);OVPN_DCO_VERSION_STR=$(OVPN_DCO_VERSION_MAJOR).$(OVPN_DCO_VERSION_MINOR).$(OVPN_DCO_VERSION_PATCH);NETADAPTER_VERSION_MAJOR=$(NETADAPTER_VERSION_MAJOR);NETADAPTER_VERSION_MINOR=$(NETADAPTER_VERSION_MINOR);%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>uuid.lib;Netio.lib;Ksecdd.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>uuid.lib;Netio.lib;cng.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <PreBuildEvent>
       <Command>
@@ -550,7 +550,7 @@
       <PreprocessorDefinitions>OVPN_DCO_VERSION_MAJOR=$(OVPN_DCO_VERSION_MAJOR);OVPN_DCO_VERSION_MINOR=$(OVPN_DCO_VERSION_MINOR);OVPN_DCO_VERSION_PATCH=$(OVPN_DCO_VERSION_PATCH);OVPN_DCO_VERSION_STR=$(OVPN_DCO_VERSION_MAJOR).$(OVPN_DCO_VERSION_MINOR).$(OVPN_DCO_VERSION_PATCH);NETADAPTER_VERSION_MAJOR=$(NETADAPTER_VERSION_MAJOR);NETADAPTER_VERSION_MINOR=$(NETADAPTER_VERSION_MINOR);%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>uuid.lib;Netio.lib;Ksecdd.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>uuid.lib;Netio.lib;cng.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <PreBuildEvent>
       <Command>
@@ -580,7 +580,7 @@
       <Outputs>$(ProjectDir)$(Platform)\$(ConfigurationName)\ovpn-dco.DVL.XML</Outputs>
     </CustomBuildStep>
     <Link>
-      <AdditionalDependencies>uuid.lib;Netio.lib;Ksecdd.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>uuid.lib;Netio.lib;cng.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalOptions>/Brepro %(AdditionalOptions)</AdditionalOptions>
       <GenerateDebugInformation>DebugFull</GenerateDebugInformation>
       <Profile>false</Profile>
@@ -607,7 +607,7 @@
       <Outputs>$(ProjectDir)$(Platform)\$(ConfigurationName)\ovpn-dco.DVL.XML</Outputs>
     </CustomBuildStep>
     <Link>
-      <AdditionalDependencies>uuid.lib;Netio.lib;Ksecdd.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>uuid.lib;Netio.lib;cng.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalOptions>/Brepro %(AdditionalOptions)</AdditionalOptions>
       <GenerateDebugInformation>DebugFull</GenerateDebugInformation>
       <Profile>false</Profile>
@@ -628,7 +628,7 @@
       <PreprocessorDefinitions>OVPN_DCO_VERSION_MAJOR=$(OVPN_DCO_VERSION_MAJOR);OVPN_DCO_VERSION_MINOR=$(OVPN_DCO_VERSION_MINOR);OVPN_DCO_VERSION_PATCH=$(OVPN_DCO_VERSION_PATCH);OVPN_DCO_VERSION_STR=$(OVPN_DCO_VERSION_MAJOR).$(OVPN_DCO_VERSION_MINOR).$(OVPN_DCO_VERSION_PATCH);NETADAPTER_VERSION_MAJOR=$(NETADAPTER_VERSION_MAJOR);NETADAPTER_VERSION_MINOR=$(NETADAPTER_VERSION_MINOR);%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>Netio.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>uuid.lib;Netio.lib;cng.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <Inf />
     <DriverSign>
@@ -644,7 +644,7 @@
       <PreprocessorDefinitions>OVPN_DCO_VERSION_MAJOR=$(OVPN_DCO_VERSION_MAJOR);OVPN_DCO_VERSION_MINOR=$(OVPN_DCO_VERSION_MINOR);OVPN_DCO_VERSION_PATCH=$(OVPN_DCO_VERSION_PATCH);OVPN_DCO_VERSION_STR=$(OVPN_DCO_VERSION_MAJOR).$(OVPN_DCO_VERSION_MINOR).$(OVPN_DCO_VERSION_PATCH);NETADAPTER_VERSION_MAJOR=$(NETADAPTER_VERSION_MAJOR);NETADAPTER_VERSION_MINOR=$(NETADAPTER_VERSION_MINOR);%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>Netio.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>uuid.lib;Netio.lib;cng.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <Inf />
     <DriverSign>
@@ -661,7 +661,7 @@
       <UseFullPaths>false</UseFullPaths>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>Netio.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>uuid.lib;Netio.lib;cng.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalOptions>/Brepro %(AdditionalOptions)</AdditionalOptions>
       <GenerateDebugInformation>DebugFull</GenerateDebugInformation>
       <Profile>false</Profile>
@@ -683,7 +683,7 @@
       <UseFullPaths>false</UseFullPaths>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>Netio.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>uuid.lib;Netio.lib;cng.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalOptions>/Brepro %(AdditionalOptions)</AdditionalOptions>
       <GenerateDebugInformation>DebugFull</GenerateDebugInformation>
       <Profile>false</Profile>
@@ -710,7 +710,7 @@
       <Outputs>$(ProjectDir)$(Platform)\$(ConfigurationName)\ovpn-dco.DVL.XML</Outputs>
     </CustomBuildStep>
     <Link>
-      <AdditionalDependencies>uuid.lib;Netio.lib;Ksecdd.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>uuid.lib;Netio.lib;cng.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalOptions>/Brepro %(AdditionalOptions)</AdditionalOptions>
       <GenerateDebugInformation>DebugFull</GenerateDebugInformation>
       <Profile>false</Profile>
@@ -737,7 +737,7 @@
       <Outputs>$(ProjectDir)$(Platform)\$(ConfigurationName)\ovpn-dco.DVL.XML</Outputs>
     </CustomBuildStep>
     <Link>
-      <AdditionalDependencies>uuid.lib;Netio.lib;Ksecdd.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>uuid.lib;Netio.lib;cng.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalOptions>/Brepro %(AdditionalOptions)</AdditionalOptions>
       <GenerateDebugInformation>DebugFull</GenerateDebugInformation>
       <Profile>false</Profile>
@@ -758,7 +758,7 @@
       <PreprocessorDefinitions>OVPN_DCO_VERSION_MAJOR=$(OVPN_DCO_VERSION_MAJOR);OVPN_DCO_VERSION_MINOR=$(OVPN_DCO_VERSION_MINOR);OVPN_DCO_VERSION_PATCH=$(OVPN_DCO_VERSION_PATCH);OVPN_DCO_VERSION_STR=$(OVPN_DCO_VERSION_MAJOR).$(OVPN_DCO_VERSION_MINOR).$(OVPN_DCO_VERSION_PATCH);NETADAPTER_VERSION_MAJOR=$(NETADAPTER_VERSION_MAJOR);NETADAPTER_VERSION_MINOR=$(NETADAPTER_VERSION_MINOR);%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>uuid.lib;Netio.lib;Ksecdd.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>uuid.lib;Netio.lib;cng.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <Inf />
     <DriverSign>
@@ -774,7 +774,7 @@
       <PreprocessorDefinitions>OVPN_DCO_VERSION_MAJOR=$(OVPN_DCO_VERSION_MAJOR);OVPN_DCO_VERSION_MINOR=$(OVPN_DCO_VERSION_MINOR);OVPN_DCO_VERSION_PATCH=$(OVPN_DCO_VERSION_PATCH);OVPN_DCO_VERSION_STR=$(OVPN_DCO_VERSION_MAJOR).$(OVPN_DCO_VERSION_MINOR).$(OVPN_DCO_VERSION_PATCH);NETADAPTER_VERSION_MAJOR=$(NETADAPTER_VERSION_MAJOR);NETADAPTER_VERSION_MINOR=$(NETADAPTER_VERSION_MINOR);%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>uuid.lib;Netio.lib;Ksecdd.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>uuid.lib;Netio.lib;cng.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <Inf />
     <DriverSign>
