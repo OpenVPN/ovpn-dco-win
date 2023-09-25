@@ -29,6 +29,9 @@
 
 #define OVPN_BUFFER_HEADROOM 26 // we prepend TCP packet size (2 bytes) and crypto overhead (24 bytes)
 
+// good enough limit for in-flight packets
+constexpr auto MAX_POOL_SIZE = 100'000;
+
 struct OVPN_BUFFER_POOL_IMPL
 {
     LIST_ENTRY ListHead;
@@ -145,10 +148,19 @@ OvpnBufferPoolGet(OVPN_BUFFER_POOL handle, POOL_ENTRY** entry) {
     if (slist_entry) {
         *entry = CONTAINING_RECORD(slist_entry, POOL_ENTRY, PoolListEntry);
     } else {
+        if (pool->PoolSize > MAX_POOL_SIZE)
+        {
+            *entry = NULL;
+            LOG_ERROR("Pool size is too large", TraceLoggingValue(pool->Tag, "tag"), TraceLoggingValue(pool->PoolSize, "size"));
+            return;
+        }
         *entry = (POOL_ENTRY*)ExAllocatePool2(POOL_FLAG_NON_PAGED, pool->ItemSize, 'ovpn');
-        InterlockedIncrement(&pool->PoolSize);
-        if ((pool->PoolSize % 64) == 0) {
-            LOG_INFO("Pool size", TraceLoggingValue(pool->Tag, "tag"), TraceLoggingValue(pool->PoolSize, "size"));
+        if (*entry)
+        {
+            InterlockedIncrement(&pool->PoolSize);
+            if ((pool->PoolSize % 256) == 0) {
+                LOG_INFO("Pool size", TraceLoggingValue(pool->Tag, "tag"), TraceLoggingValue(pool->PoolSize, "size"));
+            }
         }
     }
 }
@@ -161,10 +173,17 @@ OvpnTxBufferPoolGet(OVPN_TX_BUFFER_POOL handle, OVPN_TX_BUFFER** buffer)
     if (*buffer == NULL)
         return STATUS_INSUFFICIENT_RESOURCES;
 
-    (*buffer)->Mdl = IoAllocateMdl(*buffer, ((OVPN_BUFFER_POOL_IMPL*)handle)->ItemSize, FALSE, FALSE, NULL);
-    MmBuildMdlForNonPagedPool((*buffer)->Mdl);
-
     (*buffer)->Pool = handle;
+
+    (*buffer)->Mdl = IoAllocateMdl(*buffer, ((OVPN_BUFFER_POOL_IMPL*)handle)->ItemSize, FALSE, FALSE, NULL);
+    if (((*buffer)->Mdl) == NULL)
+    {
+        OvpnTxBufferPoolPut(*buffer);
+        *buffer = NULL;
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    MmBuildMdlForNonPagedPool((*buffer)->Mdl);
 
     (*buffer)->Data = (*buffer)->Head + OVPN_BUFFER_HEADROOM;
     (*buffer)->Tail = (*buffer)->Data;
@@ -206,7 +225,8 @@ _Use_decl_annotations_
 VOID
 OvpnTxBufferPoolPut(OVPN_TX_BUFFER* buffer)
 {
-    IoFreeMdl(buffer->Mdl);
+    if (buffer->Mdl)
+        IoFreeMdl(buffer->Mdl);
 
     OvpnBufferPoolPut(buffer);
 }
