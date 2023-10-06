@@ -212,6 +212,26 @@ done_not_complete:
     ExReleaseSpinLockShared(&device->SpinLock, kiqrl);
 }
 
+NTSTATUS
+OvpnGetVersion(WDFREQUEST request, _Out_ ULONG_PTR* bytesReturned)
+{
+    *bytesReturned = 0;
+
+    NTSTATUS status;
+    POVPN_VERSION version = NULL;
+    GOTO_IF_NOT_NT_SUCCESS(done, status, WdfRequestRetrieveOutputBuffer(request, sizeof(OVPN_VERSION), (PVOID*)&version, NULL));
+
+    version->Major = OVPN_DCO_VERSION_MAJOR;
+    version->Minor = OVPN_DCO_VERSION_MINOR;
+    version->Patch = OVPN_DCO_VERSION_PATCH;
+
+    *bytesReturned = sizeof(OVPN_VERSION);
+
+done:
+    return status;
+}
+
+
 EVT_WDF_IO_QUEUE_IO_DEVICE_CONTROL OvpnEvtIoDeviceControl;
 
 _Use_decl_annotations_
@@ -262,6 +282,10 @@ OvpnEvtIoDeviceControl(WDFQUEUE queue, WDFREQUEST request, size_t outputBufferLe
         kirql = ExAcquireSpinLockExclusive(&device->SpinLock);
         status = OvpnPeerSet(device, request);
         ExReleaseSpinLockExclusive(&device->SpinLock, kirql);
+        break;
+
+    case OVPN_IOCTL_GET_VERSION:
+        status = OvpnGetVersion(request, &bytesReturned);
         break;
 
     default:
