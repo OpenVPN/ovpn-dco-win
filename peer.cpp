@@ -74,13 +74,8 @@ OvpnPeerNew(POVPN_DEVICE device, WDFREQUEST request)
     GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnSocketInit(&driver->WskProviderNpi, &driver->WskRegistration, peer->Local.Addr4.sin_family, proto_tcp, (PSOCKADDR)&peer->Local,
         (PSOCKADDR)&peer->Remote, remoteAddrSize, device, &socket));
 
-    BCRYPT_ALG_HANDLE aesAlgHandle = NULL, chachaAlgHandle = NULL;
-    GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnCryptoInitAlgHandles(&aesAlgHandle, &chachaAlgHandle));
-
     KIRQL kirql = ExAcquireSpinLockExclusive(&device->SpinLock);
     RtlZeroMemory(&device->CryptoContext, sizeof(OvpnCryptoContext));
-    device->CryptoContext.AesAlgHandle = aesAlgHandle;
-    device->CryptoContext.ChachaAlgHandle = chachaAlgHandle;
     device->Socket.Socket = socket;
     device->Socket.Tcp = proto_tcp;
     RtlZeroMemory(&device->Socket.TcpState, sizeof(OvpnSocketTcpState));
@@ -112,15 +107,10 @@ OvpnPeerDel(POVPN_DEVICE device)
         return STATUS_INVALID_DEVICE_REQUEST;
     }
 
-    BCRYPT_ALG_HANDLE aesAlgHandle = NULL, chachaAlgHandle = NULL;
-
     KIRQL kirql = ExAcquireSpinLockExclusive(&device->SpinLock);
 
     OvpnTimerDestroy(&device->KeepaliveXmitTimer);
     OvpnTimerDestroy(&device->KeepaliveRecvTimer);
-
-    aesAlgHandle = device->CryptoContext.AesAlgHandle;
-    chachaAlgHandle = device->CryptoContext.ChachaAlgHandle;
 
     OvpnCryptoUninit(&device->CryptoContext);
 
@@ -132,10 +122,8 @@ OvpnPeerDel(POVPN_DEVICE device)
     RtlZeroMemory(&device->Socket.TcpState, sizeof(OvpnSocketTcpState));
     RtlZeroMemory(&device->Socket.UdpState, sizeof(OvpnSocketUdpState));
 
-    // OvpnCryptoUninitAlgHandles and OvpnSocketClose require PASSIVE_LEVEL, so must release lock
+    // OvpnSocketClose requires PASSIVE_LEVEL, so must release lock
     ExReleaseSpinLockExclusive(&device->SpinLock, kirql);
-
-    OvpnCryptoUninitAlgHandles(aesAlgHandle, chachaAlgHandle);
 
     LOG_IF_NOT_NT_SUCCESS(OvpnSocketClose(socket));
 
@@ -278,7 +266,24 @@ OvpnPeerNewKey(POVPN_DEVICE device, WDFREQUEST request)
     NTSTATUS status;
 
     GOTO_IF_NOT_NT_SUCCESS(done, status, WdfRequestRetrieveInputBuffer(request, sizeof(OVPN_CRYPTO_DATA), (PVOID*)&cryptoData, nullptr));
-    GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnCryptoNewKey(&device->CryptoContext, cryptoData));
+
+    BCRYPT_ALG_HANDLE algHandle = NULL;
+    switch (cryptoData->CipherAlg) {
+    case OVPN_CIPHER_ALG_AES_GCM:
+        algHandle = device->AesAlgHandle;
+        break;
+
+    case OVPN_CIPHER_ALG_CHACHA20_POLY1305:
+        algHandle = device->ChachaAlgHandle;
+        if (algHandle == NULL) {
+            LOG_ERROR("CHACHA20-POLY1305 is not available");
+            status = STATUS_INVALID_DEVICE_REQUEST;
+            goto done;
+        }
+        break;
+    }
+
+    GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnCryptoNewKey(&device->CryptoContext, cryptoData, algHandle));
 
 done:
     LOG_EXIT();
