@@ -221,7 +221,7 @@ OvpnCryptoEncryptAEAD(OvpnCryptoKeySlot* keySlot, UCHAR* buf, SIZE_T len)
 
 _Use_decl_annotations_
 NTSTATUS
-OvpnCryptoNewKey(OvpnCryptoContext* cryptoContext, POVPN_CRYPTO_DATA cryptoData)
+OvpnCryptoNewKey(OvpnCryptoContext* cryptoContext, POVPN_CRYPTO_DATA cryptoData, BCRYPT_ALG_HANDLE algHandle)
 {
     OvpnCryptoKeySlot* keySlot = NULL;
     NTSTATUS status = STATUS_SUCCESS;
@@ -247,19 +247,6 @@ OvpnCryptoNewKey(OvpnCryptoContext* cryptoContext, POVPN_CRYPTO_DATA cryptoData)
         if (keySlot->DecKey) {
             BCryptDestroyKey(keySlot->DecKey);
             keySlot->DecKey = NULL;
-        }
-
-        BCRYPT_ALG_HANDLE algHandle = NULL;
-        if (cryptoData->CipherAlg == OVPN_CIPHER_ALG_AES_GCM) {
-            algHandle = cryptoContext->AesAlgHandle;
-        }
-        else {
-            if (cryptoContext->ChachaAlgHandle == NULL) {
-                LOG_ERROR("CHACHA20-POLY1305 is not available");
-                status = STATUS_INVALID_DEVICE_REQUEST;
-                goto done;
-            }
-            algHandle = cryptoContext->ChachaAlgHandle;
         }
 
         // generate keys from key materials

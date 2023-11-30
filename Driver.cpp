@@ -336,6 +336,10 @@ VOID OvpnEvtDeviceCleanup(WDFOBJECT obj) {
     device->Adapter = WDF_NO_HANDLE;
     ExReleaseSpinLockExclusive(&device->SpinLock, irql);
 
+    // OvpnCryptoUninitAlgHandles called outside of lock because
+    // it requires PASSIVE_LEVEL.
+    OvpnCryptoUninitAlgHandles(device->AesAlgHandle, device->ChachaAlgHandle);
+
     LOG_EXIT();
 }
 
@@ -469,6 +473,8 @@ OvpnEvtDeviceAdd(WDFDRIVER wdfDriver, PWDFDEVICE_INIT deviceInit) {
 
     GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnBufferQueueCreate(&device->ControlRxBufferQueue));
     GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnBufferQueueCreate(&device->DataRxBufferQueue));
+
+    GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnCryptoInitAlgHandles(&device->AesAlgHandle, &device->ChachaAlgHandle));
 
     LOG_IF_NOT_NT_SUCCESS(status = OvpnAdapterCreate(device));
 
