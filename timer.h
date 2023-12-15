@@ -2,6 +2,7 @@
  *  ovpn-dco-win OpenVPN protocol accelerator for Windows
  *
  *  Copyright (C) 2020-2021 OpenVPN Inc <sales@openvpn.net>
+ *  Copyright (C) 2023 Rubicon Communications LLC (Netgate)
  *
  *  Author:	Lev Stipakov <lev@openvpn.net>
  *
@@ -29,11 +30,11 @@ OvpnTimerReset(WDFTIMER timer, ULONG dueTime);
 
 _Must_inspect_result_
 NTSTATUS
-OvpnTimerXmitCreate(WDFOBJECT parent, ULONG period, _Inout_ WDFTIMER* timer);
+OvpnTimerXmitCreate(WDFOBJECT parent, OvpnPeerContext* peer, ULONG period, _Inout_ WDFTIMER* timer);
 
 _Must_inspect_result_
 NTSTATUS
-OvpnTimerRecvCreate(WDFOBJECT parent, _Inout_ WDFTIMER* timer);
+OvpnTimerRecvCreate(WDFOBJECT parent, OvpnPeerContext* peer, _Inout_ WDFTIMER* timer);
 
 VOID
 OvpnTimerDestroy(_Inout_ WDFTIMER* timer);

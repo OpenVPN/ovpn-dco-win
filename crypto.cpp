@@ -263,16 +263,12 @@ OvpnCryptoNewKey(OvpnCryptoContext* cryptoContext, POVPN_CRYPTO_DATA cryptoData,
         keySlot->KeyId = cryptoData->KeyId;
         keySlot->PeerId = cryptoData->PeerId;
 
-        cryptoContext->CryptoOverhead = AEAD_CRYPTO_OVERHEAD;
-
         LOG_INFO("New key", TraceLoggingValue(cryptoData->CipherAlg == OVPN_CIPHER_ALG_AES_GCM ? "aes-gcm" : "chacha20-poly1305", "alg"),
             TraceLoggingValue(cryptoData->KeyId, "KeyId"), TraceLoggingValue(cryptoData->KeyId, "PeerId"));
     }
     else if (cryptoData->CipherAlg == OVPN_CIPHER_ALG_NONE) {
         cryptoContext->Encrypt = OvpnCryptoEncryptNone;
         cryptoContext->Decrypt = OvpnCryptoDecryptNone;
-
-        cryptoContext->CryptoOverhead = NONE_CRYPTO_OVERHEAD;
 
         LOG_INFO("Using cipher none");
     }

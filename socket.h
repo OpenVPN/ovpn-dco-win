@@ -66,7 +66,7 @@ OvpnSocketInit(_In_ WSK_PROVIDER_NPI* wskProviderNpi, _In_ WSK_REGISTRATION* wsk
 _Must_inspect_result_
 _IRQL_requires_(PASSIVE_LEVEL)
 NTSTATUS
-OvpnSocketClose(_In_ PWSK_SOCKET socket);
+OvpnSocketClose(_In_opt_ PWSK_SOCKET socket);
 
 _Must_inspect_result_
 NTSTATUS

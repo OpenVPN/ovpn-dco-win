@@ -115,7 +115,7 @@ OvpnEvtRxQueueAdvance(NETPACKETQUEUE netPacketQueue)
         fragment->ValidLength = buffer->Len;
         fragment->Offset = 0;
         NET_FRAGMENT_VIRTUAL_ADDRESS* virtualAddr = NetExtensionGetFragmentVirtualAddress(&queue->VirtualAddressExtension, NetFragmentIteratorGetIndex(&fi));
-        RtlCopyMemory(virtualAddr->VirtualAddress, buffer->Data + device->CryptoContext.CryptoOverhead, buffer->Len);
+        RtlCopyMemory(virtualAddr->VirtualAddress, buffer->Data + device->CryptoOverhead, buffer->Len);
 
         InterlockedExchangeAddNoFence64(&device->Stats.TunBytesReceived, buffer->Len);
 

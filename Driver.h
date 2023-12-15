@@ -76,22 +76,6 @@ struct OVPN_DEVICE {
 
     OVPN_STATS Stats;
 
-    // keepalive interval in seconds
-    _Guarded_by_(SpinLock)
-    LONG KeepaliveInterval;
-
-    // keepalive timeout in seconds
-    _Guarded_by_(SpinLock)
-    LONG KeepaliveTimeout;
-
-    // timer used to send periodic ping messages to the server if no data has been sent within the past KeepaliveInterval seconds
-    _Guarded_by_(SpinLock)
-    WDFTIMER KeepaliveXmitTimer;
-
-    // timer used to report keepalive timeout error to userspace when no data has been received for KeepaliveTimeout seconds
-    _Guarded_by_(SpinLock)
-    WDFTIMER KeepaliveRecvTimer;
-
     BCRYPT_ALG_HANDLE AesAlgHandle;
     BCRYPT_ALG_HANDLE ChachaAlgHandle;
 
@@ -100,19 +84,40 @@ struct OVPN_DEVICE {
     UINT16 MSS;
 
     _Guarded_by_(SpinLock)
-    OvpnCryptoContext CryptoContext;
-
-    _Guarded_by_(SpinLock)
     OvpnSocket Socket;
 
     _Guarded_by_(SpinLock)
     NETADAPTER Adapter;
 
-    // pid of userspace process which called NEW_PEER
-    _Interlocked_
-    LONG UserspacePid;
+    _Guarded_by_(SpinLock)
+    RTL_GENERIC_TABLE Peers;
+
+    SIZE_T CryptoOverhead;
 };
 
 typedef OVPN_DEVICE * POVPN_DEVICE;
 
 WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(OVPN_DEVICE, OvpnGetDeviceContext)
+
+static inline
+BOOLEAN
+OvpnHasPeers(_In_ POVPN_DEVICE device)
+{
+    return !RtlIsGenericTableEmpty(&device->Peers);
+}
+
+struct OvpnPeerContext;
+
+_Must_inspect_result_
+NTSTATUS
+OvpnAddPeer(_In_ POVPN_DEVICE device, _In_ OvpnPeerContext* PeerCtx);
+
+VOID
+OvpnFlushPeers(_In_ POVPN_DEVICE device);
+
+VOID
+OvpnCleanupPeerTable(_In_ RTL_GENERIC_TABLE*);
+
+_Must_inspect_result_
+OvpnPeerContext*
+OvpnGetFirstPeer(_In_ RTL_GENERIC_TABLE*);
