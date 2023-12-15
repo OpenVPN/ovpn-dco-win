@@ -2,6 +2,7 @@
  *  ovpn-dco-win OpenVPN protocol accelerator for Windows
  *
  *  Copyright (C) 2020-2021 OpenVPN Inc <sales@openvpn.net>
+ *  Copyright (C) 2023 Rubicon Communications LLC (Netgate)
  *
  *  Author:	Lev Stipakov <lev@openvpn.net>
  *
@@ -25,6 +26,36 @@
 
 #include "driver.h"
 #include "uapi\ovpn-dco.h"
+
+struct OvpnPeerContext
+{
+    OvpnCryptoContext CryptoContext;
+
+    INT32 PeerId;
+
+    // keepalive interval in seconds
+    LONG KeepaliveInterval;
+
+    // keepalive timeout in seconds
+    LONG KeepaliveTimeout;
+
+    // timer used to send periodic ping messages to the server if no data has been sent within the past KeepaliveInterval seconds
+    WDFTIMER KeepaliveXmitTimer;
+
+    // timer used to report keepalive timeout error to userspace when no data has been received for KeepaliveTimeout seconds
+    WDFTIMER KeepaliveRecvTimer;
+};
+
+_Must_inspect_result_
+OvpnPeerContext*
+OvpnPeerCtxAlloc();
+
+VOID
+OvpnPeerCtxFree(_In_ OvpnPeerContext*);
+
+RTL_GENERIC_ALLOCATE_ROUTINE OvpnPeerAllocateRoutine;
+RTL_GENERIC_FREE_ROUTINE OvpnPeerFreeRoutine;
+RTL_GENERIC_COMPARE_ROUTINE OvpnPeerCompareByPeerIdRoutine;
 
 _Must_inspect_result_
 _IRQL_requires_(PASSIVE_LEVEL)

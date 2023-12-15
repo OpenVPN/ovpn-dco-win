@@ -2,6 +2,7 @@
  *  ovpn-dco-win OpenVPN protocol accelerator for Windows
  *
  *  Copyright (C) 2020-2021 OpenVPN Inc <sales@openvpn.net>
+ *  Copyright (C) 2023 Rubicon Communications LLC (Netgate)
  *
  *  Author:	Lev Stipakov <lev@openvpn.net>
  *
@@ -309,8 +310,6 @@ VOID OvpnEvtFileCleanup(WDFFILEOBJECT fileObject) {
     // peer might already be deleted
     (VOID)OvpnPeerDel(device);
 
-    InterlockedExchange(&device->UserspacePid, 0);
-
     if (device->Adapter != NULL) {
         OvpnAdapterSetLinkState(OvpnGetAdapterContext(device->Adapter), MediaConnectStateDisconnected);
     }
@@ -476,10 +475,59 @@ OvpnEvtDeviceAdd(WDFDRIVER wdfDriver, PWDFDEVICE_INIT deviceInit) {
 
     GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnCryptoInitAlgHandles(&device->AesAlgHandle, &device->ChachaAlgHandle));
 
+    // Initialize peers tree
+    RtlInitializeGenericTable(&device->Peers, OvpnPeerCompareByPeerIdRoutine, OvpnPeerAllocateRoutine, OvpnPeerFreeRoutine, NULL);
+
     LOG_IF_NOT_NT_SUCCESS(status = OvpnAdapterCreate(device));
 
 done:
     LOG_EXIT();
 
     return status;
+}
+
+_Use_decl_annotations_
+NTSTATUS
+OvpnAddPeer(POVPN_DEVICE device, OvpnPeerContext* peer)
+{
+    NTSTATUS status;
+    BOOLEAN newElem;
+
+    RtlInsertElementGenericTable(&device->Peers, (PVOID)&peer, sizeof(OvpnPeerContext*), &newElem);
+
+    if (newElem) {
+        status = STATUS_SUCCESS;
+    }
+    else {
+        LOG_ERROR("Unable to add new peer");
+        status = STATUS_NO_MEMORY;
+    }
+    return status;
+}
+
+_Use_decl_annotations_
+VOID
+OvpnFlushPeers(POVPN_DEVICE device) {
+    OvpnCleanupPeerTable(&device->Peers);
+}
+
+_Use_decl_annotations_
+VOID
+OvpnCleanupPeerTable(RTL_GENERIC_TABLE* peers)
+{
+    while (!RtlIsGenericTableEmpty(peers)) {
+        PVOID ptr = RtlGetElementGenericTable(peers, 0);
+        OvpnPeerContext* peer = *(OvpnPeerContext**)ptr;
+        RtlDeleteElementGenericTable(peers, ptr);
+
+        OvpnPeerCtxFree(peer);
+    }
+}
+
+_Use_decl_annotations_
+OvpnPeerContext*
+OvpnGetFirstPeer(RTL_GENERIC_TABLE* peers)
+{
+    OvpnPeerContext** ptr = (OvpnPeerContext**)RtlGetElementGenericTable(peers, 0);
+    return ptr ? (OvpnPeerContext*)*ptr : NULL;
 }

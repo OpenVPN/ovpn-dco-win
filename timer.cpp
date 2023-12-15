@@ -19,16 +19,27 @@
  *  51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
+// without this include, RTL_GENERIC_TABLE in Device.h is undefined
+#include <ntddk.h>
+
 #include "bufferpool.h"
 #include "driver.h"
 #include "trace.h"
 #include "timer.h"
 #include "socket.h"
+#include "peer.h"
 
 static const UCHAR OvpnKeepaliveMessage[] = {
     0x2a, 0x18, 0x7b, 0xf3, 0x64, 0x1e, 0xb4, 0xcb,
     0x07, 0xed, 0x2d, 0x0a, 0x98, 0x1f, 0xc7, 0x48
 };
+
+// Context added to a timer's attributes
+typedef struct _OVPN_PEER_TIMER_CONTEXT {
+    OvpnPeerContext* Peer;
+} OVPN_PEER_TIMER_CONTEXT, * POVPN_PEER_TIMER_CONTEXT;
+
+WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(OVPN_PEER_TIMER_CONTEXT, OvpnGetPeerTimerContext);
 
 _Use_decl_annotations_
 BOOLEAN OvpnTimerIsKeepaliveMessage(const PUCHAR buf, SIZE_T len)
@@ -39,26 +50,31 @@ BOOLEAN OvpnTimerIsKeepaliveMessage(const PUCHAR buf, SIZE_T len)
 _Function_class_(EVT_WDF_TIMER)
 static VOID OvpnTimerXmit(WDFTIMER timer)
 {
+    LOG_ENTER();
+
     POVPN_DEVICE device = OvpnGetDeviceContext(WdfTimerGetParentObject(timer));
+    POVPN_PEER_TIMER_CONTEXT timerCtx = OvpnGetPeerTimerContext(timer);
     OVPN_TX_BUFFER* buffer;
     NTSTATUS status;
 
     LOG_IF_NOT_NT_SUCCESS(status = OvpnTxBufferPoolGet(device->TxBufferPool, &buffer));
 
     if (!NT_SUCCESS(status)) {
+        LOG_EXIT();
         return;
     }
 
     // copy keepalive magic message to the buffer
     RtlCopyMemory(OvpnTxBufferPut(buffer, sizeof(OvpnKeepaliveMessage)), OvpnKeepaliveMessage, sizeof(OvpnKeepaliveMessage));
 
+    OvpnPeerContext* peer = timerCtx->Peer;
     KIRQL kiqrl = ExAcquireSpinLockShared(&device->SpinLock);
-    if (device->CryptoContext.Encrypt) {
+    if (peer->CryptoContext.Encrypt) {
         // make space to crypto overhead
-        OvpnTxBufferPush(buffer, device->CryptoContext.CryptoOverhead);
+        OvpnTxBufferPush(buffer, device->CryptoOverhead);
 
         // in-place encrypt, always with primary key
-        status = device->CryptoContext.Encrypt(&device->CryptoContext.Primary, buffer->Data, buffer->Len);
+        status = peer->CryptoContext.Encrypt(&peer->CryptoContext.Primary, buffer->Data, buffer->Len);
     }
     else {
         status = STATUS_INVALID_DEVICE_STATE;
@@ -76,11 +92,15 @@ static VOID OvpnTimerXmit(WDFTIMER timer)
         OvpnTxBufferPoolPut(buffer);
     }
     ExReleaseSpinLockShared(&device->SpinLock, kiqrl);
+
+    LOG_EXIT();
 }
 
 _Function_class_(EVT_WDF_TIMER)
 static VOID OvpnTimerRecv(WDFTIMER timer)
 {
+    LOG_ENTER();
+
     LOG_WARN("Keepalive timeout");
 
     POVPN_DEVICE device = OvpnGetDeviceContext(WdfTimerGetParentObject(timer));
@@ -94,6 +114,8 @@ static VOID OvpnTimerRecv(WDFTIMER timer)
         ULONG_PTR bytesSent = 0;
         WdfRequestCompleteWithInformation(request, STATUS_CONNECTION_DISCONNECTED, bytesSent);
     }
+
+    LOG_EXIT();
 }
 
 _Use_decl_annotations_
@@ -107,8 +129,10 @@ VOID OvpnTimerDestroy(WDFTIMER* timer)
     }
 }
 
-static NTSTATUS OvpnTimerCreate(WDFOBJECT parent, ULONG period, PFN_WDF_TIMER func, _Inout_ WDFTIMER* timer)
+static NTSTATUS OvpnTimerCreate(WDFOBJECT parent, OvpnPeerContext* peer, ULONG period, PFN_WDF_TIMER func, _Inout_ WDFTIMER* timer)
 {
+    LOG_ENTER();
+
     if (*timer != WDF_NO_HANDLE) {
         WdfTimerStop(*timer, FALSE);
         WdfObjectDelete(*timer);
@@ -122,27 +146,37 @@ static NTSTATUS OvpnTimerCreate(WDFOBJECT parent, ULONG period, PFN_WDF_TIMER fu
 
     WDF_OBJECT_ATTRIBUTES timerAttributes;
     WDF_OBJECT_ATTRIBUTES_INIT(&timerAttributes);
+    WDF_OBJECT_ATTRIBUTES_SET_CONTEXT_TYPE(&timerAttributes, OVPN_PEER_TIMER_CONTEXT);
     timerAttributes.ParentObject = parent;
 
-    return WdfTimerCreate(&timerConfig, &timerAttributes, timer);
+    *timer = WDF_NO_HANDLE;
+    NTSTATUS status;
+    LOG_IF_NOT_NT_SUCCESS(status = WdfTimerCreate(&timerConfig, &timerAttributes, timer));
+    if (NT_SUCCESS(status)) {
+        POVPN_PEER_TIMER_CONTEXT pTimerContext = OvpnGetPeerTimerContext(*timer);
+        pTimerContext->Peer = peer;
+    }
+
+    LOG_EXIT();
+    return status;
 }
 
 _Use_decl_annotations_
-NTSTATUS OvpnTimerXmitCreate(WDFOBJECT parent, ULONG period, WDFTIMER* timer)
+NTSTATUS OvpnTimerXmitCreate(WDFOBJECT parent, OvpnPeerContext* peer, ULONG period, WDFTIMER* timer)
 {
     NTSTATUS status;
     LOG_INFO("Create xmit timer", TraceLoggingValue(period, "period"));
-    LOG_IF_NOT_NT_SUCCESS(status = OvpnTimerCreate(parent, period, OvpnTimerXmit, timer));
+    LOG_IF_NOT_NT_SUCCESS(status = OvpnTimerCreate(parent, peer, period, OvpnTimerXmit, timer));
 
     return status;
 }
 
 _Use_decl_annotations_
-NTSTATUS OvpnTimerRecvCreate(WDFOBJECT parent, WDFTIMER* timer)
+NTSTATUS OvpnTimerRecvCreate(WDFOBJECT parent, OvpnPeerContext* peer, WDFTIMER* timer)
 {
     NTSTATUS status;
     LOG_INFO("Create recv timer");
-    LOG_IF_NOT_NT_SUCCESS(status = OvpnTimerCreate(parent, 0, OvpnTimerRecv, timer));
+    LOG_IF_NOT_NT_SUCCESS(status = OvpnTimerCreate(parent, peer, 0, OvpnTimerRecv, timer));
 
     return status;
 }

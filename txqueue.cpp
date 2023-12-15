@@ -2,6 +2,7 @@
  *  ovpn-dco-win OpenVPN protocol accelerator for Windows
  *
  *  Copyright (C) 2020-2021 OpenVPN Inc <sales@openvpn.net>
+ *  Copyright (C) 2023 Rubicon Communications LLC (Netgate)
  *
  *  Author:	Lev Stipakov <lev@openvpn.net>
  *
@@ -33,6 +34,7 @@
 #include "timer.h"
 #include "txqueue.h"
 #include "socket.h"
+#include "peer.h"
 
 _Must_inspect_result_
 _Requires_shared_lock_held_(device->SpinLock)
@@ -81,14 +83,22 @@ OvpnTxProcessPacket(_In_ POVPN_DEVICE device, _In_ POVPN_TXQUEUE queue, _In_ NET
         OvpnMssDoIPv6(buffer->Data, buffer->Len, device->MSS);
     }
 
+    OvpnPeerContext* peer = OvpnGetFirstPeer(&device->Peers);
+    if (peer == NULL) {
+        status = STATUS_ADDRESS_NOT_ASSOCIATED;
+        OvpnTxBufferPoolPut(buffer);
+        LOG_WARN("No peer");
+        goto out;
+    }
+
     InterlockedExchangeAddNoFence64(&device->Stats.TunBytesSent, buffer->Len);
 
-    if (device->CryptoContext.Encrypt) {
+    if (peer->CryptoContext.Encrypt) {
         // make space to crypto overhead
-        OvpnTxBufferPush(buffer, device->CryptoContext.CryptoOverhead);
+        OvpnTxBufferPush(buffer, device->CryptoOverhead);
 
         // in-place encrypt, always with primary key
-        status = device->CryptoContext.Encrypt(&device->CryptoContext.Primary, buffer->Data, buffer->Len);
+        status = peer->CryptoContext.Encrypt(&peer->CryptoContext.Primary, buffer->Data, buffer->Len);
     }
     else {
         status = STATUS_INVALID_DEVICE_STATE;
@@ -117,6 +127,8 @@ OvpnTxProcessPacket(_In_ POVPN_DEVICE device, _In_ POVPN_TXQUEUE queue, _In_ NET
 
             *tail = buffer;
         }
+
+        OvpnTimerReset(peer->KeepaliveXmitTimer, peer->KeepaliveInterval);
     }
     else {
         OvpnTxBufferPoolPut(buffer);
@@ -167,14 +179,9 @@ OvpnEvtTxQueueAdvance(NETPACKETQUEUE netPacketQueue)
     }
     NetPacketIteratorSet(&pi);
 
-    // reset keepalive timer
-    if (packetSent) {
-        OvpnTimerReset(device->KeepaliveXmitTimer, device->KeepaliveInterval);
-
-        if (!device->Socket.Tcp) {
-            // this will use WskSendMessages to send buffers list which we constructed before
-            LOG_IF_NOT_NT_SUCCESS(OvpnSocketSend(&device->Socket, txBufferHead));
-        }
+    if (packetSent && !device->Socket.Tcp) {
+        // this will use WskSendMessages to send buffers list which we constructed before
+        LOG_IF_NOT_NT_SUCCESS(OvpnSocketSend(&device->Socket, txBufferHead));
     }
 
     ExReleaseSpinLockShared(&device->SpinLock, kirql);

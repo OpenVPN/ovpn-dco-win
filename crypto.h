@@ -2,6 +2,7 @@
  *  ovpn-dco-win OpenVPN protocol accelerator for Windows
  *
  *  Copyright (C) 2020-2021 OpenVPN Inc <sales@openvpn.net>
+ *  Copyright (C) 2023 Rubicon Communications LLC (Netgate)
  *
  *  Author:	Lev Stipakov <lev@openvpn.net>
  *

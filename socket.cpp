@@ -2,6 +2,7 @@
  *  ovpn-dco-win OpenVPN protocol accelerator for Windows
  *
  *  Copyright (C) 2020-2021 OpenVPN Inc <sales@openvpn.net>
+ *  Copyright (C) 2023 Rubicon Communications LLC (Netgate)
  *
  *  Author:	Lev Stipakov <lev@openvpn.net>
  *
@@ -30,6 +31,7 @@
 #include "rxqueue.h"
 #include "timer.h"
 #include "socket.h"
+#include "peer.h"
 
 IO_COMPLETION_ROUTINE OvpnSocketSyncOpCompletionRoutine;
 
@@ -159,6 +161,13 @@ VOID OvpnSocketDataPacketReceived(_In_ POVPN_DEVICE device, UCHAR op, _In_reads_
 {
     InterlockedExchangeAddNoFence64(&device->Stats.TransportBytesReceived, len);
 
+    OvpnPeerContext* peer = OvpnGetFirstPeer(&device->Peers);
+    if (peer == NULL) {
+        LOG_WARN("No peer");
+        InterlockedIncrementNoFence(&device->Stats.LostInDataPackets);
+        return;
+    }
+
     OVPN_RX_BUFFER* buffer;
 
     // fetch buffer for plaintext
@@ -169,9 +178,9 @@ VOID OvpnSocketDataPacketReceived(_In_ POVPN_DEVICE device, UCHAR op, _In_reads_
         return;
     }
 
-    if (device->CryptoContext.Decrypt) {
+    if (peer->CryptoContext.Decrypt) {
         UCHAR keyId = OvpnCryptoKeyIdExtract(op);
-        OvpnCryptoKeySlot* keySlot = OvpnCryptoKeySlotFromKeyId(&device->CryptoContext, keyId);
+        OvpnCryptoKeySlot* keySlot = OvpnCryptoKeySlotFromKeyId(&peer->CryptoContext, keyId);
         if (!keySlot) {
             status = STATUS_INVALID_DEVICE_STATE;
 
@@ -179,8 +188,8 @@ VOID OvpnSocketDataPacketReceived(_In_ POVPN_DEVICE device, UCHAR op, _In_reads_
         }
         else {
             // decrypt into plaintext buffer
-            status = device->CryptoContext.Decrypt(keySlot, cipherTextBuf, len, buffer->Data);
-            buffer->Len = len - device->CryptoContext.CryptoOverhead;
+            status = peer->CryptoContext.Decrypt(keySlot, cipherTextBuf, len, buffer->Data);
+            buffer->Len = len - device->CryptoOverhead;
         }
     }
     else {
@@ -194,10 +203,10 @@ VOID OvpnSocketDataPacketReceived(_In_ POVPN_DEVICE device, UCHAR op, _In_reads_
         return;
     }
 
-    OvpnTimerReset(device->KeepaliveRecvTimer, device->KeepaliveTimeout);
+    OvpnTimerReset(peer->KeepaliveRecvTimer, peer->KeepaliveTimeout);
 
     // points to the beginning of plaintext
-    UCHAR* buf = buffer->Data + device->CryptoContext.CryptoOverhead;
+    UCHAR* buf = buffer->Data + device->CryptoOverhead;
 
     // ping packet?
     if (OvpnTimerIsKeepaliveMessage(buf, buffer->Len)) {
