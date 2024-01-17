@@ -2,9 +2,9 @@
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ImportGroup Label="PropertySheets" />
   <PropertyGroup Label="UserMacros">
-    <OVPN_DCO_VERSION_MAJOR>1</OVPN_DCO_VERSION_MAJOR>
+    <OVPN_DCO_VERSION_MAJOR>2</OVPN_DCO_VERSION_MAJOR>
     <OVPN_DCO_VERSION_MINOR>0</OVPN_DCO_VERSION_MINOR>
-    <OVPN_DCO_VERSION_PATCH>1</OVPN_DCO_VERSION_PATCH>
+    <OVPN_DCO_VERSION_PATCH>0</OVPN_DCO_VERSION_PATCH>
   </PropertyGroup>
   <PropertyGroup />
   <ItemDefinitionGroup>
