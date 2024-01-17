@@ -24,6 +24,7 @@
 #include <wsk.h>
 #include <wdf.h>
 #include <wdfrequest.h>
+#include <Ntstrsafe.h>
 
 #include "bufferpool.h"
 #include "driver.h"
@@ -35,6 +36,8 @@
 TRACELOGGING_DEFINE_PROVIDER(g_hOvpnEtwProvider,
   "OpenVPN.OvpnDCO",
   (0x4970f9cf, 0x2c0c, 0x4f11, 0xb1, 0xcc, 0xe3, 0xa1, 0xe9, 0x95, 0x88, 0x33));
+
+#define DEVICE_OBJECT_NAME_LENGTH 128
 
 // WSK Client Dispatch table that denotes the WSK version
 // that the WSK application wants to use and optionally a pointer
@@ -414,6 +417,12 @@ OvpnEvtDeviceAdd(WDFDRIVER wdfDriver, PWDFDEVICE_INIT deviceInit) {
     DECLARE_CONST_UNICODE_STRING(symLink, L"\\DosDevices\\ovpn-dco");
 
     NTSTATUS status;
+
+    // we need to assign unique name to be able to assign SDDL string
+    static ULONG deviceNum = 0;
+    DECLARE_UNICODE_STRING_SIZE(deviceName, DEVICE_OBJECT_NAME_LENGTH);
+    GOTO_IF_NOT_NT_SUCCESS(done, status, RtlUnicodeStringPrintf(&deviceName, L"%ws%u", L"\\Device\\ovpn-dco-", deviceNum++));
+
     GOTO_IF_NOT_NT_SUCCESS(done, status, NetDeviceInitConfig(deviceInit));
 
     WDF_PNPPOWER_EVENT_CALLBACKS pnpPowerCallbacks;
@@ -429,6 +438,9 @@ OvpnEvtDeviceAdd(WDFDRIVER wdfDriver, PWDFDEVICE_INIT deviceInit) {
     // BCryptOpenAlgorithmProvider with BCRYPT_PROV_DISPATCH returns STATUS_NOT_SUPPORTED if sync scope is WdfSynchronizationScopeDevice
     objAttributes.SynchronizationScope = WdfSynchronizationScopeNone;
     objAttributes.EvtCleanupCallback = OvpnEvtDeviceCleanup;
+
+    GOTO_IF_NOT_NT_SUCCESS(done, status, WdfDeviceInitAssignName(deviceInit, &deviceName));
+    GOTO_IF_NOT_NT_SUCCESS(done, status, WdfDeviceInitAssignSDDLString(deviceInit, &SDDL_DEVOBJ_SYS_ALL_ADM_RWX_WORLD_RWX_RES_RWX));
 
     WDFDEVICE wdfDevice;
     GOTO_IF_NOT_NT_SUCCESS(done, status, WdfDeviceCreate(&deviceInit, &objAttributes, &wdfDevice));
