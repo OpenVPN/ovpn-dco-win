@@ -25,15 +25,20 @@
 #include <wdf.h>
 
 VOID
-OvpnTimerReset(WDFTIMER timer, ULONG dueTime);
+OvpnTimerResetXmit(WDFTIMER timer);
+
+VOID
+OvpnTimerResetRecv(WDFTIMER timer);
 
 _Must_inspect_result_
 NTSTATUS
-OvpnTimerXmitCreate(WDFOBJECT parent, ULONG period, _Inout_ WDFTIMER* timer);
+OvpnTimerCreate(WDFOBJECT parent, _Inout_ WDFTIMER* timer);
 
-_Must_inspect_result_
-NTSTATUS
-OvpnTimerRecvCreate(WDFOBJECT parent, _Inout_ WDFTIMER* timer);
+VOID
+OvpnTimerSetXmitInterval(WDFTIMER timer, LONG xmitInterval);
+
+VOID
+OvpnTimerSetRecvTimeout(WDFTIMER timer, LONG recvTimeout);
 
 VOID
 OvpnTimerDestroy(_Inout_ WDFTIMER* timer);
