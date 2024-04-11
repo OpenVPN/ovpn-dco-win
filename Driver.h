@@ -84,13 +84,9 @@ struct OVPN_DEVICE {
     _Guarded_by_(SpinLock)
     LONG KeepaliveTimeout;
 
-    // timer used to send periodic ping messages to the server if no data has been sent within the past KeepaliveInterval seconds
+    // 1-sec timer which handles ping intervals and keepalive timeouts
     _Guarded_by_(SpinLock)
-    WDFTIMER KeepaliveXmitTimer;
-
-    // timer used to report keepalive timeout error to userspace when no data has been received for KeepaliveTimeout seconds
-    _Guarded_by_(SpinLock)
-    WDFTIMER KeepaliveRecvTimer;
+    WDFTIMER Timer;
 
     // set from the userspace, defines TCP Maximum Segment Size
     _Guarded_by_(SpinLock)
