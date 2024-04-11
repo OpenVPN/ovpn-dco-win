@@ -89,10 +89,12 @@ OvpnPeerNew(POVPN_DEVICE device, WDFREQUEST request)
 
     OvpnPeerZeroStats(&device->Stats);
 
+    GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnTimerCreate(device->WdfDevice, &device->Timer));
+
     if (proto_tcp) {
         LOG_IF_NOT_NT_SUCCESS(status = WdfRequestForwardToIoQueue(request, device->PendingNewPeerQueue));
         // start async connect
-        status = OvpnSocketTcpConnect(socket, device, (PSOCKADDR)&peer->Remote);
+        LOG_IF_NOT_NT_SUCCESS(status = OvpnSocketTcpConnect(socket, device, (PSOCKADDR)&peer->Remote));
     }
 
 done:
@@ -116,8 +118,7 @@ OvpnPeerDel(POVPN_DEVICE device)
 
     KIRQL kirql = ExAcquireSpinLockExclusive(&device->SpinLock);
 
-    OvpnTimerDestroy(&device->KeepaliveXmitTimer);
-    OvpnTimerDestroy(&device->KeepaliveRecvTimer);
+    OvpnTimerDestroy(&device->Timer);
 
     aesAlgHandle = device->CryptoContext.AesAlgHandle;
     chachaAlgHandle = device->CryptoContext.ChachaAlgHandle;
@@ -183,29 +184,15 @@ NTSTATUS OvpnPeerSet(POVPN_DEVICE device, WDFREQUEST request)
     if (peer->KeepaliveInterval != -1) {
         device->KeepaliveInterval = peer->KeepaliveInterval;
 
-        if (device->KeepaliveInterval > 0) {
-            // keepalive xmit timer, sends ping packets
-            GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnTimerXmitCreate(device->WdfDevice, peer->KeepaliveInterval, &device->KeepaliveXmitTimer));
-            OvpnTimerReset(device->KeepaliveXmitTimer, peer->KeepaliveInterval);
-        }
-        else {
-            LOG_INFO("Destroy xmit timer");
-            OvpnTimerDestroy(&device->KeepaliveXmitTimer);
-        }
+        // keepalive xmit timer, sends ping packets
+        OvpnTimerSetXmitInterval(device->Timer, peer->KeepaliveInterval);
     }
 
     if (peer->KeepaliveTimeout != -1) {
         device->KeepaliveTimeout = peer->KeepaliveTimeout;
 
-        if (device->KeepaliveTimeout > 0) {
-            // keepalive recv timer, detects keepalive timeout
-            GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnTimerRecvCreate(device->WdfDevice, &device->KeepaliveRecvTimer));
-            OvpnTimerReset(device->KeepaliveRecvTimer, peer->KeepaliveTimeout);
-        }
-        else {
-            LOG_INFO("Destroy recv timer");
-            OvpnTimerDestroy(&device->KeepaliveRecvTimer);
-        }
+        // keepalive recv timer, detects keepalive timeout
+        OvpnTimerSetRecvTimeout(device->Timer, peer->KeepaliveTimeout);
     }
 
 done:
