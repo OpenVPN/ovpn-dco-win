@@ -169,7 +169,7 @@ OvpnEvtTxQueueAdvance(NETPACKETQUEUE netPacketQueue)
 
     // reset keepalive timer
     if (packetSent) {
-        OvpnTimerReset(device->KeepaliveXmitTimer, device->KeepaliveInterval);
+        OvpnTimerResetXmit(device->Timer);
 
         if (!device->Socket.Tcp) {
             // this will use WskSendMessages to send buffers list which we constructed before
