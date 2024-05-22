@@ -3,7 +3,7 @@
   <ImportGroup Label="PropertySheets" />
   <PropertyGroup Label="UserMacros">
     <OVPN_DCO_VERSION_MAJOR>1</OVPN_DCO_VERSION_MAJOR>
-    <OVPN_DCO_VERSION_MINOR>1</OVPN_DCO_VERSION_MINOR>
+    <OVPN_DCO_VERSION_MINOR>2</OVPN_DCO_VERSION_MINOR>
     <OVPN_DCO_VERSION_PATCH>1</OVPN_DCO_VERSION_PATCH>
   </PropertyGroup>
   <PropertyGroup />

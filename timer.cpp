@@ -170,8 +170,18 @@ NTSTATUS OvpnTimerCreate(WDFOBJECT parent, WDFTIMER* timer)
     return status;
 }
 
+#define CHECK_TIMER_HANDLE(timer) \
+    do { \
+        if ((timer) == WDF_NO_HANDLE) { \
+            LOG_ERROR("Timer handle is not initialized"); \
+            return; \
+        } \
+    } while (0)
+
 VOID OvpnTimerSetXmitInterval(WDFTIMER timer, LONG xmitInterval)
 {
+    CHECK_TIMER_HANDLE(timer);
+
     POVPN_TIMER_CONTEXT timerCtx = OvpnGetTimerContext(timer);
     timerCtx->xmitInterval = xmitInterval;
     KeQuerySystemTime(&timerCtx->lastXmit);
@@ -179,6 +189,8 @@ VOID OvpnTimerSetXmitInterval(WDFTIMER timer, LONG xmitInterval)
 
 VOID OvpnTimerSetRecvTimeout(WDFTIMER timer, LONG recvTimeout)
 {
+    CHECK_TIMER_HANDLE(timer);
+
     POVPN_TIMER_CONTEXT timerCtx = OvpnGetTimerContext(timer);
     timerCtx->recvTimeout = recvTimeout;
     KeQuerySystemTime(&timerCtx->lastRecv);
@@ -186,12 +198,16 @@ VOID OvpnTimerSetRecvTimeout(WDFTIMER timer, LONG recvTimeout)
 
 VOID OvpnTimerResetXmit(WDFTIMER timer)
 {
+    CHECK_TIMER_HANDLE(timer);
+
     POVPN_TIMER_CONTEXT timerCtx = OvpnGetTimerContext(timer);
     KeQuerySystemTime(&timerCtx->lastXmit);
 }
 
 VOID OvpnTimerResetRecv(WDFTIMER timer)
 {
+    CHECK_TIMER_HANDLE(timer);
+
     POVPN_TIMER_CONTEXT timerCtx = OvpnGetTimerContext(timer);
     KeQuerySystemTime(&timerCtx->lastRecv);
 }
