@@ -26,6 +26,7 @@
 #include <wdfrequest.h>
 
 #include "bufferpool.h"
+#include "control.h"
 #include "driver.h"
 #include "trace.h"
 #include "peer.h"
@@ -49,11 +50,25 @@ OvpnEvtDriverUnload(_In_ WDFDRIVER driver)
 {
     UNREFERENCED_PARAMETER(driver);
 
+    LOG_ENTER();
+    LOG_EXIT();
+
     TraceLoggingUnregister(g_hOvpnEtwProvider);
 
     // tail call optimization incorrectly eliminates TraceLoggingUnregister() call
     // add __nop() to prevent TCO
     __nop();
+}
+
+EVT_WDF_OBJECT_CONTEXT_CLEANUP OvpnEvtDriverCleanup;
+
+_Use_decl_annotations_
+VOID OvpnEvtDriverCleanup(_In_ WDFOBJECT driver)
+{
+    UNREFERENCED_PARAMETER(driver);
+
+    LOG_ENTER();
+    LOG_EXIT();
 }
 
 EXTERN_C DRIVER_INITIALIZE DriverEntry;
@@ -80,6 +95,7 @@ DriverEntry(_In_ PDRIVER_OBJECT driverObject, _In_ PUNICODE_STRING registryPath)
     WDF_OBJECT_ATTRIBUTES driverAttrs;
     WDF_OBJECT_ATTRIBUTES_INIT(&driverAttrs);
     WDF_OBJECT_ATTRIBUTES_SET_CONTEXT_TYPE(&driverAttrs, OVPN_DRIVER);
+    driverAttrs.EvtCleanupCallback = OvpnEvtDriverCleanup;
 
     WDF_DRIVER_CONFIG driverConfig;
     WDF_DRIVER_CONFIG_INIT(&driverConfig, OvpnEvtDeviceAdd);
@@ -212,26 +228,6 @@ done_not_complete:
     ExReleaseSpinLockShared(&device->SpinLock, kiqrl);
 }
 
-NTSTATUS
-OvpnGetVersion(WDFREQUEST request, _Out_ ULONG_PTR* bytesReturned)
-{
-    *bytesReturned = 0;
-
-    NTSTATUS status;
-    POVPN_VERSION version = NULL;
-    GOTO_IF_NOT_NT_SUCCESS(done, status, WdfRequestRetrieveOutputBuffer(request, sizeof(OVPN_VERSION), (PVOID*)&version, NULL));
-
-    version->Major = OVPN_DCO_VERSION_MAJOR;
-    version->Minor = OVPN_DCO_VERSION_MINOR;
-    version->Patch = OVPN_DCO_VERSION_PATCH;
-
-    *bytesReturned = sizeof(OVPN_VERSION);
-
-done:
-    return status;
-}
-
-
 EVT_WDF_IO_QUEUE_IO_DEVICE_CONTROL OvpnEvtIoDeviceControl;
 
 _Use_decl_annotations_
@@ -336,6 +332,16 @@ VOID OvpnEvtDeviceCleanup(WDFOBJECT obj) {
     device->Adapter = WDF_NO_HANDLE;
     ExReleaseSpinLockExclusive(&device->SpinLock, irql);
 
+    // delete control device if there are no devices left
+    POVPN_DRIVER driverCtx = OvpnGetDriverContext(WdfGetDriver());
+    LONG deviceCount = InterlockedDecrement(&driverCtx->DeviceCount);
+    LOG_INFO("Device count", TraceLoggingValue(deviceCount, "deviceCount"));
+    if ((deviceCount == 0) && (driverCtx->ControlDevice != NULL)) {
+        LOG_INFO("Delete control device");
+        WdfObjectDelete(driverCtx->ControlDevice);
+        driverCtx->ControlDevice = NULL;
+    }
+
     LOG_EXIT();
 }
 
@@ -432,6 +438,17 @@ OvpnEvtDeviceAdd(WDFDRIVER wdfDriver, PWDFDEVICE_INIT deviceInit) {
 
     WDFDEVICE wdfDevice;
     GOTO_IF_NOT_NT_SUCCESS(done, status, WdfDeviceCreate(&deviceInit, &objAttributes, &wdfDevice));
+
+    POVPN_DRIVER driverCtx = OvpnGetDriverContext(WdfGetDriver());
+    InterlockedIncrement(&driverCtx->DeviceCount);
+
+    LOG_INFO("Device count", TraceLoggingValue(driverCtx->DeviceCount, "count"));
+
+    if (driverCtx->DeviceCount == 1)
+    {
+        // create non-exclusive control device to get the version information
+        GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnCreateControlDevice(wdfDriver));
+    }
 
     // this will fail if one device has already been created but that's ok, since
     // openvpn2/3 accesses devices via Device Interface GUID, and symlink is used only by test client.
