@@ -47,6 +47,8 @@ EVT_WDF_IO_QUEUE_IO_DEVICE_CONTROL OvpnEvtIoDeviceControl;
 typedef struct _OVPN_DRIVER {
     WSK_PROVIDER_NPI WskProviderNpi;
     WSK_REGISTRATION WskRegistration;
+    WDFDEVICE ControlDevice;
+    LONG DeviceCount;
 } OVPN_DRIVER, * POVPN_DRIVER;
 WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(OVPN_DRIVER, OvpnGetDriverContext)
 
