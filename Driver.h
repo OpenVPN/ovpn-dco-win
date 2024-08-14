@@ -94,7 +94,6 @@ struct OVPN_DEVICE {
     _Guarded_by_(SpinLock)
     RTL_GENERIC_TABLE Peers;
 
-    SIZE_T CryptoOverhead;
 };
 
 typedef OVPN_DEVICE * POVPN_DEVICE;

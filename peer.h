@@ -88,4 +88,9 @@ OvpnPeerNewKey(_In_ POVPN_DEVICE device, WDFREQUEST request);
 _Must_inspect_result_
 _Requires_exclusive_lock_held_(device->SpinLock)
 NTSTATUS
+OvpnPeerNewKeyV2(_In_ POVPN_DEVICE device, WDFREQUEST request);
+
+_Must_inspect_result_
+_Requires_exclusive_lock_held_(device->SpinLock)
+NTSTATUS
 OvpnPeerSwapKeys(_In_ POVPN_DEVICE device);

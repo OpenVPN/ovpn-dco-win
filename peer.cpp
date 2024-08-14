@@ -303,6 +303,31 @@ done:
     return status;
 }
 
+static NTSTATUS
+OvpnPeerGetAlgHandle(POVPN_DEVICE device, OVPN_CIPHER_ALG cipherAlg, BCRYPT_ALG_HANDLE& algHandle)
+{
+    NTSTATUS status = STATUS_SUCCESS;
+
+    switch (cipherAlg) {
+    case OVPN_CIPHER_ALG_AES_GCM:
+        algHandle = device->AesAlgHandle;
+        break;
+
+    case OVPN_CIPHER_ALG_CHACHA20_POLY1305:
+        algHandle = device->ChachaAlgHandle;
+        if (algHandle == NULL) {
+            LOG_ERROR("CHACHA20-POLY1305 is not available");
+            status = STATUS_INVALID_DEVICE_REQUEST;
+        }
+        break;
+
+    default:
+        break;
+    }
+
+    return status;
+}
+
 _Use_decl_annotations_
 NTSTATUS
 OvpnPeerNewKey(POVPN_DEVICE device, WDFREQUEST request)
@@ -311,36 +336,19 @@ OvpnPeerNewKey(POVPN_DEVICE device, WDFREQUEST request)
 
     NTSTATUS status = STATUS_SUCCESS;
 
+    POVPN_CRYPTO_DATA cryptoData = NULL;
+    OVPN_CRYPTO_DATA_V2 cryptoDataV2{};
+
     if (!OvpnHasPeers(device)) {
         LOG_ERROR("Peer not added");
         status = STATUS_INVALID_DEVICE_REQUEST;
         goto done;
     }
 
-    POVPN_CRYPTO_DATA cryptoData = NULL;
-
     GOTO_IF_NOT_NT_SUCCESS(done, status, WdfRequestRetrieveInputBuffer(request, sizeof(OVPN_CRYPTO_DATA), (PVOID*)&cryptoData, nullptr));
 
     BCRYPT_ALG_HANDLE algHandle = NULL;
-    switch (cryptoData->CipherAlg) {
-    case OVPN_CIPHER_ALG_AES_GCM:
-        algHandle = device->AesAlgHandle;
-        device->CryptoOverhead = AEAD_CRYPTO_OVERHEAD;
-        break;
-
-    case OVPN_CIPHER_ALG_CHACHA20_POLY1305:
-        algHandle = device->ChachaAlgHandle;
-        if (algHandle == NULL) {
-            LOG_ERROR("CHACHA20-POLY1305 is not available");
-            status = STATUS_INVALID_DEVICE_REQUEST;
-            goto done;
-        }
-        device->CryptoOverhead = AEAD_CRYPTO_OVERHEAD;
-
-    default:
-        device->CryptoOverhead = NONE_CRYPTO_OVERHEAD;
-        break;
-    }
+    GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnPeerGetAlgHandle(device, cryptoData->CipherAlg, algHandle));
 
     OvpnPeerContext* peer = OvpnGetFirstPeer(&device->Peers);
     if (peer == NULL) {
@@ -348,7 +356,43 @@ OvpnPeerNewKey(POVPN_DEVICE device, WDFREQUEST request)
         goto done;
     }
 
-    GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnCryptoNewKey(&peer->CryptoContext, cryptoData, algHandle));
+    RtlCopyMemory(&cryptoDataV2.V1, cryptoData, sizeof(OVPN_CRYPTO_DATA));
+    GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnCryptoNewKey(&peer->CryptoContext, &cryptoDataV2, algHandle));
+
+done:
+    LOG_EXIT();
+
+    return status;
+}
+
+_Use_decl_annotations_
+NTSTATUS
+OvpnPeerNewKeyV2(POVPN_DEVICE device, WDFREQUEST request)
+{
+    LOG_ENTER();
+
+    NTSTATUS status = STATUS_SUCCESS;
+
+    POVPN_CRYPTO_DATA_V2 cryptoDataV2 = NULL;
+
+    if (!OvpnHasPeers(device)) {
+        LOG_ERROR("Peer not added");
+        status = STATUS_INVALID_DEVICE_REQUEST;
+        goto done;
+    }
+
+    GOTO_IF_NOT_NT_SUCCESS(done, status, WdfRequestRetrieveInputBuffer(request, sizeof(OVPN_CRYPTO_DATA_V2), (PVOID*)&cryptoDataV2, nullptr));
+
+    BCRYPT_ALG_HANDLE algHandle = NULL;
+    GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnPeerGetAlgHandle(device, cryptoDataV2->V1.CipherAlg, algHandle));
+
+    OvpnPeerContext* peer = OvpnGetFirstPeer(&device->Peers);
+    if (peer == NULL) {
+        status = STATUS_OBJECTID_NOT_FOUND;
+        goto done;
+    }
+
+    GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnCryptoNewKey(&peer->CryptoContext, cryptoDataV2, algHandle));
 
 done:
     LOG_EXIT();

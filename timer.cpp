@@ -73,12 +73,16 @@ static VOID OvpnTimerXmit(WDFTIMER timer)
 
     OvpnPeerContext* peer = timerCtx->Peer;
     KIRQL kiqrl = ExAcquireSpinLockShared(&device->SpinLock);
-    if (peer->CryptoContext.Encrypt) {
+    OvpnCryptoContext* cryptoContext = &peer->CryptoContext;
+    if (cryptoContext->Encrypt) {
         // make space to crypto overhead
-        OvpnTxBufferPush(buffer, device->CryptoOverhead);
+        BOOLEAN pktId64bit = cryptoContext->CryptoOptions & CRYPTO_OPTIONS_64BIT_PKTID;
+        BOOLEAN aeadTagEnd = cryptoContext->CryptoOptions & CRYPTO_OPTIONS_AEAD_TAG_END;
+        
+        OvpnTxBufferPush(buffer, OVPN_DATA_V2_LEN + (pktId64bit ? 8 : 4) + (aeadTagEnd ? 0 : AEAD_AUTH_TAG_LEN));
 
         // in-place encrypt, always with primary key
-        status = peer->CryptoContext.Encrypt(&peer->CryptoContext.Primary, buffer->Data, buffer->Len);
+        status = cryptoContext->Encrypt(&cryptoContext->Primary, buffer->Data, buffer->Len, cryptoContext->CryptoOptions);
     }
     else {
         status = STATUS_INVALID_DEVICE_STATE;

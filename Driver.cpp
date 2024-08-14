@@ -269,6 +269,12 @@ OvpnEvtIoDeviceControl(WDFQUEUE queue, WDFREQUEST request, size_t outputBufferLe
         ExReleaseSpinLockExclusive(&device->SpinLock, kirql);
         break;
 
+    case OVPN_IOCTL_NEW_KEY_V2:
+        kirql = ExAcquireSpinLockExclusive(&device->SpinLock);
+        status = OvpnPeerNewKeyV2(device, request);
+        ExReleaseSpinLockExclusive(&device->SpinLock, kirql);
+        break;
+
     case OVPN_IOCTL_SWAP_KEYS:
         kirql = ExAcquireSpinLockExclusive(&device->SpinLock);
         status = OvpnPeerSwapKeys(device);
