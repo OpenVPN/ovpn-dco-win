@@ -50,17 +50,17 @@ struct OvpnPktidRecv
 	LARGE_INTEGER Expire;
 
 	/* highest sequence number received */
-	UINT32 Id;
+	UINT64 Id;
 
 	/* we will only accept backtrack IDs > id_floor */
-	UINT32 IdFloor;
-	UINT32 MaxBacktrack;
+	UINT64 IdFloor;
 };
 
 /* Get the next packet ID for xmit */
-NTSTATUS OvpnPktidXmitNext(_In_ OvpnPktidXmit* px, _Out_ UINT32* pktId);
+NTSTATUS OvpnPktidXmitNext(_In_ OvpnPktidXmit* px, _Out_ VOID* pktId, BOOLEAN pktId64bit);
+
 
 /* Packet replay detection.
  * Allows ID backtrack of up to REPLAY_WINDOW_SIZE - 1.
  */
-NTSTATUS OvpnPktidRecvVerify(_In_ OvpnPktidRecv* pid, UINT32 pktId);
+NTSTATUS OvpnPktidRecvVerify(_In_ OvpnPktidRecv* pid, UINT64 pktId);
