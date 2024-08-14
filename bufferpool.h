@@ -74,7 +74,6 @@ struct OVPN_RX_BUFFER
     UCHAR Data[OVPN_SOCKET_RX_PACKET_BUFFER_SIZE];
 };
 
-_Must_inspect_result_
 UCHAR*
 OvpnTxBufferPut(_In_ OVPN_TX_BUFFER* work, SIZE_T len);
 

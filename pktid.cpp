@@ -28,24 +28,29 @@
 #define PKTID_WRAP_WARN 0xf0000000ULL
 
 _Use_decl_annotations_
-NTSTATUS OvpnPktidXmitNext(OvpnPktidXmit* px, UINT32* pktId)
+NTSTATUS OvpnPktidXmitNext(OvpnPktidXmit* px, VOID* pktId, BOOLEAN pktId64bit)
 {
 	ULONG64 seqNum = InterlockedIncrementNoFence64(&px->SeqNum);
 
-	*pktId = (UINT32)seqNum;
-	if (seqNum < PKTID_WRAP_WARN) {
-		return STATUS_SUCCESS;
-	}
-	else {
-		LOG_ERROR("Pktid wrapped");
-		return STATUS_INTEGER_OVERFLOW;
-	}
+    if (pktId64bit) {
+        *static_cast<UINT64*>(pktId) = seqNum;
+    }
+    else
+    {
+        *static_cast<UINT32*>(pktId) = static_cast<UINT32>(seqNum);
+        if (seqNum >= PKTID_WRAP_WARN) {
+            LOG_ERROR("Pktid wrapped");
+            return STATUS_INTEGER_OVERFLOW;
+        }
+    }
+
+    return STATUS_SUCCESS;
 }
 
 #define PKTID_RECV_EXPIRE ((30 * WDF_TIMEOUT_TO_SEC) / KeQueryTimeIncrement())
 
 _Use_decl_annotations_
-NTSTATUS OvpnPktidRecvVerify(OvpnPktidRecv* pr, UINT32 pktId)
+NTSTATUS OvpnPktidRecvVerify(OvpnPktidRecv* pr, UINT64 pktId)
 {
 	LARGE_INTEGER now;
 	KeQueryTickCount(&now);
@@ -69,16 +74,16 @@ NTSTATUS OvpnPktidRecvVerify(OvpnPktidRecv* pr, UINT32 pktId)
 	}
 	else if (pktId > pr->Id) {
 		/* ID jumped forward by more than one */
-		UINT32 delta = pktId - pr->Id;
+		const auto delta = pktId - pr->Id;
 
 		if (delta < REPLAY_WINDOW_SIZE) {
 			pr->Base = REPLAY_INDEX(pr->Base, -(INT32)delta);
 			pr->History[pr->Base / 8] |= (1 << (pr->Base % 8));
-			pr->Extent += delta;
+			pr->Extent += static_cast<UINT32>(delta);
 			if (pr->Extent > REPLAY_WINDOW_SIZE)
 				pr->Extent = REPLAY_WINDOW_SIZE;
-			for (UINT32 i = 1; i < delta; ++i) {
-				unsigned int newb = REPLAY_INDEX(pr->Base, i);
+			for (auto i = 1; i < delta; ++i) {
+				const auto newb = REPLAY_INDEX(pr->Base, i);
 
 				pr->History[newb / 8] &= ~BIT(newb % 8);
 			}
@@ -93,10 +98,8 @@ NTSTATUS OvpnPktidRecvVerify(OvpnPktidRecv* pr, UINT32 pktId)
 	}
 	else {
 		/* ID backtrack */
-		UINT32 delta = pr->Id - pktId;
+		const auto delta = pr->Id - pktId;
 
-		if (delta > pr->MaxBacktrack)
-			pr->MaxBacktrack = delta;
 		if (delta < pr->Extent) {
 			if (pktId > pr->IdFloor) {
 				UINT32 ri = REPLAY_INDEX(pr->Base, delta);

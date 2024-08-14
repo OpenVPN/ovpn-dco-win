@@ -262,9 +262,35 @@ OvpnPeerNewKey(POVPN_DEVICE device, WDFREQUEST request)
     }
 
     POVPN_CRYPTO_DATA cryptoData = NULL;
+    OVPN_CRYPTO_DATA_V2 cryptoDataV2{};
     NTSTATUS status;
 
     GOTO_IF_NOT_NT_SUCCESS(done, status, WdfRequestRetrieveInputBuffer(request, sizeof(OVPN_CRYPTO_DATA), (PVOID*)&cryptoData, nullptr));
+
+    RtlCopyMemory(&cryptoDataV2.V1, cryptoData, sizeof(OVPN_CRYPTO_DATA));
+    GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnCryptoNewKey(&device->CryptoContext, &cryptoDataV2));
+
+done:
+    LOG_EXIT();
+
+    return status;
+}
+
+_Use_decl_annotations_
+NTSTATUS
+OvpnPeerNewKeyV2(POVPN_DEVICE device, WDFREQUEST request)
+{
+    LOG_ENTER();
+
+    if (InterlockedCompareExchange(&device->UserspacePid, 0, 0) == 0) {
+        LOG_ERROR("Peer not added");
+        return STATUS_INVALID_DEVICE_REQUEST;
+    }
+
+    POVPN_CRYPTO_DATA_V2 cryptoData = NULL;
+    NTSTATUS status;
+
+    GOTO_IF_NOT_NT_SUCCESS(done, status, WdfRequestRetrieveInputBuffer(request, sizeof(OVPN_CRYPTO_DATA_V2), (PVOID*)&cryptoData, nullptr));
     GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnCryptoNewKey(&device->CryptoContext, cryptoData));
 
 done:

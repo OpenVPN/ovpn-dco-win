@@ -83,12 +83,21 @@ OvpnTxProcessPacket(_In_ POVPN_DEVICE device, _In_ POVPN_TXQUEUE queue, _In_ NET
 
     InterlockedExchangeAddNoFence64(&device->Stats.TunBytesSent, buffer->Len);
 
-    if (device->CryptoContext.Encrypt) {
+    OvpnCryptoContext* cryptoContext = &device->CryptoContext;
+
+    if (cryptoContext->Encrypt) {
+        auto aeadTagEnd = cryptoContext->CryptoOptions & CRYPTO_OPTIONS_AEAD_TAG_END;
+        auto pktId64bit = cryptoContext->CryptoOptions & CRYPTO_OPTIONS_64BIT_PKTID;
+
         // make space to crypto overhead
-        OvpnTxBufferPush(buffer, device->CryptoContext.CryptoOverhead);
+        OvpnTxBufferPush(buffer, OVPN_DATA_V2_LEN + (pktId64bit ? 8 : 4) + (aeadTagEnd ? 0 : AEAD_AUTH_TAG_LEN));
+        if (aeadTagEnd)
+        {
+            OvpnTxBufferPut(buffer, AEAD_AUTH_TAG_LEN);
+        }
 
         // in-place encrypt, always with primary key
-        status = device->CryptoContext.Encrypt(&device->CryptoContext.Primary, buffer->Data, buffer->Len);
+        status = cryptoContext->Encrypt(&cryptoContext->Primary, buffer->Data, buffer->Len, cryptoContext->CryptoOptions);
     }
     else {
         status = STATUS_INVALID_DEVICE_STATE;
@@ -140,7 +149,7 @@ OvpnEvtTxQueueAdvance(NETPACKETQUEUE netPacketQueue)
     POVPN_TXQUEUE queue = OvpnGetTxQueueContext(netPacketQueue);
     NET_RING_PACKET_ITERATOR pi = NetRingGetAllPackets(queue->Rings);
     POVPN_DEVICE device = OvpnGetDeviceContext(queue->Adapter->WdfDevice);
-    bool packetSent = false;
+    BOOLEAN packetSent = false;
 
     KIRQL kirql = ExAcquireSpinLockShared(&device->SpinLock);
 

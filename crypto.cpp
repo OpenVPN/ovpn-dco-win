@@ -48,11 +48,14 @@ OvpnProtoOp32Compose(UINT opcode, UINT keyId, UINT opPeerId)
 OVPN_CRYPTO_DECRYPT OvpnCryptoDecryptNone;
 
 _Use_decl_annotations_
-NTSTATUS OvpnCryptoDecryptNone(OvpnCryptoKeySlot* keySlot, UCHAR* bufIn, SIZE_T len, UCHAR* bufOut)
+NTSTATUS OvpnCryptoDecryptNone(OvpnCryptoKeySlot* keySlot, UCHAR* bufIn, SIZE_T len, UCHAR* bufOut, INT32 cryptoOptions)
 {
     UNREFERENCED_PARAMETER(keySlot);
 
-    if (len < NONE_CRYPTO_OVERHEAD) {
+    BOOLEAN pktId64bit = cryptoOptions & CRYPTO_OPTIONS_64BIT_PKTID;
+    BOOLEAN cryptoOverhead = OVPN_DATA_V2_LEN + pktId64bit ? 8 : 4;
+
+    if (len < cryptoOverhead) {
         LOG_WARN("Packet too short", TraceLoggingValue(len, "len"));
         return STATUS_DATA_ERROR;
     }
@@ -66,10 +69,11 @@ OVPN_CRYPTO_ENCRYPT OvpnCryptoEncryptNone;
 
 _Use_decl_annotations_
 NTSTATUS
-OvpnCryptoEncryptNone(OvpnCryptoKeySlot* keySlot, UCHAR* buf, SIZE_T len)
+OvpnCryptoEncryptNone(OvpnCryptoKeySlot* keySlot, UCHAR* buf, SIZE_T len, INT32 cryptoOptions)
 {
     UNREFERENCED_PARAMETER(keySlot);
     UNREFERENCED_PARAMETER(len);
+    UNREFERENCED_PARAMETER(cryptoOptions);
 
     // prepend with opcode, key-id and peer-id
     UINT32 op = OvpnProtoOp32Compose(OVPN_OP_DATA_V2, 0, 0);
@@ -121,74 +125,116 @@ OvpnCryptoUninitAlgHandles(_In_ BCRYPT_ALG_HANDLE aesAlgHandle, BCRYPT_ALG_HANDL
 
 static
 NTSTATUS
-OvpnCryptoAEADDoWork(BOOLEAN encrypt, OvpnCryptoKeySlot* keySlot, UCHAR *bufIn, SIZE_T len, UCHAR* bufOut)
+OvpnCryptoAEADDoWork(BOOLEAN encrypt, OvpnCryptoKeySlot* keySlot, UCHAR *bufIn, SIZE_T len, UCHAR* bufOut, INT32 cryptoOptions)
 {
     /*
     AEAD Nonce :
 
      [Packet ID] [HMAC keying material]
-     [4 bytes  ] [8 bytes             ]
+     [4/8 bytes] [8/4 bytes           ]
      [AEAD nonce total : 12 bytes     ]
 
     TLS wire protocol :
 
+    Packet ID is 8 bytes long with CRYPTO_OPTIONS_64BIT_PKTID.
+
      [DATA_V2 opcode] [Packet ID] [AEAD Auth tag] [ciphertext]
-     [4 bytes       ] [4 bytes  ] [16 bytes     ]
+     [4 bytes       ] [4/8 bytes] [16 bytes     ]
+     [AEAD additional data(AD)  ]
+
+    With CRYPTO_OPTIONS_AEAD_TAG_END AEAD Auth tag is placed after ciphertext:
+
+     [DATA_V2 opcode] [Packet ID] [ciphertext] [AEAD Auth tag]
+     [4 bytes       ] [4/8 bytes]              [16 bytes     ]
      [AEAD additional data(AD)  ]
     */
 
     NTSTATUS status = STATUS_SUCCESS;
 
-    if (len < AEAD_CRYPTO_OVERHEAD) {
+    BOOLEAN pktId64bit = cryptoOptions & CRYPTO_OPTIONS_64BIT_PKTID;
+
+    SIZE_T cryptoOverhead = OVPN_DATA_V2_LEN + AEAD_AUTH_TAG_LEN + (pktId64bit ? 8 : 4);
+
+    if (len < cryptoOverhead) {
         LOG_WARN("Packet too short", TraceLoggingValue(len, "len"));
         return STATUS_DATA_ERROR;
     }
 
-    UCHAR nonce[OVPN_PKTID_LEN + OVPN_NONCE_TAIL_LEN];
+    UCHAR nonce[12];
     if (encrypt) {
         // prepend with opcode, key-id and peer-id
         UINT32 op = OvpnProtoOp32Compose(OVPN_OP_DATA_V2, keySlot->KeyId, keySlot->PeerId);
         op = RtlUlongByteSwap(op);
-        *(UINT32*)(bufOut) = op;
+        *reinterpret_cast<UINT32*>(bufOut) = op;
 
-        // calculate pktid
-        UINT32 pktid;
-        GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnPktidXmitNext(&keySlot->PktidXmit, &pktid));
-        ULONG pktidNetwork = RtlUlongByteSwap(pktid);
+        if (pktId64bit)
+        {
+            // calculate pktid
+            UINT64 pktid;
+            GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnPktidXmitNext(&keySlot->PktidXmit, &pktid, true));
+            ULONG64 pktidNetwork = RtlUlonglongByteSwap(pktid);
 
-        // calculate nonce, which is pktid + nonce_tail
-        RtlCopyMemory(nonce, &pktidNetwork, OVPN_PKTID_LEN);
-        RtlCopyMemory(nonce + OVPN_PKTID_LEN, keySlot->EncNonceTail, OVPN_NONCE_TAIL_LEN);
+            // calculate nonce, which is pktid + nonce_tail
+            RtlCopyMemory(nonce, &pktidNetwork, 8);
+            RtlCopyMemory(nonce + 8, keySlot->EncNonceTail, 4);
 
-        // prepend with pktid
-        *(UINT32*)(bufOut + OVPN_DATA_V2_LEN) = pktidNetwork;
+            // prepend with pktid
+            *reinterpret_cast<UINT64*>(bufOut + OVPN_DATA_V2_LEN) = pktidNetwork;
+        }
+        else
+        {
+            // calculate pktid
+            UINT32 pktid;
+            GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnPktidXmitNext(&keySlot->PktidXmit, &pktid, false));
+            ULONG pktidNetwork = RtlUlongByteSwap(pktid);
+
+            // calculate nonce, which is pktid + nonce_tail
+            RtlCopyMemory(nonce, &pktidNetwork, 4);
+            RtlCopyMemory(nonce + 4, keySlot->EncNonceTail, 8);
+
+            // prepend with pktid
+            *reinterpret_cast<UINT32*>(bufOut + OVPN_DATA_V2_LEN) = pktidNetwork;
+        }
     }
     else {
-        RtlCopyMemory(nonce, bufIn + OVPN_DATA_V2_LEN, OVPN_PKTID_LEN);
-        RtlCopyMemory(nonce + OVPN_PKTID_LEN, &keySlot->DecNonceTail, sizeof(keySlot->DecNonceTail));
+        ULONG64 pktId;
 
-        UINT32 pktId = RtlUlongByteSwap(*(UINT32*)nonce);
+        RtlCopyMemory(nonce, bufIn + OVPN_DATA_V2_LEN, pktId64bit ? 8 : 4);
+        RtlCopyMemory(nonce + (pktId64bit ? 8 : 4), &keySlot->DecNonceTail, pktId64bit ? 4 : 8);
+        if (pktId64bit)
+        {
+            pktId = RtlUlonglongByteSwap(*reinterpret_cast<UINT64*>(nonce));
+        }
+        else
+        {
+            pktId = static_cast<ULONG64>(RtlUlongByteSwap(*reinterpret_cast<UINT32*>(nonce)));
+        }
+
         status = OvpnPktidRecvVerify(&keySlot->PktidRecv, pktId);
 
         if (!NT_SUCCESS(status)) {
-            LOG_ERROR("Invalid pktId", TraceLoggingUInt32(pktId, "pktId"));
+            LOG_ERROR("Invalid pktId", TraceLoggingUInt64(pktId, "pktId"));
             return STATUS_DATA_ERROR;
         }
     }
+
+    // we prepended buf with crypto overhead
+    len -= cryptoOverhead;
+
+    BOOLEAN aeadTagEnd = cryptoOptions & CRYPTO_OPTIONS_AEAD_TAG_END;
 
     BCRYPT_AUTHENTICATED_CIPHER_MODE_INFO authInfo;
     BCRYPT_INIT_AUTH_MODE_INFO(authInfo);
     authInfo.pbNonce = nonce;
     authInfo.cbNonce = sizeof(nonce);
-    authInfo.pbTag = (encrypt ? bufOut : bufIn) + OVPN_DATA_V2_LEN + OVPN_PKTID_LEN;
+    authInfo.pbTag = (encrypt ? bufOut : bufIn) + OVPN_DATA_V2_LEN + (pktId64bit ? 8 : 4) + (aeadTagEnd ? len : 0);
     authInfo.cbTag = AEAD_AUTH_TAG_LEN;
     authInfo.pbAuthData = (encrypt ? bufOut : bufIn);
-    authInfo.cbAuthData = OVPN_DATA_V2_LEN + OVPN_PKTID_LEN;
+    authInfo.cbAuthData = OVPN_DATA_V2_LEN + (pktId64bit ? 8 : 4);
 
-    bufOut += AEAD_CRYPTO_OVERHEAD;
-    bufIn += AEAD_CRYPTO_OVERHEAD;
-
-    len -= AEAD_CRYPTO_OVERHEAD;
+    auto payloadOffset = OVPN_DATA_V2_LEN + (pktId64bit ? 8 : 4) + (aeadTagEnd ? 0 : AEAD_AUTH_TAG_LEN);
+    bufOut += payloadOffset;
+    bufIn += payloadOffset;
 
     // non-chaining mode
     ULONG bytesDone = 0;
@@ -205,26 +251,28 @@ OVPN_CRYPTO_DECRYPT OvpnCryptoDecryptAEAD;
 
 _Use_decl_annotations_
 NTSTATUS
-OvpnCryptoDecryptAEAD(OvpnCryptoKeySlot* keySlot, UCHAR* bufIn, SIZE_T len, UCHAR* bufOut)
+OvpnCryptoDecryptAEAD(OvpnCryptoKeySlot* keySlot, UCHAR* bufIn, SIZE_T len, UCHAR* bufOut, INT32 cryptoOptions)
 {
-    return OvpnCryptoAEADDoWork(FALSE, keySlot, bufIn, len, bufOut);
+    return OvpnCryptoAEADDoWork(FALSE, keySlot, bufIn, len, bufOut, cryptoOptions);
 }
 
 OVPN_CRYPTO_ENCRYPT OvpnCryptoEncryptAEAD;
 
 _Use_decl_annotations_
 NTSTATUS
-OvpnCryptoEncryptAEAD(OvpnCryptoKeySlot* keySlot, UCHAR* buf, SIZE_T len)
+OvpnCryptoEncryptAEAD(OvpnCryptoKeySlot* keySlot, UCHAR* buf, SIZE_T len, INT32 cryptoOptions)
 {
-    return OvpnCryptoAEADDoWork(TRUE, keySlot, buf, len, buf);
+    return OvpnCryptoAEADDoWork(TRUE, keySlot, buf, len, buf, cryptoOptions);
 }
 
 _Use_decl_annotations_
 NTSTATUS
-OvpnCryptoNewKey(OvpnCryptoContext* cryptoContext, POVPN_CRYPTO_DATA cryptoData)
+OvpnCryptoNewKey(OvpnCryptoContext* cryptoContext, POVPN_CRYPTO_DATA_V2 cryptoDataV2)
 {
     OvpnCryptoKeySlot* keySlot = NULL;
     NTSTATUS status = STATUS_SUCCESS;
+
+    POVPN_CRYPTO_DATA cryptoData = &cryptoDataV2->V1;
 
     if (cryptoData->KeySlot == OVPN_KEY_SLOT::OVPN_KEY_SLOT_PRIMARY) {
         keySlot = &cryptoContext->Primary;
@@ -235,6 +283,15 @@ OvpnCryptoNewKey(OvpnCryptoContext* cryptoContext, POVPN_CRYPTO_DATA cryptoData)
     else {
         LOG_ERROR("Invalid key slot", TraceLoggingValue((int)cryptoData->KeySlot, "keySlot"));
         return STATUS_INVALID_DEVICE_REQUEST;
+    }
+
+    if (cryptoDataV2->CryptoOptions & CRYPTO_OPTIONS_64BIT_PKTID)
+    {
+        cryptoContext->CryptoOptions |= CRYPTO_OPTIONS_64BIT_PKTID;
+    }
+    if (cryptoDataV2->CryptoOptions & CRYPTO_OPTIONS_AEAD_TAG_END)
+    {
+        cryptoContext->CryptoOptions |= CRYPTO_OPTIONS_AEAD_TAG_END;
     }
 
     if ((cryptoData->CipherAlg == OVPN_CIPHER_ALG_AES_GCM) || (cryptoData->CipherAlg == OVPN_CIPHER_ALG_CHACHA20_POLY1305)) {
@@ -284,16 +341,12 @@ OvpnCryptoNewKey(OvpnCryptoContext* cryptoContext, POVPN_CRYPTO_DATA cryptoData)
         keySlot->KeyId = cryptoData->KeyId;
         keySlot->PeerId = cryptoData->PeerId;
 
-        cryptoContext->CryptoOverhead = AEAD_CRYPTO_OVERHEAD;
-
         LOG_INFO("New key", TraceLoggingValue(cryptoData->CipherAlg == OVPN_CIPHER_ALG_AES_GCM ? "aes-gcm" : "chacha20-poly1305", "alg"),
             TraceLoggingValue(cryptoData->KeyId, "KeyId"), TraceLoggingValue(cryptoData->KeyId, "PeerId"));
     }
     else if (cryptoData->CipherAlg == OVPN_CIPHER_ALG_NONE) {
         cryptoContext->Encrypt = OvpnCryptoEncryptNone;
         cryptoContext->Decrypt = OvpnCryptoDecryptNone;
-
-        cryptoContext->CryptoOverhead = NONE_CRYPTO_OVERHEAD;
 
         LOG_INFO("Using cipher none");
     }
