@@ -128,7 +128,7 @@ OvpnTxProcessPacket(_In_ POVPN_DEVICE device, _In_ POVPN_TXQUEUE queue, _In_ NET
             *tail = buffer;
         }
 
-        OvpnTimerReset(peer->KeepaliveXmitTimer, peer->KeepaliveInterval);
+        OvpnTimerResetXmit(peer->Timer);
     }
     else {
         OvpnTxBufferPoolPut(buffer);
@@ -179,9 +179,16 @@ OvpnEvtTxQueueAdvance(NETPACKETQUEUE netPacketQueue)
     }
     NetPacketIteratorSet(&pi);
 
-    if (packetSent && !device->Socket.Tcp) {
-        // this will use WskSendMessages to send buffers list which we constructed before
-        LOG_IF_NOT_NT_SUCCESS(OvpnSocketSend(&device->Socket, txBufferHead));
+    if (packetSent) {
+        OvpnPeerContext* peer = OvpnGetFirstPeer(&device->Peers);
+        if (peer != NULL) {
+            OvpnTimerResetXmit(peer->Timer);
+
+            if (!device->Socket.Tcp) {
+                // this will use WskSendMessages to send buffers list which we constructed before
+                LOG_IF_NOT_NT_SUCCESS(OvpnSocketSend(&device->Socket, txBufferHead));
+            }
+        }
     }
 
     ExReleaseSpinLockShared(&device->SpinLock, kirql);

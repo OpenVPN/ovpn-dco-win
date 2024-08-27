@@ -39,11 +39,8 @@ struct OvpnPeerContext
     // keepalive timeout in seconds
     LONG KeepaliveTimeout;
 
-    // timer used to send periodic ping messages to the server if no data has been sent within the past KeepaliveInterval seconds
-    WDFTIMER KeepaliveXmitTimer;
-
-    // timer used to report keepalive timeout error to userspace when no data has been received for KeepaliveTimeout seconds
-    WDFTIMER KeepaliveRecvTimer;
+    // 1-sec timer which handles ping intervals and keepalive timeouts
+    WDFTIMER Timer;
 };
 
 _Must_inspect_result_

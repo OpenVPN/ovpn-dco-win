@@ -203,7 +203,7 @@ VOID OvpnSocketDataPacketReceived(_In_ POVPN_DEVICE device, UCHAR op, _In_reads_
         return;
     }
 
-    OvpnTimerReset(peer->KeepaliveRecvTimer, peer->KeepaliveTimeout);
+    OvpnTimerResetRecv(peer->Timer);
 
     // points to the beginning of plaintext
     UCHAR* buf = buffer->Data + device->CryptoOverhead;

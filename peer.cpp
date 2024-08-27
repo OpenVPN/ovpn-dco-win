@@ -43,8 +43,7 @@ VOID
 OvpnPeerCtxFree(OvpnPeerContext* peer)
 {
     OvpnCryptoUninit(&peer->CryptoContext);
-    OvpnTimerDestroy(&peer->KeepaliveXmitTimer);
-    OvpnTimerDestroy(&peer->KeepaliveRecvTimer);
+    OvpnTimerDestroy(&peer->Timer);
 
     ExFreePoolWithTag(peer, 'ovpn');
 }
@@ -147,6 +146,8 @@ OvpnPeerNew(POVPN_DEVICE device, WDFREQUEST request)
 
         OvpnPeerZeroStats(&device->Stats);
 
+        GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnTimerCreate(device->WdfDevice, peerCtx, &peerCtx->Timer));
+
         if (proto_tcp) {
             LOG_IF_NOT_NT_SUCCESS(status = WdfRequestForwardToIoQueue(request, device->PendingNewPeerQueue));
             // start async connect
@@ -229,29 +230,15 @@ NTSTATUS OvpnPeerSet(POVPN_DEVICE device, WDFREQUEST request)
     if (set_peer->KeepaliveInterval != -1) {
         peer->KeepaliveInterval = set_peer->KeepaliveInterval;
 
-        if (peer->KeepaliveInterval > 0) {
-            // keepalive xmit timer, sends ping packets
-            GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnTimerXmitCreate(device->WdfDevice, peer, peer->KeepaliveInterval, &peer->KeepaliveXmitTimer));
-            OvpnTimerReset(peer->KeepaliveXmitTimer, peer->KeepaliveInterval);
-        }
-        else {
-            LOG_INFO("Destroy xmit timer");
-            OvpnTimerDestroy(&peer->KeepaliveXmitTimer);
-        }
+        // keepalive xmit timer, sends ping packets
+        OvpnTimerSetXmitInterval(peer->Timer, peer->KeepaliveInterval);
     }
 
     if (peer->KeepaliveTimeout != -1) {
         peer->KeepaliveTimeout = set_peer->KeepaliveTimeout;
 
-        if (peer->KeepaliveTimeout > 0) {
-            // keepalive recv timer, detects keepalive timeout
-            GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnTimerRecvCreate(device->WdfDevice, peer, &peer->KeepaliveRecvTimer));
-            OvpnTimerReset(peer->KeepaliveRecvTimer, peer->KeepaliveTimeout);
-        }
-        else {
-            LOG_INFO("Destroy recv timer");
-            OvpnTimerDestroy(&peer->KeepaliveRecvTimer);
-        }
+        // keepalive recv timer, detects keepalive timeout
+        OvpnTimerSetRecvTimeout(peer->Timer, peer->KeepaliveTimeout);
     }
 
 done:

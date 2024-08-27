@@ -37,6 +37,13 @@ static const UCHAR OvpnKeepaliveMessage[] = {
 // Context added to a timer's attributes
 typedef struct _OVPN_PEER_TIMER_CONTEXT {
     OvpnPeerContext* Peer;
+
+    LARGE_INTEGER lastXmit;
+    LARGE_INTEGER lastRecv;
+
+    // 0 means "not set"
+    LONG recvTimeout;
+    LONG xmitInterval;
 } OVPN_PEER_TIMER_CONTEXT, * POVPN_PEER_TIMER_CONTEXT;
 
 WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(OVPN_PEER_TIMER_CONTEXT, OvpnGetPeerTimerContext);
@@ -47,11 +54,8 @@ BOOLEAN OvpnTimerIsKeepaliveMessage(const PUCHAR buf, SIZE_T len)
     return RtlCompareMemory(buf, OvpnKeepaliveMessage, len) == sizeof(OvpnKeepaliveMessage);
 }
 
-_Function_class_(EVT_WDF_TIMER)
 static VOID OvpnTimerXmit(WDFTIMER timer)
 {
-    LOG_ENTER();
-
     POVPN_DEVICE device = OvpnGetDeviceContext(WdfTimerGetParentObject(timer));
     POVPN_PEER_TIMER_CONTEXT timerCtx = OvpnGetPeerTimerContext(timer);
     OVPN_TX_BUFFER* buffer;
@@ -92,30 +96,24 @@ static VOID OvpnTimerXmit(WDFTIMER timer)
         OvpnTxBufferPoolPut(buffer);
     }
     ExReleaseSpinLockShared(&device->SpinLock, kiqrl);
-
-    LOG_EXIT();
 }
 
-_Function_class_(EVT_WDF_TIMER)
-static VOID OvpnTimerRecv(WDFTIMER timer)
+static BOOLEAN OvpnTimerRecv(WDFTIMER timer)
 {
-    LOG_ENTER();
-
-    LOG_WARN("Keepalive timeout");
-
     POVPN_DEVICE device = OvpnGetDeviceContext(WdfTimerGetParentObject(timer));
 
     WDFREQUEST request;
     NTSTATUS status = WdfIoQueueRetrieveNextRequest(device->PendingReadsQueue, &request);
     if (!NT_SUCCESS(status)) {
         LOG_WARN("No pending request for keepalive timeout notification");
+        return FALSE;
     }
     else {
+        LOG_INFO("Notify userspace about keepalive timeout");
         ULONG_PTR bytesSent = 0;
         WdfRequestCompleteWithInformation(request, STATUS_CONNECTION_DISCONNECTED, bytesSent);
+        return TRUE;
     }
-
-    LOG_EXIT();
 }
 
 _Use_decl_annotations_
@@ -129,7 +127,31 @@ VOID OvpnTimerDestroy(WDFTIMER* timer)
     }
 }
 
-static NTSTATUS OvpnTimerCreate(WDFOBJECT parent, OvpnPeerContext* peer, ULONG period, PFN_WDF_TIMER func, _Inout_ WDFTIMER* timer)
+_Function_class_(EVT_WDF_TIMER)
+static VOID OvpnTimerTick(WDFTIMER timer)
+{
+    LARGE_INTEGER now;
+    KeQuerySystemTime(&now);
+
+    POVPN_PEER_TIMER_CONTEXT timerCtx = OvpnGetPeerTimerContext(timer);
+    if ((timerCtx->xmitInterval > 0) && (((now.QuadPart - timerCtx->lastXmit.QuadPart) / WDF_TIMEOUT_TO_SEC) > timerCtx->xmitInterval))
+    {
+        OvpnTimerXmit(timer);
+        timerCtx->lastXmit = now;
+    }
+
+    if ((timerCtx->recvTimeout > 0) && (((now.QuadPart - timerCtx->lastRecv.QuadPart) / WDF_TIMEOUT_TO_SEC) > timerCtx->recvTimeout))
+    {
+        // have we have completed pending read request?
+        if (OvpnTimerRecv(timer))
+        {
+            timerCtx->recvTimeout = 0; // one-off timer
+        }
+    }
+}
+
+_Use_decl_annotations_
+NTSTATUS OvpnTimerCreate(WDFOBJECT parent, OvpnPeerContext* peer, _Inout_ WDFTIMER* timer)
 {
     LOG_ENTER();
 
@@ -141,8 +163,9 @@ static NTSTATUS OvpnTimerCreate(WDFOBJECT parent, OvpnPeerContext* peer, ULONG p
     }
 
     WDF_TIMER_CONFIG timerConfig;
-    WDF_TIMER_CONFIG_INIT(&timerConfig, func);
-    timerConfig.Period = period * 1000;
+    WDF_TIMER_CONFIG_INIT(&timerConfig, OvpnTimerTick);
+    timerConfig.TolerableDelay = TolerableDelayUnlimited;
+    timerConfig.Period = 1000;
 
     WDF_OBJECT_ATTRIBUTES timerAttributes;
     WDF_OBJECT_ATTRIBUTES_INIT(&timerAttributes);
@@ -155,36 +178,51 @@ static NTSTATUS OvpnTimerCreate(WDFOBJECT parent, OvpnPeerContext* peer, ULONG p
     if (NT_SUCCESS(status)) {
         POVPN_PEER_TIMER_CONTEXT pTimerContext = OvpnGetPeerTimerContext(*timer);
         pTimerContext->Peer = peer;
+        WdfTimerStart(*timer, WDF_REL_TIMEOUT_IN_SEC(1));
     }
 
     LOG_EXIT();
     return status;
 }
 
-_Use_decl_annotations_
-NTSTATUS OvpnTimerXmitCreate(WDFOBJECT parent, OvpnPeerContext* peer, ULONG period, WDFTIMER* timer)
-{
-    NTSTATUS status;
-    LOG_INFO("Create xmit timer", TraceLoggingValue(period, "period"));
-    LOG_IF_NOT_NT_SUCCESS(status = OvpnTimerCreate(parent, peer, period, OvpnTimerXmit, timer));
+#define CHECK_TIMER_HANDLE(timer) \
+    do { \
+        if ((timer) == WDF_NO_HANDLE) { \
+            LOG_ERROR("Timer handle is not initialized"); \
+            return; \
+        } \
+    } while (0)
 
-    return status;
+VOID OvpnTimerSetXmitInterval(WDFTIMER timer, LONG xmitInterval)
+{
+    CHECK_TIMER_HANDLE(timer);
+
+    POVPN_PEER_TIMER_CONTEXT timerCtx = OvpnGetPeerTimerContext(timer);
+    timerCtx->xmitInterval = xmitInterval;
+    KeQuerySystemTime(&timerCtx->lastXmit);
 }
 
-_Use_decl_annotations_
-NTSTATUS OvpnTimerRecvCreate(WDFOBJECT parent, OvpnPeerContext* peer, WDFTIMER* timer)
+VOID OvpnTimerSetRecvTimeout(WDFTIMER timer, LONG recvTimeout)
 {
-    NTSTATUS status;
-    LOG_INFO("Create recv timer");
-    LOG_IF_NOT_NT_SUCCESS(status = OvpnTimerCreate(parent, peer, 0, OvpnTimerRecv, timer));
+    CHECK_TIMER_HANDLE(timer);
 
-    return status;
+    POVPN_PEER_TIMER_CONTEXT timerCtx = OvpnGetPeerTimerContext(timer);
+    timerCtx->recvTimeout = recvTimeout;
+    KeQuerySystemTime(&timerCtx->lastRecv);
 }
 
-VOID OvpnTimerReset(WDFTIMER timer, ULONG dueTime)
+VOID OvpnTimerResetXmit(WDFTIMER timer)
 {
-    if (timer != WDF_NO_HANDLE) {
-        // if timer has already been created this will reset "due time" value to the new one
-        WdfTimerStart(timer, WDF_REL_TIMEOUT_IN_SEC(dueTime));
-    }
+    CHECK_TIMER_HANDLE(timer);
+
+    POVPN_PEER_TIMER_CONTEXT timerCtx = OvpnGetPeerTimerContext(timer);
+    KeQuerySystemTime(&timerCtx->lastXmit);
+}
+
+VOID OvpnTimerResetRecv(WDFTIMER timer)
+{
+    CHECK_TIMER_HANDLE(timer);
+
+    POVPN_PEER_TIMER_CONTEXT timerCtx = OvpnGetPeerTimerContext(timer);
+    KeQuerySystemTime(&timerCtx->lastRecv);
 }
