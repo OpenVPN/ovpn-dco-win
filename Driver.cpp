@@ -229,6 +229,38 @@ done_not_complete:
     ExReleaseSpinLockShared(&device->SpinLock, kiqrl);
 }
 
+NTSTATUS
+OvpnSetMode(POVPN_DEVICE device, WDFREQUEST request)
+{
+    POVPN_SET_MODE mode;
+    NTSTATUS status = WdfRequestRetrieveInputBuffer(request, sizeof(OVPN_SET_MODE), (PVOID*)&mode, NULL);
+    if (!NT_SUCCESS(status)) {
+        return status;
+    }
+
+    if (device->Mode != OVPN_MODE_P2P) {
+        LOG_ERROR("mode already set");
+        return STATUS_ALREADY_INITIALIZED;
+    }
+
+    status = STATUS_SUCCESS;
+
+    LOG_INFO("Set mode", TraceLoggingValue(static_cast<int>(mode->Mode), "mode"));
+
+    switch (mode->Mode) {
+    case OVPN_MODE_P2P:
+    case OVPN_MODE_MP:
+        device->Mode = mode->Mode;
+        break;
+
+    default:
+        status = STATUS_INVALID_PARAMETER;
+        break;
+    }
+
+    return status;
+}
+
 EVT_WDF_IO_QUEUE_IO_DEVICE_CONTROL OvpnEvtIoDeviceControl;
 
 _Use_decl_annotations_
@@ -289,6 +321,12 @@ OvpnEvtIoDeviceControl(WDFQUEUE queue, WDFREQUEST request, size_t outputBufferLe
 
     case OVPN_IOCTL_GET_VERSION:
         status = OvpnGetVersion(request, &bytesReturned);
+        break;
+
+    case OVPN_IOCTL_SET_MODE:
+        kirql = ExAcquireSpinLockExclusive(&device->SpinLock);
+        status = OvpnSetMode(device, request);
+        ExReleaseSpinLockExclusive(&device->SpinLock, kirql);
         break;
 
     default:

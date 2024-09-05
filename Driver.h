@@ -94,6 +94,7 @@ struct OVPN_DEVICE {
     _Guarded_by_(SpinLock)
     RTL_GENERIC_TABLE Peers;
 
+    OVPN_MODE Mode;
 };
 
 typedef OVPN_DEVICE * POVPN_DEVICE;
