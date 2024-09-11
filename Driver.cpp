@@ -261,6 +261,47 @@ OvpnSetMode(POVPN_DEVICE device, WDFREQUEST request)
     return status;
 }
 
+static NTSTATUS
+OvpnStopVPN(_In_ POVPN_DEVICE device)
+{
+    LOG_ENTER();
+
+    KIRQL kirql = ExAcquireSpinLockExclusive(&device->SpinLock);
+    PWSK_SOCKET socket = device->Socket.Socket;
+    device->Socket.Socket = NULL;
+
+    OvpnFlushPeers(device);
+
+    device->Mode = OVPN_MODE_P2P;
+
+    RtlZeroMemory(&device->Socket.TcpState, sizeof(OvpnSocketTcpState));
+    RtlZeroMemory(&device->Socket.UdpState, sizeof(OvpnSocketUdpState));
+
+    ExReleaseSpinLockExclusive(&device->SpinLock, kirql);
+
+    if (socket != NULL) {
+        LOG_IF_NOT_NT_SUCCESS(OvpnSocketClose(socket));
+    }
+
+    // flush buffers in control queue so that client won't get control channel messages from previous session
+    while (LIST_ENTRY* entry = OvpnBufferQueueDequeue(device->ControlRxBufferQueue)) {
+        OVPN_RX_BUFFER* buffer = CONTAINING_RECORD(entry, OVPN_RX_BUFFER, QueueListEntry);
+        // return buffer back to pool
+        OvpnRxBufferPoolPut(buffer);
+    }
+
+    WDFREQUEST request;
+    while (NT_SUCCESS(WdfIoQueueRetrieveNextRequest(device->PendingReadsQueue, &request))) {
+        ULONG_PTR bytesCopied = 0;
+        LOG_INFO("Cancel IO request from manual queue");
+        WdfRequestCompleteWithInformation(request, STATUS_CANCELLED, bytesCopied);
+    }
+
+    LOG_EXIT();
+
+    return STATUS_SUCCESS;
+}
+
 EVT_WDF_IO_QUEUE_IO_DEVICE_CONTROL OvpnEvtIoDeviceControl;
 
 _Use_decl_annotations_
@@ -288,7 +329,7 @@ OvpnEvtIoDeviceControl(WDFQUEUE queue, WDFREQUEST request, size_t outputBufferLe
         break;
 
     case OVPN_IOCTL_DEL_PEER:
-        status = OvpnPeerDel(device);
+        status = OvpnStopVPN(device);
         break;
 
     case OVPN_IOCTL_START_VPN:
@@ -347,8 +388,7 @@ VOID OvpnEvtFileCleanup(WDFFILEOBJECT fileObject) {
 
     POVPN_DEVICE device = OvpnGetDeviceContext(WdfFileObjectGetDevice(fileObject));
 
-    // peer might already be deleted
-    (VOID)OvpnPeerDel(device);
+    (VOID)OvpnStopVPN(device);
 
     if (device->Adapter != NULL) {
         OvpnAdapterSetLinkState(OvpnGetAdapterContext(device->Adapter), MediaConnectStateDisconnected);

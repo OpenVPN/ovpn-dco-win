@@ -162,46 +162,6 @@ done:
 }
 
 _Use_decl_annotations_
-NTSTATUS
-OvpnPeerDel(POVPN_DEVICE device)
-{
-    LOG_ENTER();
-
-    KIRQL kirql = ExAcquireSpinLockExclusive(&device->SpinLock);
-
-    PWSK_SOCKET socket = device->Socket.Socket;
-
-    device->Socket.Socket = NULL;
-    OvpnFlushPeers(device);
-
-    RtlZeroMemory(&device->Socket.TcpState, sizeof(OvpnSocketTcpState));
-    RtlZeroMemory(&device->Socket.UdpState, sizeof(OvpnSocketUdpState));
-
-    // OvpnSocketClose requires PASSIVE_LEVEL, so must release lock
-    ExReleaseSpinLockExclusive(&device->SpinLock, kirql);
-
-    LOG_IF_NOT_NT_SUCCESS(OvpnSocketClose(socket));
-
-    // flush buffers in control queue so that client won't get control channel messages from previous session
-    while (LIST_ENTRY* entry = OvpnBufferQueueDequeue(device->ControlRxBufferQueue)) {
-        OVPN_RX_BUFFER* buffer = CONTAINING_RECORD(entry, OVPN_RX_BUFFER, QueueListEntry);
-        // return buffer back to pool
-        OvpnRxBufferPoolPut(buffer);
-    }
-
-    WDFREQUEST request;
-    while (NT_SUCCESS(WdfIoQueueRetrieveNextRequest(device->PendingReadsQueue, &request))) {
-        ULONG_PTR bytesCopied = 0;
-        LOG_INFO("Cancel IO request from manual queue");
-        WdfRequestCompleteWithInformation(request, STATUS_CANCELLED, bytesCopied);
-    }
-
-    LOG_EXIT();
-
-    return STATUS_SUCCESS;
-}
-
-_Use_decl_annotations_
 NTSTATUS OvpnPeerSet(POVPN_DEVICE device, WDFREQUEST request)
 {
     LOG_ENTER();
