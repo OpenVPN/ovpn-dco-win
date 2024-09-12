@@ -261,6 +261,27 @@ OvpnSetMode(POVPN_DEVICE device, WDFREQUEST request)
     return status;
 }
 
+static BOOLEAN
+OvpnDeviceCheckMode(OVPN_MODE mode, ULONG code)
+{
+    if (mode == OVPN_MODE_MP)
+    {
+        switch (code)
+        {
+        // all those IOCTLs are only for P2P mode
+        case OVPN_IOCTL_NEW_PEER:
+        case OVPN_IOCTL_DEL_PEER:
+        case OVPN_IOCTL_NEW_KEY:
+        case OVPN_IOCTL_NEW_KEY_V2:
+        case OVPN_IOCTL_SWAP_KEYS:
+        case OVPN_IOCTL_SET_PEER:
+            return FALSE;
+        }
+    }
+
+    return TRUE;
+}
+
 static NTSTATUS
 OvpnStopVPN(_In_ POVPN_DEVICE device)
 {
@@ -315,6 +336,12 @@ OvpnEvtIoDeviceControl(WDFQUEUE queue, WDFREQUEST request, size_t outputBufferLe
     POVPN_DEVICE device = OvpnGetDeviceContext(WdfIoQueueGetDevice(queue));
 
     ULONG_PTR bytesReturned = 0;
+
+    if (!OvpnDeviceCheckMode(device->Mode, ioControlCode))
+    {
+        WdfRequestCompleteWithInformation(request, STATUS_INVALID_DEVICE_STATE, bytesReturned);
+        return;
+    }
 
     KIRQL kirql = 0;
     switch ((long)ioControlCode) {
