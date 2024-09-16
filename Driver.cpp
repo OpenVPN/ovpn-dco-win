@@ -264,10 +264,8 @@ OvpnSetMode(POVPN_DEVICE device, WDFREQUEST request)
 static BOOLEAN
 OvpnDeviceCheckMode(OVPN_MODE mode, ULONG code)
 {
-    if (mode == OVPN_MODE_MP)
-    {
-        switch (code)
-        {
+    if (mode == OVPN_MODE_MP) {
+        switch (code) {
         // all those IOCTLs are only for P2P mode
         case OVPN_IOCTL_NEW_PEER:
         case OVPN_IOCTL_DEL_PEER:
@@ -275,6 +273,14 @@ OvpnDeviceCheckMode(OVPN_MODE mode, ULONG code)
         case OVPN_IOCTL_NEW_KEY_V2:
         case OVPN_IOCTL_SWAP_KEYS:
         case OVPN_IOCTL_SET_PEER:
+        case OVPN_IOCTL_START_VPN:
+            return FALSE;
+        }
+    }
+    else if (mode == OVPN_MODE_P2P) {
+        switch (code) {
+        // those IOCTLs are for MP mode
+        case OVPN_IOCTL_MP_START_VPN:
             return FALSE;
         }
     }
@@ -321,6 +327,63 @@ OvpnStopVPN(_In_ POVPN_DEVICE device)
     LOG_EXIT();
 
     return STATUS_SUCCESS;
+}
+
+_Must_inspect_result_
+_IRQL_requires_(PASSIVE_LEVEL)
+_IRQL_requires_same_
+NTSTATUS
+OvpnMPStartVPN(POVPN_DEVICE device, WDFREQUEST request, ULONG_PTR* bytesReturned)
+{
+    NTSTATUS status = STATUS_SUCCESS;
+
+    LOG_ENTER();
+
+    KIRQL kirql = ExAcquireSpinLockExclusive(&device->SpinLock);
+    if (device->Socket.Socket != NULL) {
+        ExReleaseSpinLockExclusive(&device->SpinLock, kirql);
+
+        status = STATUS_ALREADY_INITIALIZED;
+
+        goto done;
+    }
+    else {
+        ExReleaseSpinLockExclusive(&device->SpinLock, kirql);
+
+        POVPN_MP_START_VPN addrIn = NULL;
+        GOTO_IF_NOT_NT_SUCCESS(done, status, WdfRequestRetrieveInputBuffer(request, sizeof(OVPN_MP_START_VPN), (PVOID*)&addrIn, NULL));
+
+        PWSK_SOCKET socket = NULL;
+        POVPN_DRIVER driver = OvpnGetDriverContext(WdfGetDriver());
+
+        // Bind to the address provided
+        status = OvpnSocketInit(&driver->WskProviderNpi, &driver->WskRegistration,
+            addrIn->ListenAddress.Addr4.sin_family, false,
+            (PSOCKADDR)&addrIn->ListenAddress, NULL,
+            0, device, &socket);
+        if (!NT_SUCCESS(status)) {
+            LOG_ERROR("Socket create failed", TraceLoggingValue((UINT32)status),
+                TraceLoggingHexUInt32(*(UINT32*)(&addrIn->ListenAddress.Addr4.sin_addr), "addr"));
+            goto done;
+        }
+
+        kirql = ExAcquireSpinLockExclusive(&device->SpinLock);
+        device->Socket.Socket = socket;
+        ExReleaseSpinLockExclusive(&device->SpinLock, kirql);
+
+        // we might bind the socket to port 0 and we want to get actual port back to userspace
+        POVPN_MP_START_VPN addrOut = NULL;
+        GOTO_IF_NOT_NT_SUCCESS(done, status, WdfRequestRetrieveOutputBuffer(request, sizeof(OVPN_MP_START_VPN), (PVOID*)&addrOut, NULL));
+        RtlCopyMemory(addrOut, addrIn, sizeof(OVPN_MP_START_VPN));
+        *bytesReturned = sizeof(OVPN_MP_START_VPN);
+    }
+
+    OvpnAdapterSetLinkState(OvpnGetAdapterContext(device->Adapter), MediaConnectStateConnected);
+
+done:
+    LOG_EXIT();
+
+    return status;
 }
 
 EVT_WDF_IO_QUEUE_IO_DEVICE_CONTROL OvpnEvtIoDeviceControl;
@@ -395,6 +458,10 @@ OvpnEvtIoDeviceControl(WDFQUEUE queue, WDFREQUEST request, size_t outputBufferLe
         kirql = ExAcquireSpinLockExclusive(&device->SpinLock);
         status = OvpnSetMode(device, request);
         ExReleaseSpinLockExclusive(&device->SpinLock, kirql);
+        break;
+
+    case OVPN_IOCTL_MP_START_VPN:
+        status = OvpnMPStartVPN(device, request, &bytesReturned);
         break;
 
     default:

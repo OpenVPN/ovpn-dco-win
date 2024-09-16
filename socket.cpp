@@ -522,12 +522,19 @@ OvpnSocketInit(WSK_PROVIDER_NPI* wskProviderNpi, WSK_REGISTRATION* wskRegistrati
             return datagramDispatch->WskBind(*socket, localAddr, 0, irp);
         }, [](PIRP) {}));
 
-        // set remote
-        PWSK_PROVIDER_BASIC_DISPATCH basicDispatch = (PWSK_PROVIDER_BASIC_DISPATCH)(*socket)->Dispatch;
-
-        GOTO_IF_NOT_NT_SUCCESS(error, status, OvpnSocketSyncOp("SetRemote", [basicDispatch, socket, remoteAddrSize, remoteAddr](PIRP irp) {
-            return basicDispatch->WskControlSocket(*socket, WskIoctl, SIO_WSK_SET_REMOTE_ADDRESS, 0, remoteAddrSize, remoteAddr, 0, NULL, NULL, irp);
+        // get the locally bound address for the socket
+        GOTO_IF_NOT_NT_SUCCESS(error, status, OvpnSocketSyncOp("GetLocalAddr", [datagramDispatch, socket, localAddr](PIRP irp) {
+            return datagramDispatch->WskGetLocalAddress(*socket, localAddr, irp);
         }, [](PIRP) {}));
+
+        if (remoteAddr != NULL) {
+            // set remote
+            PWSK_PROVIDER_BASIC_DISPATCH basicDispatch = (PWSK_PROVIDER_BASIC_DISPATCH)(*socket)->Dispatch;
+
+            GOTO_IF_NOT_NT_SUCCESS(error, status, OvpnSocketSyncOp("SetRemote", [basicDispatch, socket, remoteAddrSize, remoteAddr](PIRP irp) {
+                return basicDispatch->WskControlSocket(*socket, WskIoctl, SIO_WSK_SET_REMOTE_ADDRESS, 0, remoteAddrSize, remoteAddr, 0, NULL, NULL, irp);
+                }, [](PIRP) {}));
+        }
 
         // enable ReceiveFrom event
         eventCallbackControl.NpiId = &NPI_WSK_INTERFACE_ID;
