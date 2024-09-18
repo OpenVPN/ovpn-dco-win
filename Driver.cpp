@@ -187,7 +187,7 @@ OvpnEvtIoWrite(WDFQUEUE queue, WDFREQUEST request, size_t length)
     // acquire spinlock, since we access device->TransportSocket
     KIRQL kiqrl = ExAcquireSpinLockShared(&device->SpinLock);
 
-    OVPN_TX_BUFFER* buffer = NULL;
+    OVPN_TX_BUFFER* txBuf = NULL;
 
     if (device->Socket.Socket == NULL) {
         status = STATUS_INVALID_DEVICE_STATE;
@@ -195,31 +195,67 @@ OvpnEvtIoWrite(WDFQUEUE queue, WDFREQUEST request, size_t length)
         goto error;
     }
 
-    // fetch tx buffer
-    GOTO_IF_NOT_NT_SUCCESS(error, status, OvpnTxBufferPoolGet(device->TxBufferPool, &buffer));
-
     // get request buffer
-    PVOID requestBuffer;
-    size_t requestBufferLength;
-    GOTO_IF_NOT_NT_SUCCESS(error, status, WdfRequestRetrieveInputBuffer(request, 0, &requestBuffer, &requestBufferLength));
+    PVOID buf;
+    size_t bufLen;
+    GOTO_IF_NOT_NT_SUCCESS(error, status, WdfRequestRetrieveInputBuffer(request, 0, &buf, &bufLen));
+
+    PSOCKADDR sa = NULL;
+
+    if (device->Mode == OVPN_MODE_MP) {
+        // buffer is prepended with SOCKADDR
+
+        sa = (PSOCKADDR)buf;
+        switch (sa->sa_family) {
+        case AF_INET:
+            if (bufLen <= sizeof(SOCKADDR_IN)) {
+                status = STATUS_INVALID_MESSAGE;
+                LOG_ERROR("Message too short", TraceLoggingValue(bufLen, "msgLen"), TraceLoggingValue(sizeof(SOCKADDR_IN), "minLen"));
+                goto error;
+            }
+
+            buf = (char*)buf + sizeof(SOCKADDR_IN);
+            bufLen -= sizeof(SOCKADDR_IN);
+            break;
+
+        case AF_INET6:
+            if (bufLen <= sizeof(SOCKADDR_IN6)) {
+                status = STATUS_INVALID_MESSAGE;
+                LOG_ERROR("Message too short", TraceLoggingValue(bufLen, "msgLen"), TraceLoggingValue(sizeof(SOCKADDR_IN6), "minLen"));
+                goto error;
+            }
+
+            buf = (char*)buf + sizeof(SOCKADDR_IN6);
+            bufLen -= sizeof(SOCKADDR_IN6);
+            break;
+
+        default:
+            LOG_ERROR("Invalid address family", TraceLoggingValue(sa->sa_family, "AF"));
+            status = STATUS_INVALID_ADDRESS;
+            goto error;
+        }
+    }
+
+    // fetch tx buffer
+    GOTO_IF_NOT_NT_SUCCESS(error, status, OvpnTxBufferPoolGet(device->TxBufferPool, &txBuf));
 
     // copy data from request to tx buffer
-    PUCHAR buf = OvpnTxBufferPut(buffer, requestBufferLength);
-    RtlCopyMemory(buf, requestBuffer, requestBufferLength);
+    PUCHAR data = OvpnTxBufferPut(txBuf, bufLen);
+    RtlCopyMemory(data, buf, bufLen);
 
-    buffer->IoQueue = device->PendingWritesQueue;
+    txBuf->IoQueue = device->PendingWritesQueue;
 
     // move request to manual queue
     GOTO_IF_NOT_NT_SUCCESS(error, status, WdfRequestForwardToIoQueue(request, device->PendingWritesQueue));
 
     // send
-    LOG_IF_NOT_NT_SUCCESS(status = OvpnSocketSend(&device->Socket, buffer));
+    LOG_IF_NOT_NT_SUCCESS(status = OvpnSocketSend(&device->Socket, txBuf, sa));
 
     goto done_not_complete;
 
 error:
-    if (buffer != NULL) {
-        OvpnTxBufferPoolPut(buffer);
+    if (txBuf != NULL) {
+        OvpnTxBufferPoolPut(txBuf);
     }
 
     ULONG_PTR bytesCopied = 0;

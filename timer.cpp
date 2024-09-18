@@ -91,7 +91,7 @@ static VOID OvpnTimerXmit(WDFTIMER timer)
 
     if (NT_SUCCESS(status)) {
         // start async send, completion handler will return ciphertext buffer to the pool
-        LOG_IF_NOT_NT_SUCCESS(status = OvpnSocketSend(&device->Socket, buffer));
+        LOG_IF_NOT_NT_SUCCESS(status = OvpnSocketSend(&device->Socket, buffer, NULL));
         if (NT_SUCCESS(status)) {
             LOG_INFO("Ping sent");
         }

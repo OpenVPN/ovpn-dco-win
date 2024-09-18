@@ -97,8 +97,29 @@ done:
 static
 _Requires_shared_lock_held_(device->SpinLock)
 VOID
-OvpnSocketControlPacketReceived(_In_ POVPN_DEVICE device, _In_reads_(len) PUCHAR buf, SIZE_T len)
+OvpnSocketControlPacketReceived(_In_ POVPN_DEVICE device, _In_reads_(len) PUCHAR buf, SIZE_T len, _In_opt_ PSOCKADDR remote)
 {
+    SIZE_T hdrLen = 0, totalLen = len;
+
+    // in UDP and MP mode we prepend CC packet with remote sockaddr before pushing it to userspace
+    if (device->Mode == OVPN_MODE_MP && remote != NULL) {
+        switch (remote->sa_family) {
+        case AF_INET:
+            hdrLen = sizeof(SOCKADDR_IN);
+            break;
+
+        case AF_INET6:
+            hdrLen = sizeof(SOCKADDR_IN6);
+            break;
+
+        default:
+            LOG_ERROR("Invalid remote address family", TraceLoggingValue(remote->sa_family, "AF"));
+            InterlockedIncrementNoFence(&device->Stats.LostInControlPackets);
+            return;
+        }
+        totalLen += hdrLen;
+    }
+
     WDFREQUEST request;
     NTSTATUS status = WdfIoQueueRetrieveNextRequest(device->PendingReadsQueue, &request);
     if (!NT_SUCCESS(status)) {
@@ -113,17 +134,22 @@ OvpnSocketControlPacketReceived(_In_ POVPN_DEVICE device, _In_reads_(len) PUCHAR
             return;
         }
 
-        if (sizeof(buffer->Data) >= len) {
-            // copy control packet to buffer
-            RtlCopyMemory(buffer->Data, buf, len);
-            buffer->Len = len;
+        if (sizeof(buffer->Data) >= totalLen) {
+            if (hdrLen > 0) {
+                // prepend with sockaddr
+                RtlCopyMemory(buffer->Data, remote, hdrLen);
+            }
+
+            // copy control packet payload
+            RtlCopyMemory(buffer->Data + hdrLen, buf, totalLen - hdrLen);
+            buffer->Len = totalLen;
 
             // enqueue buffer, it will be dequeued when read request arrives
             OvpnBufferQueueEnqueue(device->ControlRxBufferQueue, &buffer->QueueListEntry);
         }
         else {
             LOG_ERROR("Buffer too small, packet len <pktlen>, buf len <buflen>",
-                TraceLoggingValue(len, "pktlen"), TraceLoggingValue(sizeof(buffer->Data), "buflen"));
+                TraceLoggingValue(totalLen, "pktlen"), TraceLoggingValue(sizeof(buffer->Data), "buflen"));
 
             OvpnRxBufferPoolPut(buffer);
         }
@@ -133,19 +159,26 @@ OvpnSocketControlPacketReceived(_In_ POVPN_DEVICE device, _In_reads_(len) PUCHAR
         PVOID readBuffer;
         size_t readBufferLength;
 
-        ULONG_PTR bytesSent = len;
+        ULONG_PTR bytesSent = totalLen;
 
-        LOG_IF_NOT_NT_SUCCESS(status = WdfRequestRetrieveOutputBuffer(request, len, &readBuffer, &readBufferLength));
+        LOG_IF_NOT_NT_SUCCESS(status = WdfRequestRetrieveOutputBuffer(request, totalLen, &readBuffer, &readBufferLength));
         if (NT_SUCCESS(status)) {
-            // copy control packet to read request buffer
-            RtlCopyMemory(readBuffer, buf, len);
+
+            if (hdrLen > 0) {
+                // prepend with sockaddr
+                RtlCopyMemory(readBuffer, remote, hdrLen);
+            }
+
+            // copy control packet payload
+            RtlCopyMemory((PCHAR)readBuffer + hdrLen, buf, totalLen - hdrLen);
+
             InterlockedIncrementNoFence(&device->Stats.ReceivedControlPackets);
         } else {
             InterlockedIncrementNoFence(&device->Stats.LostInControlPackets);
 
             if (status == STATUS_BUFFER_TOO_SMALL) {
                 LOG_ERROR("Buffer too small, packet len <pktlen>, buf len <buflen>",
-                    TraceLoggingValue(len, "pktlen"), TraceLoggingValue(readBufferLength, "buflen"));
+                    TraceLoggingValue(totalLen, "pktlen"), TraceLoggingValue(readBufferLength, "buflen"));
             }
 
             bytesSent = 0;
@@ -238,7 +271,7 @@ VOID OvpnSocketDataPacketReceived(_In_ POVPN_DEVICE device, UCHAR op, _In_reads_
 }
 
 VOID
-OvpnSocketProcessIncomingPacket(_In_ POVPN_DEVICE device, _In_reads_(packetLength) PUCHAR buf, SIZE_T packetLength, BOOLEAN irqlDispatch)
+OvpnSocketProcessIncomingPacket(_In_ POVPN_DEVICE device, _In_reads_(packetLength) PUCHAR buf, SIZE_T packetLength, BOOLEAN irqlDispatch, _In_opt_ PSOCKADDR remoteAddr)
 {
     // If we're at dispatch level, we can use a small optimization and use function
     // which is not calling KeRaiseIRQL to raise the IRQL to DISPATCH_LEVEL before attempting to acquire the lock
@@ -255,7 +288,7 @@ OvpnSocketProcessIncomingPacket(_In_ POVPN_DEVICE device, _In_reads_(packetLengt
         OvpnSocketDataPacketReceived(device, op, buf, packetLength);
     }
     else {
-        OvpnSocketControlPacketReceived(device, buf, packetLength);
+        OvpnSocketControlPacketReceived(device, buf, packetLength, remoteAddr);
     }
 
     // don't forget to release spinlock
@@ -330,7 +363,7 @@ OvpnSocketUdpReceiveFromEvent(_In_ PVOID socketContext, ULONG flags, _In_opt_ PW
             buf = packetBuf;
         }
 
-        OvpnSocketProcessIncomingPacket(device, buf, dataIndication->Buffer.Length, flags & WSK_FLAG_AT_DISPATCH_LEVEL);
+        OvpnSocketProcessIncomingPacket(device, buf, dataIndication->Buffer.Length, flags & WSK_FLAG_AT_DISPATCH_LEVEL, dataIndication->RemoteAddress);
 
         dataIndication = dataIndication->Next;
     }
@@ -412,7 +445,7 @@ OvpnSocketTcpReceiveEvent(_In_opt_ PVOID socketContext, _In_ ULONG flags, _In_op
                             buf = tcpState->PacketBuf;
                         }
 
-                        OvpnSocketProcessIncomingPacket(device, buf, tcpState->PacketLength, flags & WSK_FLAG_AT_DISPATCH_LEVEL);
+                        OvpnSocketProcessIncomingPacket(device, buf, tcpState->PacketLength, flags & WSK_FLAG_AT_DISPATCH_LEVEL, NULL);
 
                         mdlDataLen -= bytesRemained;
                         dataIndicationLen -= bytesRemained;
@@ -704,7 +737,7 @@ OvpnSocketSendComplete(_In_ PDEVICE_OBJECT deviceObj, _In_ PIRP irp, _In_ PVOID 
 
 NTSTATUS
 _Use_decl_annotations_
-OvpnSocketSend(OvpnSocket* ovpnSocket, OVPN_TX_BUFFER* buffer) {
+OvpnSocketSend(OvpnSocket* ovpnSocket, OVPN_TX_BUFFER* buffer, SOCKADDR* sa) {
     OVPN_DEVICE* device = (OVPN_DEVICE*)OvpnTxBufferPoolGetContext(buffer->Pool);
 
     PWSK_SOCKET socket = ovpnSocket->Socket;
@@ -742,11 +775,11 @@ OvpnSocketSend(OvpnSocket* ovpnSocket, OVPN_TX_BUFFER* buffer) {
     }
     else if (buffer->WskBufList.Buffer.Length != 0) {
         PWSK_PROVIDER_DATAGRAM_DISPATCH datagramDispatch = (PWSK_PROVIDER_DATAGRAM_DISPATCH)socket->Dispatch;
-        LOG_IF_NOT_NT_SUCCESS(status = datagramDispatch->WskSendMessages(socket, &buffer->WskBufList, 0, NULL, 0, NULL, irp));
+        LOG_IF_NOT_NT_SUCCESS(status = datagramDispatch->WskSendMessages(socket, &buffer->WskBufList, 0, sa, 0, NULL, irp));
     } else {
         WSK_BUF wskBuf{ buffer->Mdl, FIELD_OFFSET(OVPN_TX_BUFFER, Head) + (ULONG)(buffer->Data - buffer->Head), buffer->Len };
         PWSK_PROVIDER_DATAGRAM_DISPATCH datagramDispatch = (PWSK_PROVIDER_DATAGRAM_DISPATCH)socket->Dispatch;
-        LOG_IF_NOT_NT_SUCCESS(status = datagramDispatch->WskSendTo(socket, &wskBuf, 0, NULL, 0, NULL, irp));
+        LOG_IF_NOT_NT_SUCCESS(status = datagramDispatch->WskSendTo(socket, &wskBuf, 0, sa, 0, NULL, irp));
     }
 
     return status;

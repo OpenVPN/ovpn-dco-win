@@ -70,7 +70,7 @@ OvpnSocketClose(_In_opt_ PWSK_SOCKET socket);
 
 _Must_inspect_result_
 NTSTATUS
-OvpnSocketSend(_In_ OvpnSocket* ovpnSocket, _In_ OVPN_TX_BUFFER* buffer);
+OvpnSocketSend(_In_ OvpnSocket* ovpnSocket, _In_ OVPN_TX_BUFFER* buffer, _In_opt_ SOCKADDR* sa);
 
 _Must_inspect_result_
 NTSTATUS

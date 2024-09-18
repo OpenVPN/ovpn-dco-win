@@ -117,7 +117,7 @@ OvpnTxProcessPacket(_In_ POVPN_DEVICE device, _In_ POVPN_TXQUEUE queue, _In_ NET
     if (NT_SUCCESS(status)) {
         // start async send, this will return ciphertext buffer to the pool
         if (device->Socket.Tcp) {
-            status = OvpnSocketSend(&device->Socket, buffer);
+            status = OvpnSocketSend(&device->Socket, buffer, NULL);
         }
         else {
             // for UDP we use SendMessages to send multiple datagrams at once
@@ -195,7 +195,7 @@ OvpnEvtTxQueueAdvance(NETPACKETQUEUE netPacketQueue)
 
             if (!device->Socket.Tcp) {
                 // this will use WskSendMessages to send buffers list which we constructed before
-                LOG_IF_NOT_NT_SUCCESS(OvpnSocketSend(&device->Socket, txBufferHead));
+                LOG_IF_NOT_NT_SUCCESS(OvpnSocketSend(&device->Socket, txBufferHead, NULL));
             }
         }
     }
