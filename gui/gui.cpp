@@ -20,7 +20,7 @@ LRESULT CALLBACK WindowProcedure(HWND, UINT, WPARAM, LPARAM);
 HWND hMPListenAddress, hMPListenPort,
     hP2PLocalAddress, hP2PLocalPort,
     hP2PRemoteAddress, hP2PRemotePort,
-    hCCMessage;
+    hCCMessage, hCCRemoteAddress, hCCRemotePort;
 
 HWND hLogArea;
 std::unordered_map<DWORD, std::wstring> buttons = {
@@ -36,6 +36,9 @@ std::unordered_map<DWORD, std::wstring> buttons = {
     {OVPN_IOCTL_SET_MODE, L"Set Mode"},
     {OVPN_IOCTL_MP_START_VPN, L"MP Start VPN"}
 };
+
+#define MIN_FUNCTION_CODE 1
+#define MAX_FUNCTION_CODE 20
 
 #define GET_IOCTL_FUNCTION_CODE(ioctl) (((ioctl) >> 2) & 0xFFF)
 
@@ -118,7 +121,21 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR args, int ncmdsho
             DWORD bytesRead;
             if (GetOverlappedResult(hDev, &ovRead, &bytesRead, FALSE)) {
                 if (bytesRead > 0) {
-                    Log("CC[", bytesRead, "]> ", readBuffer);
+                    bool mp = SendMessage(hModes[1], BM_GETCHECK, 0, 0) == BST_CHECKED;
+
+                    // if we're in server mode, we've received CC message prepended with sockaddr
+                    if (mp) {
+                        SOCKADDR_IN *sa = (SOCKADDR_IN *)readBuffer;
+
+                        char ip[INET_ADDRSTRLEN];
+                        inet_ntop(AF_INET, &(sa->sin_addr), ip, sizeof(ip));
+
+                        int port = ntohs(sa->sin_port);
+
+                        Log("CC[", ip, ":", port, "]> ", readBuffer + sizeof(*sa));
+                    } else {
+                        Log("CC[]> ", readBuffer);
+                    }
                 }
             } else {
                 Log("Overlapped read failed: ", GetLastError());
@@ -139,6 +156,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR args, int ncmdsho
             }
         }
         else if (waitResult == WAIT_OBJECT_0 + 2) {
+            // window messaging loop
             MSG msg;
             while (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE)) {
                 if (msg.message == WM_QUIT) {
@@ -316,8 +334,7 @@ CreatePushButton(HWND hWnd, DWORD ioctl, int x, int y)
 void
 CreatePushButton(HWND hWnd, wchar_t* title, HMENU hMenu, int x, int y)
 {
-    CreateWindowW(L"Button", title, WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON, x, y, 100, 30,
-        hWnd, hMenu, NULL, NULL);
+    CreateWindowW(L"Button", title, WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON, x, y, 100, 30, hWnd, hMenu, NULL, NULL);
 }
 
 HWND
@@ -329,11 +346,34 @@ CreateEditBox(HWND hWnd, WCHAR* text, int x, int y, int width)
 void
 SendCC()
 {
-    char text[1024];
+    bool mp = SendMessage(hModes[1], BM_GETCHECK, 0, 0) == BST_CHECKED;
+
+    sockaddr_in sa;
+    char text[1024], remoteAddress[16], remotePort[6];
     GetWindowTextA(hCCMessage, text, 1024);
+    GetWindowTextA(hCCRemoteAddress, remoteAddress, 16);
+    GetWindowTextA(hCCRemotePort, remotePort, 6);
+
+    char data[1024];
+    DWORD dataLen = (DWORD)strlen(text);
+    if (mp) {
+        // in multipeer, we prepend CC message with sockaddr
+        memset(&sa, 0, sizeof(sa));
+        sa.sin_family = AF_INET;
+        InetPtonA(AF_INET, remoteAddress, &(sa.sin_addr));
+        sa.sin_port = htons(atoi(remotePort));
+
+        // prepend with sockaddr
+        memcpy(data, &sa, sizeof(sa));
+        memcpy(data + sizeof(sa), text, strlen(text));
+
+        dataLen += sizeof(sa);
+    } else {
+        memcpy(data, text, strlen(text));
+    }
 
     DWORD bytesWritten = 0;
-    BOOL res = WriteFile(hDev, text, (DWORD)strlen(text), &bytesWritten, &ovWrite);
+    BOOL res = WriteFile(hDev, data, dataLen, &bytesWritten, &ovWrite);
     if (!res && GetLastError() != ERROR_IO_PENDING) {
         Log("WriteFile failed: ", GetLastError());
     }
@@ -342,40 +382,39 @@ SendCC()
 // Window Procedure Function
 LRESULT CALLBACK WindowProcedure(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 {
-    switch (msg)
-    {
+    switch (msg) {
     case WM_CREATE:
-        {
-            CreatePushButton(hwnd, OVPN_IOCTL_GET_VERSION, 10, 10);
-            CreatePushButton(hwnd, OVPN_IOCTL_SET_MODE, 150, 10);
+        CreatePushButton(hwnd, OVPN_IOCTL_GET_VERSION, 10, 10);
+        CreatePushButton(hwnd, OVPN_IOCTL_SET_MODE, 150, 10);
 
-            for (auto i = 0; i < modeData.size(); ++i) {
-                auto style = WS_VISIBLE | WS_CHILD | BS_AUTORADIOBUTTON;
-                if (i == 0) style |= WS_GROUP;
-                auto hMode = CreateWindowW(L"Button", modeData[i].second.c_str(), style,
-                                            270 + 50 * i, 10, 50, 30, hwnd, (HMENU)(INT_PTR)(1000 + modeData[i].first), NULL, NULL);
-                hModes.push_back(hMode);
-            }
-
-            CreatePushButton(hwnd, OVPN_IOCTL_MP_START_VPN, 10, 60);
-            hMPListenAddress = CreateEditBox(hwnd, L"0.0.0.0", 150, 60, 120);
-            hMPListenPort = CreateEditBox(hwnd, L"1194", 290, 60, 60);
-
-            CreatePushButton(hwnd, OVPN_IOCTL_NEW_PEER, 10, 110);
-            hP2PLocalAddress = CreateEditBox(hwnd, L"192.168.100.1", 150, 110, 120);
-            hP2PLocalPort = CreateEditBox(hwnd, L"1194", 290, 110, 60);
-            hP2PRemoteAddress = CreateEditBox(hwnd, L"192.168.100.2", 400, 110, 120);
-            hP2PRemotePort = CreateEditBox(hwnd, L"1194", 540, 110, 60);
-
-            CreatePushButton(hwnd, OVPN_IOCTL_START_VPN, 640, 110);
-
-            CreatePushButton(hwnd, L"Send CC", (HMENU)BTN_SEND_CC, 10, 160);
-            hCCMessage = CreateEditBox(hwnd, L"hello, dco-win", 150, 160, 120);
+        for (auto i = 0; i < modeData.size(); ++i) {
+            auto style = WS_VISIBLE | WS_CHILD | BS_AUTORADIOBUTTON;
+            if (i == 0) style |= WS_GROUP;
+            auto hMode = CreateWindowW(L"Button", modeData[i].second.c_str(), style,
+                                        270 + 50 * i, 10, 50, 30, hwnd, (HMENU)(INT_PTR)(1000 + modeData[i].first), NULL, NULL);
+            hModes.push_back(hMode);
         }
+
+        CreatePushButton(hwnd, OVPN_IOCTL_MP_START_VPN, 10, 60);
+        hMPListenAddress = CreateEditBox(hwnd, L"0.0.0.0", 150, 60, 120);
+        hMPListenPort = CreateEditBox(hwnd, L"1194", 290, 60, 60);
+
+        CreatePushButton(hwnd, OVPN_IOCTL_NEW_PEER, 10, 110);
+        hP2PLocalAddress = CreateEditBox(hwnd, L"192.168.100.1", 150, 110, 120);
+        hP2PLocalPort = CreateEditBox(hwnd, L"1194", 290, 110, 60);
+        hP2PRemoteAddress = CreateEditBox(hwnd, L"192.168.100.2", 400, 110, 120);
+        hP2PRemotePort = CreateEditBox(hwnd, L"1194", 540, 110, 60);
+
+        CreatePushButton(hwnd, OVPN_IOCTL_START_VPN, 640, 110);
+
+        CreatePushButton(hwnd, L"Send CC", (HMENU)BTN_SEND_CC, 10, 160);
+        hCCMessage = CreateEditBox(hwnd, L"hello, dco-win", 150, 160, 120);
+        hCCRemoteAddress = CreateEditBox(hwnd, L"192.168.100.1", 290, 160, 120);
+        hCCRemotePort = CreateEditBox(hwnd, L"1194", 430, 160, 60);
 
         SendMessage(hModes[0], BM_SETCHECK, BST_CHECKED, 0);
 
-        // Create Read-Only Multiline Edit Box (Log Area) with Scrollbars
+        // log area
         hLogArea = CreateWindowW(L"Edit", L"",
                               WS_VISIBLE | WS_CHILD | WS_BORDER | ES_MULTILINE | ES_AUTOVSCROLL | ES_AUTOHSCROLL |
                               WS_VSCROLL | WS_HSCROLL | ES_READONLY,
@@ -387,7 +426,7 @@ LRESULT CALLBACK WindowProcedure(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 
     case WM_COMMAND:
     {
-        if ((wp >= 1) && (wp < 20))
+        if ((wp >= MIN_FUNCTION_CODE) && (wp < MAX_FUNCTION_CODE))
         {
             auto ioctl = GetIoctlFromFunctionCode((ULONG)wp);
 
