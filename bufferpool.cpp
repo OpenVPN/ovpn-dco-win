@@ -27,7 +27,7 @@
 #include "bufferpool.h"
 #include "trace.h"
 
-#define OVPN_BUFFER_HEADROOM 26 // we prepend TCP packet size (2 bytes) and crypto overhead (24 bytes)
+#define OVPN_BUFFER_HEADROOM 30 // we prepend TCP packet size (2 bytes) and max crypto overhead (28 bytes)
 
 // good enough limit for in-flight packets
 constexpr auto MAX_POOL_SIZE = 100'000;
