@@ -102,16 +102,6 @@ OvpnEvtRxQueueAdvance(NETPACKETQUEUE netPacketQueue)
     POVPN_RXQUEUE queue = OvpnGetRxQueueContext(netPacketQueue);
     OVPN_DEVICE* device = OvpnGetDeviceContext(queue->Adapter->WdfDevice);
 
-    OvpnPeerContext* peer = OvpnGetFirstPeer(&device->Peers);
-    if (peer == NULL) {
-        LOG_WARN("No peer");
-        return;
-    }
-
-    BOOLEAN pktId64bit = peer->CryptoContext.CryptoOptions & CRYPTO_OPTIONS_64BIT_PKTID;
-    BOOLEAN aeadTagEnd = peer->CryptoContext.CryptoOptions & CRYPTO_OPTIONS_AEAD_TAG_END;
-    auto payloadOffset = OVPN_DATA_V2_LEN + (pktId64bit ? 8 : 4) + (aeadTagEnd ? 0 : AEAD_AUTH_TAG_LEN);
-
     NET_RING_FRAGMENT_ITERATOR fi = NetRingGetAllFragments(queue->Rings);
     NET_RING_PACKET_ITERATOR pi = NetRingGetAllPackets(queue->Rings);
     while (NetFragmentIteratorHasAny(&fi)) {
@@ -126,7 +116,7 @@ OvpnEvtRxQueueAdvance(NETPACKETQUEUE netPacketQueue)
         fragment->ValidLength = buffer->Len;
         fragment->Offset = 0;
         NET_FRAGMENT_VIRTUAL_ADDRESS* virtualAddr = NetExtensionGetFragmentVirtualAddress(&queue->VirtualAddressExtension, NetFragmentIteratorGetIndex(&fi));
-        RtlCopyMemory(virtualAddr->VirtualAddress, buffer->Data + payloadOffset, buffer->Len);
+        RtlCopyMemory(virtualAddr->VirtualAddress, buffer->Data, buffer->Len);
 
         InterlockedExchangeAddNoFence64(&device->Stats.TunBytesReceived, buffer->Len);
 

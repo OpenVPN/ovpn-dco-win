@@ -134,15 +134,14 @@ OvpnSocketControlPacketReceived(_In_ POVPN_DEVICE device, _In_reads_(len) PUCHAR
             return;
         }
 
-        if (sizeof(buffer->Data) >= totalLen) {
+        if (totalLen <= OVPN_SOCKET_RX_PACKET_BUFFER_SIZE) {
             if (hdrLen > 0) {
                 // prepend with sockaddr
-                RtlCopyMemory(buffer->Data, remote, hdrLen);
+                RtlCopyMemory(OvpnBufferPut(buffer, hdrLen), remote, hdrLen);
             }
 
             // copy control packet payload
-            RtlCopyMemory(buffer->Data + hdrLen, buf, totalLen - hdrLen);
-            buffer->Len = totalLen;
+            RtlCopyMemory(OvpnBufferPut(buffer, len), buf, len);
 
             // enqueue buffer, it will be dequeued when read request arrives
             OvpnBufferQueueEnqueue(device->ControlRxBufferQueue, &buffer->QueueListEntry);
@@ -222,12 +221,22 @@ VOID OvpnSocketDataPacketReceived(_In_ POVPN_DEVICE device, UCHAR op, _In_reads_
             LOG_ERROR("keyId <keyId> not found", TraceLoggingValue(keyId, "keyId"));
         }
         else {
+            // extend data area in the buffer for plaintext and crypto overhead
+            OvpnBufferPut(buffer, len);
+
             // decrypt into plaintext buffer
             status = cryptoContext->Decrypt(keySlot, cipherTextBuf, len, buffer->Data, cryptoContext->CryptoOptions);
 
+            // trim AEAD tag an the end
+            auto aeadTagEnd = cryptoContext->CryptoOptions & CRYPTO_OPTIONS_AEAD_TAG_END;
+            if (aeadTagEnd) {
+                OvpnBufferTrim(buffer, len - AEAD_AUTH_TAG_LEN);
+            }
+
+            // remove crypto overhead in front
             auto pktId64bit = cryptoContext->CryptoOptions & CRYPTO_OPTIONS_64BIT_PKTID;
-            auto cryptoOverhead = OVPN_DATA_V2_LEN + AEAD_AUTH_TAG_LEN + (pktId64bit ? 8 : 4);
-            buffer->Len = len - cryptoOverhead;
+            auto cryptoOverheadFront = OVPN_DATA_V2_LEN + (pktId64bit ? 8 : 4) + (aeadTagEnd ? 0 : AEAD_AUTH_TAG_LEN);
+            OvpnBufferPull(buffer, cryptoOverheadFront);
         }
     }
     else {
@@ -243,24 +252,18 @@ VOID OvpnSocketDataPacketReceived(_In_ POVPN_DEVICE device, UCHAR op, _In_reads_
 
     OvpnTimerResetRecv(peer->Timer);
 
-    // points to the beginning of plaintext
-    BOOLEAN pktId64bit = peer->CryptoContext.CryptoOptions & CRYPTO_OPTIONS_64BIT_PKTID;
-    BOOLEAN aeadTagEnd = peer->CryptoContext.CryptoOptions & CRYPTO_OPTIONS_AEAD_TAG_END;
-    auto payloadOffset = OVPN_DATA_V2_LEN + (pktId64bit ? 8 : 4) + (aeadTagEnd ? 0 : AEAD_AUTH_TAG_LEN);
-    UCHAR* plaintext = buffer->Data + payloadOffset;
-
     // ping packet?
-    if (OvpnTimerIsKeepaliveMessage(plaintext, buffer->Len)) {
+    if (OvpnTimerIsKeepaliveMessage(buffer->Data, buffer->Len)) {
         LOG_INFO("Ping received");
 
         // no need to inject ping packet into OS, return buffer to the pool
         OvpnRxBufferPoolPut(buffer);
     }
     else {
-        if (OvpnMssIsIPv4(plaintext, buffer->Len)) {
-            OvpnMssDoIPv4(plaintext, buffer->Len, device->MSS);
-        } else if (OvpnMssIsIPv6(plaintext, buffer->Len)) {
-            OvpnMssDoIPv6(plaintext, buffer->Len, device->MSS);
+        if (OvpnMssIsIPv4(buffer->Data, buffer->Len)) {
+            OvpnMssDoIPv4(buffer->Data, buffer->Len, device->MSS);
+        } else if (OvpnMssIsIPv6(buffer->Data, buffer->Len)) {
+            OvpnMssDoIPv6(buffer->Data, buffer->Len, device->MSS);
         }
 
         // enqueue plaintext buffer, it will be dequeued by NetAdapter RX datapath

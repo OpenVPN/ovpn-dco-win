@@ -240,7 +240,7 @@ OvpnEvtIoWrite(WDFQUEUE queue, WDFREQUEST request, size_t length)
     GOTO_IF_NOT_NT_SUCCESS(error, status, OvpnTxBufferPoolGet(device->TxBufferPool, &txBuf));
 
     // copy data from request to tx buffer
-    PUCHAR data = OvpnTxBufferPut(txBuf, bufLen);
+    PUCHAR data = OvpnBufferPut(txBuf, bufLen);
     RtlCopyMemory(data, buf, bufLen);
 
     txBuf->IoQueue = device->PendingWritesQueue;

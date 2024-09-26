@@ -69,7 +69,7 @@ static VOID OvpnTimerXmit(WDFTIMER timer)
     }
 
     // copy keepalive magic message to the buffer
-    RtlCopyMemory(OvpnTxBufferPut(buffer, sizeof(OvpnKeepaliveMessage)), OvpnKeepaliveMessage, sizeof(OvpnKeepaliveMessage));
+    RtlCopyMemory(OvpnBufferPut(buffer, sizeof(OvpnKeepaliveMessage)), OvpnKeepaliveMessage, sizeof(OvpnKeepaliveMessage));
 
     OvpnPeerContext* peer = timerCtx->Peer;
     KIRQL kiqrl = ExAcquireSpinLockShared(&device->SpinLock);
