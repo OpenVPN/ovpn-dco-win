@@ -69,7 +69,7 @@ OvpnTxProcessPacket(_In_ POVPN_DEVICE device, _In_ POVPN_TXQUEUE queue, _In_ NET
         NET_FRAGMENT_VIRTUAL_ADDRESS* virtualAddr = NetExtensionGetFragmentVirtualAddress(
             &queue->VirtualAddressExtension, NetFragmentIteratorGetIndex(&fi));
 
-        RtlCopyMemory(OvpnTxBufferPut(buffer, fragment->ValidLength),
+        RtlCopyMemory(OvpnBufferPut(buffer, fragment->ValidLength),
             (UCHAR const*)virtualAddr->VirtualAddress + fragment->Offset, fragment->ValidLength);
 
         NetFragmentIteratorAdvance(&fi);
@@ -93,7 +93,7 @@ OvpnTxProcessPacket(_In_ POVPN_DEVICE device, _In_ POVPN_TXQUEUE queue, _In_ NET
         OvpnTxBufferPush(buffer, OVPN_DATA_V2_LEN + (pktId64bit ? 8 : 4) + (aeadTagEnd ? 0 : AEAD_AUTH_TAG_LEN));
         if (aeadTagEnd)
         {
-            OvpnTxBufferPut(buffer, AEAD_AUTH_TAG_LEN);
+            OvpnBufferPut(buffer, AEAD_AUTH_TAG_LEN);
         }
 
         // in-place encrypt, always with primary key
