@@ -60,7 +60,7 @@ static VOID OvpnTimerXmit(WDFTIMER timer)
     }
 
     // copy keepalive magic message to the buffer
-    RtlCopyMemory(OvpnTxBufferPut(buffer, sizeof(OvpnKeepaliveMessage)), OvpnKeepaliveMessage, sizeof(OvpnKeepaliveMessage));
+    RtlCopyMemory(OvpnBufferPut(buffer, sizeof(OvpnKeepaliveMessage)), OvpnKeepaliveMessage, sizeof(OvpnKeepaliveMessage));
 
     KIRQL kiqrl = ExAcquireSpinLockShared(&device->SpinLock);
     OvpnCryptoContext* cryptoContext = &device->CryptoContext;
@@ -71,7 +71,7 @@ static VOID OvpnTimerXmit(WDFTIMER timer)
 
         OvpnTxBufferPush(buffer, OVPN_DATA_V2_LEN + (pktId64bit ? 8 : 4) + (aeadTagEnd ? 0 : AEAD_AUTH_TAG_LEN));
         if (aeadTagEnd) {
-            OvpnTxBufferPut(buffer, AEAD_AUTH_TAG_LEN);
+            OvpnBufferPut(buffer, AEAD_AUTH_TAG_LEN);
         }
 
         // in-place encrypt, always with primary key

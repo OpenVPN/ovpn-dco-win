@@ -27,7 +27,7 @@
 #include "bufferpool.h"
 #include "trace.h"
 
-#define OVPN_BUFFER_HEADROOM 26 // we prepend TCP packet size (2 bytes) and crypto overhead (24 bytes)
+#define OVPN_BUFFER_HEADROOM 30 // we prepend TCP packet size (2 bytes) and max crypto overhead (28 bytes)
 
 // good enough limit for in-flight packets
 constexpr auto MAX_POOL_SIZE = 100'000;
@@ -205,6 +205,8 @@ OvpnRxBufferPoolGet(OVPN_RX_BUFFER_POOL handle, OVPN_RX_BUFFER** buffer)
     if (*buffer == NULL)
         return STATUS_INSUFFICIENT_RESOURCES;
 
+    (*buffer)->Data = (*buffer)->Head;
+    (*buffer)->Tail = (*buffer)->Data;
     (*buffer)->Pool = handle;
     (*buffer)->Len = 0;
 
@@ -272,17 +274,6 @@ OvpnTxBufferPoolDelete(OVPN_BUFFER_POOL handle)
 
 _Use_decl_annotations_
 UCHAR*
-OvpnTxBufferPut(OVPN_TX_BUFFER* buffer, SIZE_T len)
-{
-    UCHAR* tmp = buffer->Tail;
-    buffer->Tail += len;
-    buffer->Len += len;
-
-    return tmp;
-}
-
-_Use_decl_annotations_
-UCHAR*
 OvpnTxBufferPush(OVPN_TX_BUFFER* buffer, SIZE_T len)
 {
     buffer->Data -= len;
@@ -295,7 +286,7 @@ _Use_decl_annotations_
 NTSTATUS
 OvpnRxBufferPoolCreate(OVPN_RX_BUFFER_POOL* handle)
 {
-    return OvpnBufferPoolCreate((OVPN_BUFFER_POOL*)handle, sizeof(OVPN_RX_BUFFER), "rx", NULL);
+    return OvpnBufferPoolCreate((OVPN_BUFFER_POOL*)handle, sizeof(OVPN_RX_BUFFER) + OVPN_SOCKET_RX_PACKET_BUFFER_SIZE, "rx", NULL);
 }
 
 VOID
