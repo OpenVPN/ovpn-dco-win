@@ -66,13 +66,54 @@ OvpnPeerFreeRoutine(_RTL_GENERIC_TABLE* table, PVOID buffer)
     ExFreePoolWithTag(buffer, 'ovpn');
 }
 
-RTL_GENERIC_COMPARE_RESULTS OvpnPeerCompareByPeerIdRoutine(_RTL_GENERIC_TABLE* table, PVOID first, PVOID second)
+RTL_GENERIC_COMPARE_RESULTS
+OvpnPeerCompareByPeerIdRoutine(_RTL_GENERIC_TABLE* table, PVOID first, PVOID second)
 {
     UNREFERENCED_PARAMETER(table);
-    UNREFERENCED_PARAMETER(first);
-    UNREFERENCED_PARAMETER(second);
 
-    return GenericEqual;
+    OvpnPeerContext* peer1 = *(OvpnPeerContext**)first;
+    OvpnPeerContext* peer2 = *(OvpnPeerContext**)second;
+
+    if (peer1->PeerId == peer2->PeerId)
+        return GenericEqual;
+    else if (peer1->PeerId < peer2->PeerId)
+        return GenericLessThan;
+    else
+        return GenericGreaterThan;
+}
+
+RTL_GENERIC_COMPARE_RESULTS
+OvpnPeerCompareByVPN4Routine(_RTL_GENERIC_TABLE* table, PVOID first, PVOID second)
+{
+    UNREFERENCED_PARAMETER(table);
+
+    OvpnPeerContext* peer1 = *(OvpnPeerContext**)first;
+    OvpnPeerContext* peer2 = *(OvpnPeerContext**)second;
+
+    int n = memcmp(&peer1->VpnAddrs.IPv4, &peer2->VpnAddrs.IPv4, sizeof(IN_ADDR));
+    if (n == 0)
+        return GenericEqual;
+    else if (n < 0)
+        return GenericLessThan;
+    else
+        return GenericGreaterThan;
+}
+
+RTL_GENERIC_COMPARE_RESULTS
+OvpnPeerCompareByVPN6Routine(_RTL_GENERIC_TABLE* table, PVOID first, PVOID second)
+{
+    UNREFERENCED_PARAMETER(table);
+
+    OvpnPeerContext* peer1 = *(OvpnPeerContext**)first;
+    OvpnPeerContext* peer2 = *(OvpnPeerContext**)second;
+
+    int n = memcmp(&peer1->VpnAddrs.IPv6, &peer2->VpnAddrs.IPv6, sizeof(IN6_ADDR));
+    if (n == 0)
+        return GenericEqual;
+    else if (n < 0)
+        return GenericLessThan;
+    else
+        return GenericGreaterThan;
 }
 
 static
@@ -154,6 +195,93 @@ OvpnPeerNew(POVPN_DEVICE device, WDFREQUEST request)
             status = OvpnSocketTcpConnect(socket, device, (PSOCKADDR)&peer->Remote);
         }
     }
+
+done:
+    LOG_EXIT();
+
+    return status;
+}
+
+_Use_decl_annotations_
+NTSTATUS
+OvpnMPPeerNew(POVPN_DEVICE device, WDFREQUEST request)
+{
+    LOG_ENTER();
+
+    const struct in6_addr ovpn_in6addr_any = { { 0 } };
+
+    NTSTATUS status = STATUS_SUCCESS;
+
+    POVPN_MP_NEW_PEER peer;
+
+    GOTO_IF_NOT_NT_SUCCESS(done, status, WdfRequestRetrieveInputBuffer(request, sizeof(OVPN_MP_NEW_PEER), (PVOID*)&peer, nullptr));
+
+    // check if we already have a peer with the same peer-id
+    KIRQL kirql = ExAcquireSpinLockExclusive(&device->SpinLock);
+    OvpnPeerContext* peerCtx = OvpnFindPeer(device, peer->PeerId);
+    ExReleaseSpinLockExclusive(&device->SpinLock, kirql);
+    if (peerCtx != NULL) {
+        status = STATUS_OBJECTID_EXISTS;
+        goto done;
+    }
+
+    // ensure local/remote address is AF_INET or AF_INET6
+    if ((peer->Local.Addr4.sin_family != AF_INET) && (peer->Local.Addr4.sin_family != AF_INET6))
+    {
+        status = STATUS_INVALID_DEVICE_REQUEST;
+        LOG_ERROR("Unknown address family in peer->Local", TraceLoggingValue(peer->Local.Addr4.sin_family, "AF"));
+        goto done;
+    }
+    if ((peer->Remote.Addr4.sin_family != AF_INET) && (peer->Remote.Addr4.sin_family != AF_INET6))
+    {
+        status = STATUS_INVALID_DEVICE_REQUEST;
+        LOG_ERROR("Unknown address family in peer->Remote", TraceLoggingValue(peer->Remote.Addr4.sin_family, "AF"));
+        goto done;
+    }
+
+    // allocate peer
+    peerCtx = OvpnPeerCtxAlloc();
+    if (peerCtx == NULL) {
+        status = STATUS_NO_MEMORY;
+        goto done;
+    }
+
+    // assign local transport address
+    if (peer->Local.Addr4.sin_family == AF_INET) {
+        peerCtx->TransportAddrs.Local.IPv4 = peer->Local.Addr4.sin_addr;
+    }
+    else {
+        peerCtx->TransportAddrs.Local.IPv6 = peer->Local.Addr6.sin6_addr;
+    }
+
+    // assign remote transport address
+    if (peer->Remote.Addr4.sin_family == AF_INET) {
+        peerCtx->TransportAddrs.Remote.IPv4 = peer->Remote.Addr4;
+    }
+    else {
+        peerCtx->TransportAddrs.Remote.IPv6 = peer->Remote.Addr6;
+    }
+
+    peerCtx->VpnAddrs.IPv4 = peer->VpnAddr4;
+    peerCtx->VpnAddrs.IPv6 = peer->VpnAddr6;
+
+    peerCtx->PeerId = peer->PeerId;
+
+    kirql = ExAcquireSpinLockExclusive(&device->SpinLock);
+    LOG_IF_NOT_NT_SUCCESS(status = OvpnAddPeer(device, peerCtx));
+    if (status == STATUS_SUCCESS) {
+        if (peer->VpnAddr4.S_un.S_addr != INADDR_ANY) {
+            LOG_IF_NOT_NT_SUCCESS(status = OvpnAddPeerVpn4(device, peerCtx));
+        }
+
+        if (RtlCompareMemory(&peer->VpnAddr6, &ovpn_in6addr_any, sizeof(IN6_ADDR)) != sizeof(IN6_ADDR)) {
+            LOG_IF_NOT_NT_SUCCESS(status = OvpnAddPeerVpn6(device, peerCtx));
+        }
+    }
+    else {
+        OvpnPeerCtxFree(peerCtx);
+    }
+    ExReleaseSpinLockExclusive(&device->SpinLock, kirql);
 
 done:
     LOG_EXIT();

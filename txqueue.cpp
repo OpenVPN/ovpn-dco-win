@@ -77,13 +77,15 @@ OvpnTxProcessPacket(_In_ POVPN_DEVICE device, _In_ POVPN_TXQUEUE queue, _In_ NET
         NetFragmentIteratorAdvance(&fi);
     }
 
+    OvpnPeerContext* peer = NULL;
     if (OvpnMssIsIPv4(buffer->Data, buffer->Len)) {
         OvpnMssDoIPv4(buffer->Data, buffer->Len, device->MSS);
+        peer = OvpnFindPeerVPN4(device, ((IPV4_HEADER*)buffer->Data)->DestinationAddress);
     } else if (OvpnMssIsIPv6(buffer->Data, buffer->Len)) {
         OvpnMssDoIPv6(buffer->Data, buffer->Len, device->MSS);
+        peer = OvpnFindPeerVPN6(device, ((IPV6_HEADER*)buffer->Data)->DestinationAddress);
     }
 
-    OvpnPeerContext* peer = OvpnGetFirstPeer(&device->Peers);
     if (peer == NULL) {
         status = STATUS_ADDRESS_NOT_ASSOCIATED;
         OvpnTxBufferPoolPut(buffer);

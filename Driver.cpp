@@ -317,6 +317,7 @@ OvpnDeviceCheckMode(OVPN_MODE mode, ULONG code)
         switch (code) {
         // those IOCTLs are for MP mode
         case OVPN_IOCTL_MP_START_VPN:
+        case OVPN_IOCTL_MP_NEW_PEER:
             return FALSE;
         }
     }
@@ -498,6 +499,10 @@ OvpnEvtIoDeviceControl(WDFQUEUE queue, WDFREQUEST request, size_t outputBufferLe
 
     case OVPN_IOCTL_MP_START_VPN:
         status = OvpnMPStartVPN(device, request, &bytesReturned);
+        break;
+
+    case OVPN_IOCTL_MP_NEW_PEER:
+        status = OvpnMPPeerNew(device, request);
         break;
 
     default:
@@ -705,8 +710,10 @@ OvpnEvtDeviceAdd(WDFDRIVER wdfDriver, PWDFDEVICE_INIT deviceInit) {
 
     GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnCryptoInitAlgHandles(&device->AesAlgHandle, &device->ChachaAlgHandle));
 
-    // Initialize peers tree
+    // Initialize peers tables
     RtlInitializeGenericTable(&device->Peers, OvpnPeerCompareByPeerIdRoutine, OvpnPeerAllocateRoutine, OvpnPeerFreeRoutine, NULL);
+    RtlInitializeGenericTable(&device->PeersByVpn4, OvpnPeerCompareByVPN4Routine, OvpnPeerAllocateRoutine, OvpnPeerFreeRoutine, NULL);
+    RtlInitializeGenericTable(&device->PeersByVpn6, OvpnPeerCompareByVPN6Routine, OvpnPeerAllocateRoutine, OvpnPeerFreeRoutine, NULL);
 
     LOG_IF_NOT_NT_SUCCESS(status = OvpnAdapterCreate(device));
 
@@ -716,17 +723,17 @@ done:
     return status;
 }
 
-_Use_decl_annotations_
 NTSTATUS
-OvpnAddPeer(POVPN_DEVICE device, OvpnPeerContext* peer)
+OvpnAddPeerToTable(_In_ RTL_GENERIC_TABLE* table, _In_ OvpnPeerContext* peer)
 {
     NTSTATUS status;
     BOOLEAN newElem;
 
-    RtlInsertElementGenericTable(&device->Peers, (PVOID)&peer, sizeof(OvpnPeerContext*), &newElem);
+    RtlInsertElementGenericTable(table, (PVOID)&peer, sizeof(OvpnPeerContext*), &newElem);
 
     if (newElem) {
         status = STATUS_SUCCESS;
+        InterlockedIncrement(&peer->RefCounter);
     }
     else {
         LOG_ERROR("Unable to add new peer");
@@ -735,9 +742,33 @@ OvpnAddPeer(POVPN_DEVICE device, OvpnPeerContext* peer)
     return status;
 }
 
+
+_Use_decl_annotations_
+NTSTATUS
+OvpnAddPeer(POVPN_DEVICE device, OvpnPeerContext* peer)
+{
+    return OvpnAddPeerToTable(&device->Peers, peer);
+}
+
+_Use_decl_annotations_
+NTSTATUS
+OvpnAddPeerVpn4(POVPN_DEVICE device, OvpnPeerContext* peer)
+{
+    return OvpnAddPeerToTable(&device->PeersByVpn4, peer);
+}
+
+_Use_decl_annotations_
+NTSTATUS
+OvpnAddPeerVpn6(POVPN_DEVICE device, OvpnPeerContext* peer)
+{
+    return OvpnAddPeerToTable(&device->PeersByVpn6, peer);
+}
+
 _Use_decl_annotations_
 VOID
 OvpnFlushPeers(POVPN_DEVICE device) {
+    OvpnCleanupPeerTable(&device->PeersByVpn6);
+    OvpnCleanupPeerTable(&device->PeersByVpn4);
     OvpnCleanupPeerTable(&device->Peers);
 }
 
@@ -750,7 +781,9 @@ OvpnCleanupPeerTable(RTL_GENERIC_TABLE* peers)
         OvpnPeerContext* peer = *(OvpnPeerContext**)ptr;
         RtlDeleteElementGenericTable(peers, ptr);
 
-        OvpnPeerCtxFree(peer);
+        if (InterlockedDecrement(&peer->RefCounter) == 0) {
+            OvpnPeerCtxFree(peer);
+        }
     }
 }
 
@@ -759,5 +792,53 @@ OvpnPeerContext*
 OvpnGetFirstPeer(RTL_GENERIC_TABLE* peers)
 {
     OvpnPeerContext** ptr = (OvpnPeerContext**)RtlGetElementGenericTable(peers, 0);
+    return ptr ? (OvpnPeerContext*)*ptr : NULL;
+}
+
+_Use_decl_annotations_
+OvpnPeerContext*
+OvpnFindPeer(POVPN_DEVICE device, INT32 PeerId)
+{
+    if (device->Mode == OVPN_MODE_P2P) {
+        return OvpnGetFirstPeer(&device->Peers);
+    }
+
+    OvpnPeerContext p {};
+    p.PeerId = PeerId;
+
+    auto* pp = &p;
+    OvpnPeerContext** ptr = (OvpnPeerContext**)RtlLookupElementGenericTable(&device->Peers, &pp);
+    return ptr ? (OvpnPeerContext*)*ptr : NULL;
+}
+
+_Use_decl_annotations_
+OvpnPeerContext*
+OvpnFindPeerVPN4(POVPN_DEVICE device, IN_ADDR addr)
+{
+    if (device->Mode == OVPN_MODE_P2P) {
+        return OvpnGetFirstPeer(&device->Peers);
+    }
+
+    OvpnPeerContext p{};
+    p.VpnAddrs.IPv4 = addr;
+
+    auto* pp = &p;
+    OvpnPeerContext** ptr = (OvpnPeerContext**)RtlLookupElementGenericTable(&device->PeersByVpn4, &pp);
+    return ptr ? (OvpnPeerContext*)*ptr : NULL;
+}
+
+_Use_decl_annotations_
+OvpnPeerContext*
+OvpnFindPeerVPN6(POVPN_DEVICE device, IN6_ADDR addr)
+{
+    if (device->Mode == OVPN_MODE_P2P) {
+        return OvpnGetFirstPeer(&device->Peers);
+    }
+
+    OvpnPeerContext p{};
+    p.VpnAddrs.IPv6 = addr;
+
+    auto* pp = &p;
+    OvpnPeerContext** ptr = (OvpnPeerContext**)RtlLookupElementGenericTable(&device->PeersByVpn6, &pp);
     return ptr ? (OvpnPeerContext*)*ptr : NULL;
 }

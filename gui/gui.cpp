@@ -20,7 +20,8 @@ LRESULT CALLBACK WindowProcedure(HWND, UINT, WPARAM, LPARAM);
 HWND hMPListenAddress, hMPListenPort,
     hP2PLocalAddress, hP2PLocalPort,
     hP2PRemoteAddress, hP2PRemotePort,
-    hCCMessage, hCCRemoteAddress, hCCRemotePort;
+    hCCMessage, hCCRemoteAddress, hCCRemotePort,
+    hMPNewPeerLocalIP, hMPNewPeerLocalPort, hMPNewPeerRemoteIP, hMPNewPeerRemotePort, hMPNewPeerVPNIP, hMPNewPeerPeerId;
 
 HWND hLogArea;
 std::unordered_map<DWORD, std::wstring> buttons = {
@@ -34,7 +35,8 @@ std::unordered_map<DWORD, std::wstring> buttons = {
     {OVPN_IOCTL_GET_VERSION, L"Get Version"},
     {OVPN_IOCTL_NEW_KEY_V2, L"New Key V2"},
     {OVPN_IOCTL_SET_MODE, L"Set Mode"},
-    {OVPN_IOCTL_MP_START_VPN, L"MP Start VPN"}
+    {OVPN_IOCTL_MP_START_VPN, L"MP Start VPN"},
+    {OVPN_IOCTL_MP_NEW_PEER, L"MP New Peer"}
 };
 
 #define MIN_FUNCTION_CODE 1
@@ -102,7 +104,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrevInst, LPSTR args, int ncmdsho
 
     // Create the Window
     HWND hwnd = CreateWindowW(L"myWindowClass", L"ovpn-dco-win GUI", WS_OVERLAPPEDWINDOW | WS_VISIBLE,
-                              100, 100, 800, 600, NULL, NULL, NULL, NULL);
+                              100, 100, 900, 600, NULL, NULL, NULL, NULL);
 
     HANDLE hEvRead = CreateEventW(NULL, FALSE, FALSE, NULL);
     ovRead.hEvent = hEvRead;
@@ -324,6 +326,47 @@ void P2PStartVPN()
     }
 }
 
+void MPNewPeer()
+{
+    wchar_t localIP[16], localPort[6];
+    wchar_t remoteIP[16], remotePort[6], vpnIP[16];
+    wchar_t peerId[6];
+
+    GetWindowText(hMPNewPeerLocalIP, localIP, 16);
+    GetWindowText(hMPNewPeerLocalPort, localPort, 6);
+    GetWindowText(hMPNewPeerRemoteIP, remoteIP, 16);
+    GetWindowText(hMPNewPeerRemotePort, remotePort, 6);
+    GetWindowText(hMPNewPeerVPNIP, vpnIP, 16);
+    GetWindowText(hMPNewPeerPeerId, peerId, 6);
+
+    sockaddr_in localAddr  = {};
+    localAddr.sin_family = AF_INET;
+    InetPtonW(AF_INET, localIP, &(localAddr.sin_addr));
+    localAddr.sin_port = htons(_wtoi(localPort));
+
+    sockaddr_in remoteAddr = {};
+    remoteAddr.sin_family = AF_INET;
+    InetPtonW(AF_INET, remoteIP, &(remoteAddr.sin_addr));
+    remoteAddr.sin_port = htons(_wtoi(remotePort));
+
+    in_addr vpnAddress;
+    InetPtonW(AF_INET, vpnIP, &vpnAddress);
+
+    OVPN_MP_NEW_PEER newPeer = {};
+    newPeer.Local.Addr4 = localAddr;
+    newPeer.Remote.Addr4 = remoteAddr;
+    newPeer.VpnAddr4 = vpnAddress;
+    newPeer.PeerId = _wtoi(peerId);
+
+    DWORD bytesReturned;
+    if (!DeviceIoControl(hDev, OVPN_IOCTL_MP_NEW_PEER, &newPeer, sizeof(newPeer), NULL, 0, &bytesReturned, NULL)) {
+        Log("DeviceIoControl(OVPN_IOCTL_MP_NEW_PEER) failed with code ", GetLastError());
+    }
+    else {
+        Log("MP peer added");
+    }
+}
+
 void
 CreatePushButton(HWND hWnd, DWORD ioctl, int x, int y)
 {
@@ -412,6 +455,14 @@ LRESULT CALLBACK WindowProcedure(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         hCCRemoteAddress = CreateEditBox(hwnd, L"192.168.100.1", 290, 160, 120);
         hCCRemotePort = CreateEditBox(hwnd, L"1194", 430, 160, 60);
 
+        CreatePushButton(hwnd, OVPN_IOCTL_MP_NEW_PEER, 10, 210);
+        hMPNewPeerLocalIP = CreateEditBox(hwnd, L"192.168.100.2", 150, 210, 120);
+        hMPNewPeerLocalPort = CreateEditBox(hwnd, L"1194", 290, 210, 60);
+        hMPNewPeerRemoteIP = CreateEditBox(hwnd, L"192.168.100.1", 400, 210, 120);
+        hMPNewPeerRemotePort = CreateEditBox(hwnd, L"1194", 540, 210, 60);
+        hMPNewPeerVPNIP = CreateEditBox(hwnd, L"10.8.0.6", 650, 210, 120);
+        hMPNewPeerPeerId = CreateEditBox(hwnd, L"1", 790, 210, 60);
+
         SendMessage(hModes[0], BM_SETCHECK, BST_CHECKED, 0);
 
         // log area
@@ -450,6 +501,9 @@ LRESULT CALLBACK WindowProcedure(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             case OVPN_IOCTL_START_VPN:
                 P2PStartVPN();
                 break;
+
+            case OVPN_IOCTL_MP_NEW_PEER:
+                MPNewPeer();
             }
         }
         else if ((ULONG)wp == BTN_SEND_CC) {

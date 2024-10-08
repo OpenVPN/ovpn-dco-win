@@ -36,6 +36,7 @@
 #define OVPN_OP_DATA_V2 9
 #define OVPN_KEY_ID_MASK 0x07
 #define OVPN_OPCODE_SHIFT 3
+#define OVPN_PEER_ID_MASK 0x00FFFFFF
 
 struct OvpnCryptoKeySlot
 {

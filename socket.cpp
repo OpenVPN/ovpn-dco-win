@@ -189,13 +189,13 @@ OvpnSocketControlPacketReceived(_In_ POVPN_DEVICE device, _In_reads_(len) PUCHAR
 
 static
 _Requires_shared_lock_held_(device->SpinLock)
-VOID OvpnSocketDataPacketReceived(_In_ POVPN_DEVICE device, UCHAR op, _In_reads_(len) PUCHAR cipherTextBuf, SIZE_T len)
+VOID OvpnSocketDataPacketReceived(_In_ POVPN_DEVICE device, UCHAR op, UINT32 peerId, _In_reads_(len) PUCHAR cipherTextBuf, SIZE_T len)
 {
     InterlockedExchangeAddNoFence64(&device->Stats.TransportBytesReceived, len);
 
-    OvpnPeerContext* peer = OvpnGetFirstPeer(&device->Peers);
+    OvpnPeerContext* peer = OvpnFindPeer(device, peerId);
     if (peer == NULL) {
-        LOG_WARN("No peer");
+        LOG_WARN("Peer not found", TraceLoggingValue(peerId, "peerId"));
         InterlockedIncrementNoFence(&device->Stats.LostInDataPackets);
         return;
     }
@@ -288,7 +288,8 @@ OvpnSocketProcessIncomingPacket(_In_ POVPN_DEVICE device, _In_reads_(packetLengt
 
     UCHAR op = RtlUlongByteSwap(*(ULONG*)(buf)) >> 24;
     if (OvpnCryptoOpcodeExtract(op) == OVPN_OP_DATA_V2) {
-        OvpnSocketDataPacketReceived(device, op, buf, packetLength);
+        UINT32 peerId = RtlUlongByteSwap(*(ULONG*)(buf)) & OVPN_PEER_ID_MASK;
+        OvpnSocketDataPacketReceived(device, op, peerId, buf, packetLength);
     }
     else {
         OvpnSocketControlPacketReceived(device, buf, packetLength, remoteAddr);

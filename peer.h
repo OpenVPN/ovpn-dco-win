@@ -41,6 +41,26 @@ struct OvpnPeerContext
 
     // 1-sec timer which handles ping intervals and keepalive timeouts
     WDFTIMER Timer;
+
+    struct {
+        IN_ADDR IPv4;
+        IN6_ADDR IPv6;
+    } VpnAddrs;
+
+    struct {
+        union {
+            IN_ADDR IPv4;
+            IN6_ADDR IPv6;
+        } Local;
+
+        union {
+            SOCKADDR_IN IPv4;
+            SOCKADDR_IN6 IPv6;
+        } Remote;
+
+    } TransportAddrs;
+
+    LONG RefCounter;
 };
 
 _Must_inspect_result_
@@ -53,11 +73,18 @@ OvpnPeerCtxFree(_In_ OvpnPeerContext*);
 RTL_GENERIC_ALLOCATE_ROUTINE OvpnPeerAllocateRoutine;
 RTL_GENERIC_FREE_ROUTINE OvpnPeerFreeRoutine;
 RTL_GENERIC_COMPARE_ROUTINE OvpnPeerCompareByPeerIdRoutine;
+RTL_GENERIC_COMPARE_ROUTINE OvpnPeerCompareByVPN4Routine;
+RTL_GENERIC_COMPARE_ROUTINE OvpnPeerCompareByVPN6Routine;
 
 _Must_inspect_result_
 _IRQL_requires_(PASSIVE_LEVEL)
 NTSTATUS
 OvpnPeerNew(_In_ POVPN_DEVICE device, WDFREQUEST request);
+
+_Must_inspect_result_
+_IRQL_requires_(PASSIVE_LEVEL)
+NTSTATUS
+OvpnMPPeerNew(_In_ POVPN_DEVICE device, WDFREQUEST request);
 
 _Must_inspect_result_
 _Requires_exclusive_lock_held_(device->SpinLock)
