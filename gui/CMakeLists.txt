@@ -8,4 +8,4 @@ set(CMAKE_CXX_STANDARD_REQUIRED YES)   # Ensure the compiler strictly requires C
 add_executable (gui WIN32 "gui.cpp")
 
 add_definitions(-DUNICODE -D_UNICODE)
-target_link_libraries(gui PRIVATE user32 gdi32 Ws2_32)
+target_link_libraries(gui PRIVATE user32 gdi32 Ws2_32 Crypt32)

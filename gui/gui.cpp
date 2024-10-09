@@ -3,6 +3,7 @@
 #include <windows.h>
 #include <ws2tcpip.h>
 
+#include <fstream>
 #include <unordered_map>
 #include <vector>
 #include <string>
@@ -21,7 +22,8 @@ HWND hMPListenAddress, hMPListenPort,
     hP2PLocalAddress, hP2PLocalPort,
     hP2PRemoteAddress, hP2PRemotePort,
     hCCMessage, hCCRemoteAddress, hCCRemotePort,
-    hMPNewPeerLocalIP, hMPNewPeerLocalPort, hMPNewPeerRemoteIP, hMPNewPeerRemotePort, hMPNewPeerVPNIP, hMPNewPeerPeerId;
+    hMPNewPeerLocalIP, hMPNewPeerLocalPort, hMPNewPeerRemoteIP, hMPNewPeerRemotePort, hMPNewPeerVPNIP, hMPNewPeerPeerId,
+    hP2PNewKeyPeerId;
 
 HWND hLogArea;
 std::unordered_map<DWORD, std::wstring> buttons = {
@@ -36,7 +38,8 @@ std::unordered_map<DWORD, std::wstring> buttons = {
     {OVPN_IOCTL_NEW_KEY_V2, L"New Key V2"},
     {OVPN_IOCTL_SET_MODE, L"Set Mode"},
     {OVPN_IOCTL_MP_START_VPN, L"MP Start VPN"},
-    {OVPN_IOCTL_MP_NEW_PEER, L"MP New Peer"}
+    {OVPN_IOCTL_MP_NEW_PEER, L"MP New Peer"},
+    {OVPN_IOCTL_NEW_KEY, L"P2P New Key"},
 };
 
 #define MIN_FUNCTION_CODE 1
@@ -368,6 +371,58 @@ void MPNewPeer()
 }
 
 void
+P2PNewKey()
+{
+    wchar_t peerId[6];
+    GetWindowText(hP2PNewKeyPeerId, peerId, 6);
+
+    std::ifstream file("data64.key");
+    if (!file) return;
+
+    std::string b64str{(std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>()};
+
+    DWORD binarySize = 0;
+    if (!CryptStringToBinaryA(b64str.c_str(), 0, CRYPT_STRING_BASE64, nullptr, &binarySize, nullptr, nullptr))
+        return;
+
+    std::vector<BYTE> buf(binarySize);
+    if (!CryptStringToBinaryA(b64str.c_str(), 0, CRYPT_STRING_BASE64, buf.data(), &binarySize, nullptr, nullptr))
+        return;
+
+    OVPN_CRYPTO_DATA crypto_data = {};
+    constexpr int keyLen = sizeof(crypto_data.Encrypt.Key);
+
+    bool keyDirectory = 0;
+    if (keyDirectory) {
+        CopyMemory(crypto_data.Encrypt.Key, buf.data() + keyLen, keyLen);
+        CopyMemory(crypto_data.Decrypt.Key, buf.data(), keyLen);
+    }
+    else {
+        CopyMemory(crypto_data.Encrypt.Key, buf.data(), keyLen);
+        CopyMemory(crypto_data.Decrypt.Key, buf.data() + keyLen, keyLen);
+    }
+
+    crypto_data.Encrypt.KeyLen = keyLen; // hardcode 256bit key size
+    crypto_data.Decrypt.KeyLen = keyLen; // hardcode 256bit key size
+
+    constexpr int nonceTailLen = sizeof(crypto_data.Encrypt.NonceTail);
+    // for test purposes decrypt and encrypt nonces are same
+    CopyMemory(crypto_data.Encrypt.NonceTail, buf.data() + keyLen * 2, nonceTailLen);
+    CopyMemory(crypto_data.Decrypt.NonceTail, buf.data() + keyLen * 2, nonceTailLen);
+
+    crypto_data.CipherAlg = OVPN_CIPHER_ALG::OVPN_CIPHER_ALG_AES_GCM;
+    crypto_data.PeerId = _wtoi(peerId);
+
+    DWORD bytesReturned;
+    if (!DeviceIoControl(hDev, OVPN_IOCTL_NEW_KEY, &crypto_data, sizeof(crypto_data), NULL, 0, &bytesReturned, NULL)) {
+        Log("DeviceIoControl(OVPN_IOCTL_NEW_KEY) failed with code ", GetLastError());
+    }
+    else {
+        Log("New key added");
+    }
+}
+
+void
 CreatePushButton(HWND hWnd, DWORD ioctl, int x, int y)
 {
     CreateWindowW(L"Button", buttons[ioctl].c_str(), WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON, x, y, 100, 30,
@@ -463,6 +518,9 @@ LRESULT CALLBACK WindowProcedure(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         hMPNewPeerVPNIP = CreateEditBox(hwnd, L"10.8.0.6", 650, 210, 120);
         hMPNewPeerPeerId = CreateEditBox(hwnd, L"1", 790, 210, 60);
 
+        CreatePushButton(hwnd, OVPN_IOCTL_NEW_KEY, 10, 260);
+        hP2PNewKeyPeerId = CreateEditBox(hwnd, L"1", 150, 260, 60);
+
         SendMessage(hModes[0], BM_SETCHECK, BST_CHECKED, 0);
 
         // log area
@@ -504,6 +562,11 @@ LRESULT CALLBACK WindowProcedure(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 
             case OVPN_IOCTL_MP_NEW_PEER:
                 MPNewPeer();
+                break;
+
+            case OVPN_IOCTL_NEW_KEY:
+                P2PNewKey();
+                break;
             }
         }
         else if ((ULONG)wp == BTN_SEND_CC) {
