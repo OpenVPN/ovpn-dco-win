@@ -153,6 +153,13 @@ OvpnPeerNew(POVPN_DEVICE device, WDFREQUEST request)
         goto done;
     }
 
+    if ((peer->Remote.Addr4.sin_family != AF_INET) && (peer->Remote.Addr4.sin_family != AF_INET6))
+    {
+        status = STATUS_INVALID_DEVICE_REQUEST;
+        LOG_ERROR("Unknown address family in peer->Remote", TraceLoggingValue(peer->Remote.Addr4.sin_family, "AF"));
+        goto done;
+    }
+
     POVPN_DRIVER driver = OvpnGetDriverContext(WdfGetDriver());
     PWSK_SOCKET socket = NULL;
     BOOLEAN proto_tcp = peer->Proto == OVPN_PROTO_TCP;
@@ -162,6 +169,14 @@ OvpnPeerNew(POVPN_DEVICE device, WDFREQUEST request)
     if (peerCtx == NULL) {
         status = STATUS_NO_MEMORY;
         goto done;
+    }
+
+    // assign remote transport address
+    if (peer->Remote.Addr4.sin_family == AF_INET) {
+        peerCtx->TransportAddrs.Remote.IPv4 = peer->Remote.Addr4;
+    }
+    else {
+        peerCtx->TransportAddrs.Remote.IPv6 = peer->Remote.Addr6;
     }
 
     GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnSocketInit(&driver->WskProviderNpi,

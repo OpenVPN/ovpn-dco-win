@@ -191,13 +191,14 @@ OvpnEvtTxQueueAdvance(NETPACKETQUEUE netPacketQueue)
     NetPacketIteratorSet(&pi);
 
     if (packetSent) {
+        // TODO: get actual peer
         OvpnPeerContext* peer = OvpnGetFirstPeer(&device->Peers);
         if (peer != NULL) {
             OvpnTimerResetXmit(peer->Timer);
 
             if (!device->Socket.Tcp) {
                 // this will use WskSendMessages to send buffers list which we constructed before
-                LOG_IF_NOT_NT_SUCCESS(OvpnSocketSend(&device->Socket, txBufferHead, NULL));
+                LOG_IF_NOT_NT_SUCCESS(OvpnSocketSend(&device->Socket, txBufferHead, (SOCKADDR*)&peer->TransportAddrs.Remote));
             }
         }
     }
