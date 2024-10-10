@@ -305,8 +305,6 @@ OvpnDeviceCheckMode(OVPN_MODE mode, ULONG code)
         // all those IOCTLs are only for P2P mode
         case OVPN_IOCTL_NEW_PEER:
         case OVPN_IOCTL_DEL_PEER:
-        case OVPN_IOCTL_NEW_KEY:
-        case OVPN_IOCTL_NEW_KEY_V2:
         case OVPN_IOCTL_SWAP_KEYS:
         case OVPN_IOCTL_SET_PEER:
         case OVPN_IOCTL_START_VPN:
