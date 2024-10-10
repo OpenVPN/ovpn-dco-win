@@ -23,7 +23,7 @@ HWND hMPListenAddress, hMPListenPort,
     hP2PRemoteAddress, hP2PRemotePort,
     hCCMessage, hCCRemoteAddress, hCCRemotePort,
     hMPNewPeerLocalIP, hMPNewPeerLocalPort, hMPNewPeerRemoteIP, hMPNewPeerRemotePort, hMPNewPeerVPNIP, hMPNewPeerPeerId,
-    hP2PNewKeyPeerId;
+    hNewKeyPeerId;
 
 HWND hLogArea;
 std::unordered_map<DWORD, std::wstring> buttons = {
@@ -39,7 +39,7 @@ std::unordered_map<DWORD, std::wstring> buttons = {
     {OVPN_IOCTL_SET_MODE, L"Set Mode"},
     {OVPN_IOCTL_MP_START_VPN, L"MP Start VPN"},
     {OVPN_IOCTL_MP_NEW_PEER, L"MP New Peer"},
-    {OVPN_IOCTL_NEW_KEY, L"P2P New Key"},
+    {OVPN_IOCTL_NEW_KEY, L"New Key"},
 };
 
 #define MIN_FUNCTION_CODE 1
@@ -371,10 +371,10 @@ void MPNewPeer()
 }
 
 void
-P2PNewKey()
+NewKey()
 {
     wchar_t peerId[6];
-    GetWindowText(hP2PNewKeyPeerId, peerId, 6);
+    GetWindowText(hNewKeyPeerId, peerId, 6);
 
     std::ifstream file("data64.key");
     if (!file) return;
@@ -392,8 +392,9 @@ P2PNewKey()
     OVPN_CRYPTO_DATA crypto_data = {};
     constexpr int keyLen = sizeof(crypto_data.Encrypt.Key);
 
-    bool keyDirectory = 0;
-    if (keyDirectory) {
+    bool mp = SendMessage(hModes[1], BM_GETCHECK, 0, 0) == BST_CHECKED;
+    bool keyDir = mp ? 1 : 0;
+    if (keyDir) {
         CopyMemory(crypto_data.Encrypt.Key, buf.data() + keyLen, keyLen);
         CopyMemory(crypto_data.Decrypt.Key, buf.data(), keyLen);
     }
@@ -519,7 +520,7 @@ LRESULT CALLBACK WindowProcedure(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         hMPNewPeerPeerId = CreateEditBox(hwnd, L"1", 790, 210, 60);
 
         CreatePushButton(hwnd, OVPN_IOCTL_NEW_KEY, 10, 260);
-        hP2PNewKeyPeerId = CreateEditBox(hwnd, L"1", 150, 260, 60);
+        hNewKeyPeerId = CreateEditBox(hwnd, L"1", 150, 260, 60);
 
         SendMessage(hModes[0], BM_SETCHECK, BST_CHECKED, 0);
 
@@ -565,7 +566,7 @@ LRESULT CALLBACK WindowProcedure(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                 break;
 
             case OVPN_IOCTL_NEW_KEY:
-                P2PNewKey();
+                NewKey();
                 break;
             }
         }
