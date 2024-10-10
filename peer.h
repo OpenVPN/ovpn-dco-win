@@ -39,11 +39,28 @@ struct OvpnPeerContext
     // keepalive timeout in seconds
     LONG KeepaliveTimeout;
 
-    // timer used to send periodic ping messages to the server if no data has been sent within the past KeepaliveInterval seconds
-    WDFTIMER KeepaliveXmitTimer;
+    // 1-sec timer which handles ping intervals and keepalive timeouts
+    WDFTIMER Timer;
 
-    // timer used to report keepalive timeout error to userspace when no data has been received for KeepaliveTimeout seconds
-    WDFTIMER KeepaliveRecvTimer;
+    struct {
+        IN_ADDR IPv4;
+        IN6_ADDR IPv6;
+    } VpnAddrs;
+
+    struct {
+        union {
+            IN_ADDR IPv4;
+            IN6_ADDR IPv6;
+        } Local;
+
+        union {
+            SOCKADDR_IN IPv4;
+            SOCKADDR_IN6 IPv6;
+        } Remote;
+
+    } TransportAddrs;
+
+    LONG RefCounter;
 };
 
 _Must_inspect_result_
@@ -56,6 +73,8 @@ OvpnPeerCtxFree(_In_ OvpnPeerContext*);
 RTL_GENERIC_ALLOCATE_ROUTINE OvpnPeerAllocateRoutine;
 RTL_GENERIC_FREE_ROUTINE OvpnPeerFreeRoutine;
 RTL_GENERIC_COMPARE_ROUTINE OvpnPeerCompareByPeerIdRoutine;
+RTL_GENERIC_COMPARE_ROUTINE OvpnPeerCompareByVPN4Routine;
+RTL_GENERIC_COMPARE_ROUTINE OvpnPeerCompareByVPN6Routine;
 
 _Must_inspect_result_
 _IRQL_requires_(PASSIVE_LEVEL)
@@ -65,7 +84,7 @@ OvpnPeerNew(_In_ POVPN_DEVICE device, WDFREQUEST request);
 _Must_inspect_result_
 _IRQL_requires_(PASSIVE_LEVEL)
 NTSTATUS
-OvpnPeerDel(_In_ POVPN_DEVICE device);
+OvpnMPPeerNew(_In_ POVPN_DEVICE device, WDFREQUEST request);
 
 _Must_inspect_result_
 _Requires_exclusive_lock_held_(device->SpinLock)
@@ -87,6 +106,11 @@ _Must_inspect_result_
 _Requires_exclusive_lock_held_(device->SpinLock)
 NTSTATUS
 OvpnPeerNewKey(_In_ POVPN_DEVICE device, WDFREQUEST request);
+
+_Must_inspect_result_
+_Requires_exclusive_lock_held_(device->SpinLock)
+NTSTATUS
+OvpnPeerNewKeyV2(_In_ POVPN_DEVICE device, WDFREQUEST request);
 
 _Must_inspect_result_
 _Requires_exclusive_lock_held_(device->SpinLock)

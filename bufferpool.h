@@ -63,20 +63,51 @@ struct OVPN_TX_BUFFER
 
 struct OVPN_RX_BUFFER
 {
+    // points to the beginning of data
+    PUCHAR Data;
+
+    // points to the end of data
+    PUCHAR Tail;
+
+    // data length
+    SIZE_T Len;
+
     LIST_ENTRY PoolListEntry;
 
     LIST_ENTRY QueueListEntry;
 
-    SIZE_T Len;
-
     OVPN_RX_BUFFER_POOL Pool;
 
-    UCHAR Data[OVPN_SOCKET_RX_PACKET_BUFFER_SIZE];
+    #pragma warning(suppress:4200) //nonstandard extension used: zero-sized array in struct/union
+    UCHAR Head[];
 };
 
-_Must_inspect_result_
+template <class BUF>
 UCHAR*
-OvpnTxBufferPut(_In_ OVPN_TX_BUFFER* work, SIZE_T len);
+OvpnBufferPut(_In_ BUF* buf, SIZE_T len)
+{
+    UCHAR* tmp = buf->Tail;
+    buf->Tail += len;
+    buf->Len += len;
+
+    return tmp;
+}
+
+template <class BUF>
+VOID
+OvpnBufferTrim(_In_ BUF* buf, SIZE_T len)
+{
+    buf->Len = len;
+    buf->Tail = buf->Data + len;
+}
+
+template <class BUF>
+VOID
+OvpnBufferPull(_In_ BUF* buf, SIZE_T len)
+{
+    buf->Len -= len;
+    buf->Data += len;
+}
 
 UCHAR*
 OvpnTxBufferPush(_In_ OVPN_TX_BUFFER* work, SIZE_T len);

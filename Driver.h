@@ -47,6 +47,8 @@ EVT_WDF_IO_QUEUE_IO_DEVICE_CONTROL OvpnEvtIoDeviceControl;
 typedef struct _OVPN_DRIVER {
     WSK_PROVIDER_NPI WskProviderNpi;
     WSK_REGISTRATION WskRegistration;
+    WDFDEVICE ControlDevice;
+    LONG DeviceCount;
 } OVPN_DRIVER, * POVPN_DRIVER;
 WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(OVPN_DRIVER, OvpnGetDriverContext)
 
@@ -92,7 +94,13 @@ struct OVPN_DEVICE {
     _Guarded_by_(SpinLock)
     RTL_GENERIC_TABLE Peers;
 
-    SIZE_T CryptoOverhead;
+    _Guarded_by_(SpinLock)
+    RTL_GENERIC_TABLE PeersByVpn4;
+
+    _Guarded_by_(SpinLock)
+    RTL_GENERIC_TABLE PeersByVpn6;
+
+    OVPN_MODE Mode;
 };
 
 typedef OVPN_DEVICE * POVPN_DEVICE;
@@ -112,6 +120,14 @@ _Must_inspect_result_
 NTSTATUS
 OvpnAddPeer(_In_ POVPN_DEVICE device, _In_ OvpnPeerContext* PeerCtx);
 
+_Must_inspect_result_
+NTSTATUS
+OvpnAddPeerVpn4(_In_ POVPN_DEVICE device, _In_ OvpnPeerContext* PeerCtx);
+
+_Must_inspect_result_
+NTSTATUS
+OvpnAddPeerVpn6(_In_ POVPN_DEVICE device, _In_ OvpnPeerContext* PeerCtx);
+
 VOID
 OvpnFlushPeers(_In_ POVPN_DEVICE device);
 
@@ -121,3 +137,15 @@ OvpnCleanupPeerTable(_In_ RTL_GENERIC_TABLE*);
 _Must_inspect_result_
 OvpnPeerContext*
 OvpnGetFirstPeer(_In_ RTL_GENERIC_TABLE*);
+
+_Must_inspect_result_
+OvpnPeerContext*
+OvpnFindPeer(_In_ POVPN_DEVICE device, INT32 PeerId);
+
+_Must_inspect_result_
+OvpnPeerContext*
+OvpnFindPeerVPN4(_In_ POVPN_DEVICE device, _In_ IN_ADDR addr);
+
+_Must_inspect_result_
+OvpnPeerContext*
+OvpnFindPeerVPN6(_In_ POVPN_DEVICE device, _In_ IN6_ADDR addr);

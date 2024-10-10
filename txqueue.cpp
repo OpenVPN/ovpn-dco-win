@@ -71,19 +71,21 @@ OvpnTxProcessPacket(_In_ POVPN_DEVICE device, _In_ POVPN_TXQUEUE queue, _In_ NET
         NET_FRAGMENT_VIRTUAL_ADDRESS* virtualAddr = NetExtensionGetFragmentVirtualAddress(
             &queue->VirtualAddressExtension, NetFragmentIteratorGetIndex(&fi));
 
-        RtlCopyMemory(OvpnTxBufferPut(buffer, fragment->ValidLength),
+        RtlCopyMemory(OvpnBufferPut(buffer, fragment->ValidLength),
             (UCHAR const*)virtualAddr->VirtualAddress + fragment->Offset, fragment->ValidLength);
 
         NetFragmentIteratorAdvance(&fi);
     }
 
+    OvpnPeerContext* peer = NULL;
     if (OvpnMssIsIPv4(buffer->Data, buffer->Len)) {
         OvpnMssDoIPv4(buffer->Data, buffer->Len, device->MSS);
+        peer = OvpnFindPeerVPN4(device, ((IPV4_HEADER*)buffer->Data)->DestinationAddress);
     } else if (OvpnMssIsIPv6(buffer->Data, buffer->Len)) {
         OvpnMssDoIPv6(buffer->Data, buffer->Len, device->MSS);
+        peer = OvpnFindPeerVPN6(device, ((IPV6_HEADER*)buffer->Data)->DestinationAddress);
     }
 
-    OvpnPeerContext* peer = OvpnGetFirstPeer(&device->Peers);
     if (peer == NULL) {
         status = STATUS_ADDRESS_NOT_ASSOCIATED;
         OvpnTxBufferPoolPut(buffer);
@@ -93,12 +95,21 @@ OvpnTxProcessPacket(_In_ POVPN_DEVICE device, _In_ POVPN_TXQUEUE queue, _In_ NET
 
     InterlockedExchangeAddNoFence64(&device->Stats.TunBytesSent, buffer->Len);
 
-    if (peer->CryptoContext.Encrypt) {
+    OvpnCryptoContext* cryptoContext = &peer->CryptoContext;
+
+    if (cryptoContext->Encrypt) {
+        auto aeadTagEnd = cryptoContext->CryptoOptions & CRYPTO_OPTIONS_AEAD_TAG_END;
+        auto pktId64bit = cryptoContext->CryptoOptions & CRYPTO_OPTIONS_64BIT_PKTID;
+
         // make space to crypto overhead
-        OvpnTxBufferPush(buffer, device->CryptoOverhead);
+        OvpnTxBufferPush(buffer, OVPN_DATA_V2_LEN + (pktId64bit ? 8 : 4) + (aeadTagEnd ? 0 : AEAD_AUTH_TAG_LEN));
+        if (aeadTagEnd)
+        {
+            OvpnBufferPut(buffer, AEAD_AUTH_TAG_LEN);
+        }
 
         // in-place encrypt, always with primary key
-        status = peer->CryptoContext.Encrypt(&peer->CryptoContext.Primary, buffer->Data, buffer->Len);
+        status = cryptoContext->Encrypt(&cryptoContext->Primary, buffer->Data, buffer->Len, cryptoContext->CryptoOptions);
     }
     else {
         status = STATUS_INVALID_DEVICE_STATE;
@@ -108,7 +119,7 @@ OvpnTxProcessPacket(_In_ POVPN_DEVICE device, _In_ POVPN_TXQUEUE queue, _In_ NET
     if (NT_SUCCESS(status)) {
         // start async send, this will return ciphertext buffer to the pool
         if (device->Socket.Tcp) {
-            status = OvpnSocketSend(&device->Socket, buffer);
+            status = OvpnSocketSend(&device->Socket, buffer, NULL);
         }
         else {
             // for UDP we use SendMessages to send multiple datagrams at once
@@ -128,7 +139,7 @@ OvpnTxProcessPacket(_In_ POVPN_DEVICE device, _In_ POVPN_TXQUEUE queue, _In_ NET
             *tail = buffer;
         }
 
-        OvpnTimerReset(peer->KeepaliveXmitTimer, peer->KeepaliveInterval);
+        OvpnTimerResetXmit(peer->Timer);
     }
     else {
         OvpnTxBufferPoolPut(buffer);
@@ -152,7 +163,7 @@ OvpnEvtTxQueueAdvance(NETPACKETQUEUE netPacketQueue)
     POVPN_TXQUEUE queue = OvpnGetTxQueueContext(netPacketQueue);
     NET_RING_PACKET_ITERATOR pi = NetRingGetAllPackets(queue->Rings);
     POVPN_DEVICE device = OvpnGetDeviceContext(queue->Adapter->WdfDevice);
-    bool packetSent = false;
+    BOOLEAN packetSent = false;
 
     KIRQL kirql = ExAcquireSpinLockShared(&device->SpinLock);
 
@@ -179,9 +190,17 @@ OvpnEvtTxQueueAdvance(NETPACKETQUEUE netPacketQueue)
     }
     NetPacketIteratorSet(&pi);
 
-    if (packetSent && !device->Socket.Tcp) {
-        // this will use WskSendMessages to send buffers list which we constructed before
-        LOG_IF_NOT_NT_SUCCESS(OvpnSocketSend(&device->Socket, txBufferHead));
+    if (packetSent) {
+        // TODO: get actual peer
+        OvpnPeerContext* peer = OvpnGetFirstPeer(&device->Peers);
+        if (peer != NULL) {
+            OvpnTimerResetXmit(peer->Timer);
+
+            if (!device->Socket.Tcp) {
+                // this will use WskSendMessages to send buffers list which we constructed before
+                LOG_IF_NOT_NT_SUCCESS(OvpnSocketSend(&device->Socket, txBufferHead, (SOCKADDR*)&peer->TransportAddrs.Remote));
+            }
+        }
     }
 
     ExReleaseSpinLockShared(&device->SpinLock, kirql);

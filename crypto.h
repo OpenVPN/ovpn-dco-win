@@ -29,19 +29,14 @@
 #include "uapi\ovpn-dco.h"
 #include "socket.h"
 
-#define AEAD_CRYPTO_OVERHEAD 24 // 4 + 4 + 16 data_v2 + pktid + auth_tag
-#define NONE_CRYPTO_OVERHEAD 8 // 4 + 4 data_v2 + pktid
-#define OVPN_PKTID_LEN 4
-#define OVPN_NONCE_TAIL_LEN 8
 #define OVPN_DATA_V2_LEN 4
 #define AEAD_AUTH_TAG_LEN 16
-#define AES_BLOCK_SIZE 16
-#define AES_GCM_NONCE_LEN 12
 
  // packet opcode (high 5 bits) and key-id (low 3 bits) are combined in one byte
 #define OVPN_OP_DATA_V2 9
 #define OVPN_KEY_ID_MASK 0x07
 #define OVPN_OPCODE_SHIFT 3
+#define OVPN_PEER_ID_MASK 0x00FFFFFF
 
 struct OvpnCryptoKeySlot
 {
@@ -63,7 +58,7 @@ _IRQL_requires_max_(DISPATCH_LEVEL)
 _Must_inspect_result_
 typedef
 NTSTATUS
-OVPN_CRYPTO_ENCRYPT(_In_ OvpnCryptoKeySlot* keySlot, _In_ UCHAR* buf, _In_ SIZE_T len);
+OVPN_CRYPTO_ENCRYPT(_In_ OvpnCryptoKeySlot* keySlot, _In_ UCHAR* buf, _In_ SIZE_T len, _In_ INT32 CryptoOptions);
 typedef OVPN_CRYPTO_ENCRYPT* POVPN_CRYPTO_ENCRYPT;
 
 _Function_class_(OVPN_CRYPTO_DECRYPT)
@@ -71,7 +66,7 @@ _IRQL_requires_max_(DISPATCH_LEVEL)
 _Must_inspect_result_
 typedef
 NTSTATUS
-OVPN_CRYPTO_DECRYPT(_In_ OvpnCryptoKeySlot* keySlot, _In_ UCHAR* bufIn, _In_ SIZE_T len, _In_ UCHAR* bufOut);
+OVPN_CRYPTO_DECRYPT(_In_ OvpnCryptoKeySlot* keySlot, _In_ UCHAR* bufIn, _In_ SIZE_T len, _In_ UCHAR* bufOut, _In_ INT32 CryptoOptions);
 typedef OVPN_CRYPTO_DECRYPT* POVPN_CRYPTO_DECRYPT;
 
 struct OvpnCryptoContext
@@ -82,7 +77,7 @@ struct OvpnCryptoContext
     POVPN_CRYPTO_ENCRYPT Encrypt;
     POVPN_CRYPTO_DECRYPT Decrypt;
 
-    SIZE_T CryptoOverhead;
+    INT32 CryptoOptions;
 };
 
 _Must_inspect_result_
@@ -99,7 +94,7 @@ OvpnCryptoUninit(_In_ OvpnCryptoContext* cryptoContext);
 
 _Must_inspect_result_
 NTSTATUS
-OvpnCryptoNewKey(_In_ OvpnCryptoContext* cryptoContext, _In_ POVPN_CRYPTO_DATA cryptoData, _In_opt_ BCRYPT_ALG_HANDLE algHandle);
+OvpnCryptoNewKey(_In_ OvpnCryptoContext* cryptoContext, _In_ POVPN_CRYPTO_DATA_V2 cryptoData, _In_opt_ BCRYPT_ALG_HANDLE algHandle);
 
 _Must_inspect_result_
 OvpnCryptoKeySlot*

@@ -55,7 +55,7 @@ jobs:
         Copy-Item -Path ..\${{ matrix.arch }}\${{ matrix.build_conf }}\ovpn-dco\* -Destination dist\${{ matrix.arch }}\win11\ -Recurse 
         .\build.ps1 -Arch ${{ matrix.arch }} -Wix ..\wix
 
-    - uses: actions/upload-artifact@v2
+    - uses: actions/upload-artifact@v4
       with:
         name: ovpn-dco_${{ matrix.arch }}_${{ matrix.build_conf }}
         path: |

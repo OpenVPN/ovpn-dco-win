@@ -27,6 +27,7 @@
 #include <wdfrequest.h>
 
 #include "bufferpool.h"
+#include "control.h"
 #include "driver.h"
 #include "trace.h"
 #include "peer.h"
@@ -50,11 +51,25 @@ OvpnEvtDriverUnload(_In_ WDFDRIVER driver)
 {
     UNREFERENCED_PARAMETER(driver);
 
+    LOG_ENTER();
+    LOG_EXIT();
+
     TraceLoggingUnregister(g_hOvpnEtwProvider);
 
     // tail call optimization incorrectly eliminates TraceLoggingUnregister() call
     // add __nop() to prevent TCO
     __nop();
+}
+
+EVT_WDF_OBJECT_CONTEXT_CLEANUP OvpnEvtDriverCleanup;
+
+_Use_decl_annotations_
+VOID OvpnEvtDriverCleanup(_In_ WDFOBJECT driver)
+{
+    UNREFERENCED_PARAMETER(driver);
+
+    LOG_ENTER();
+    LOG_EXIT();
 }
 
 EXTERN_C DRIVER_INITIALIZE DriverEntry;
@@ -81,6 +96,7 @@ DriverEntry(_In_ PDRIVER_OBJECT driverObject, _In_ PUNICODE_STRING registryPath)
     WDF_OBJECT_ATTRIBUTES driverAttrs;
     WDF_OBJECT_ATTRIBUTES_INIT(&driverAttrs);
     WDF_OBJECT_ATTRIBUTES_SET_CONTEXT_TYPE(&driverAttrs, OVPN_DRIVER);
+    driverAttrs.EvtCleanupCallback = OvpnEvtDriverCleanup;
 
     WDF_DRIVER_CONFIG driverConfig;
     WDF_DRIVER_CONFIG_INIT(&driverConfig, OvpnEvtDeviceAdd);
@@ -171,7 +187,7 @@ OvpnEvtIoWrite(WDFQUEUE queue, WDFREQUEST request, size_t length)
     // acquire spinlock, since we access device->TransportSocket
     KIRQL kiqrl = ExAcquireSpinLockShared(&device->SpinLock);
 
-    OVPN_TX_BUFFER* buffer = NULL;
+    OVPN_TX_BUFFER* txBuf = NULL;
 
     if (device->Socket.Socket == NULL) {
         status = STATUS_INVALID_DEVICE_STATE;
@@ -179,31 +195,67 @@ OvpnEvtIoWrite(WDFQUEUE queue, WDFREQUEST request, size_t length)
         goto error;
     }
 
-    // fetch tx buffer
-    GOTO_IF_NOT_NT_SUCCESS(error, status, OvpnTxBufferPoolGet(device->TxBufferPool, &buffer));
-
     // get request buffer
-    PVOID requestBuffer;
-    size_t requestBufferLength;
-    GOTO_IF_NOT_NT_SUCCESS(error, status, WdfRequestRetrieveInputBuffer(request, 0, &requestBuffer, &requestBufferLength));
+    PVOID buf;
+    size_t bufLen;
+    GOTO_IF_NOT_NT_SUCCESS(error, status, WdfRequestRetrieveInputBuffer(request, 0, &buf, &bufLen));
+
+    PSOCKADDR sa = NULL;
+
+    if (device->Mode == OVPN_MODE_MP) {
+        // buffer is prepended with SOCKADDR
+
+        sa = (PSOCKADDR)buf;
+        switch (sa->sa_family) {
+        case AF_INET:
+            if (bufLen <= sizeof(SOCKADDR_IN)) {
+                status = STATUS_INVALID_MESSAGE;
+                LOG_ERROR("Message too short", TraceLoggingValue(bufLen, "msgLen"), TraceLoggingValue(sizeof(SOCKADDR_IN), "minLen"));
+                goto error;
+            }
+
+            buf = (char*)buf + sizeof(SOCKADDR_IN);
+            bufLen -= sizeof(SOCKADDR_IN);
+            break;
+
+        case AF_INET6:
+            if (bufLen <= sizeof(SOCKADDR_IN6)) {
+                status = STATUS_INVALID_MESSAGE;
+                LOG_ERROR("Message too short", TraceLoggingValue(bufLen, "msgLen"), TraceLoggingValue(sizeof(SOCKADDR_IN6), "minLen"));
+                goto error;
+            }
+
+            buf = (char*)buf + sizeof(SOCKADDR_IN6);
+            bufLen -= sizeof(SOCKADDR_IN6);
+            break;
+
+        default:
+            LOG_ERROR("Invalid address family", TraceLoggingValue(sa->sa_family, "AF"));
+            status = STATUS_INVALID_ADDRESS;
+            goto error;
+        }
+    }
+
+    // fetch tx buffer
+    GOTO_IF_NOT_NT_SUCCESS(error, status, OvpnTxBufferPoolGet(device->TxBufferPool, &txBuf));
 
     // copy data from request to tx buffer
-    PUCHAR buf = OvpnTxBufferPut(buffer, requestBufferLength);
-    RtlCopyMemory(buf, requestBuffer, requestBufferLength);
+    PUCHAR data = OvpnBufferPut(txBuf, bufLen);
+    RtlCopyMemory(data, buf, bufLen);
 
-    buffer->IoQueue = device->PendingWritesQueue;
+    txBuf->IoQueue = device->PendingWritesQueue;
 
     // move request to manual queue
     GOTO_IF_NOT_NT_SUCCESS(error, status, WdfRequestForwardToIoQueue(request, device->PendingWritesQueue));
 
     // send
-    LOG_IF_NOT_NT_SUCCESS(status = OvpnSocketSend(&device->Socket, buffer));
+    LOG_IF_NOT_NT_SUCCESS(status = OvpnSocketSend(&device->Socket, txBuf, sa));
 
     goto done_not_complete;
 
 error:
-    if (buffer != NULL) {
-        OvpnTxBufferPoolPut(buffer);
+    if (txBuf != NULL) {
+        OvpnTxBufferPoolPut(txBuf);
     }
 
     ULONG_PTR bytesCopied = 0;
@@ -214,24 +266,160 @@ done_not_complete:
 }
 
 NTSTATUS
-OvpnGetVersion(WDFREQUEST request, _Out_ ULONG_PTR* bytesReturned)
+OvpnSetMode(POVPN_DEVICE device, WDFREQUEST request)
 {
-    *bytesReturned = 0;
+    POVPN_SET_MODE mode;
+    NTSTATUS status = WdfRequestRetrieveInputBuffer(request, sizeof(OVPN_SET_MODE), (PVOID*)&mode, NULL);
+    if (!NT_SUCCESS(status)) {
+        return status;
+    }
 
-    NTSTATUS status;
-    POVPN_VERSION version = NULL;
-    GOTO_IF_NOT_NT_SUCCESS(done, status, WdfRequestRetrieveOutputBuffer(request, sizeof(OVPN_VERSION), (PVOID*)&version, NULL));
+    if (device->Mode != OVPN_MODE_P2P) {
+        LOG_ERROR("mode already set");
+        return STATUS_ALREADY_INITIALIZED;
+    }
 
-    version->Major = OVPN_DCO_VERSION_MAJOR;
-    version->Minor = OVPN_DCO_VERSION_MINOR;
-    version->Patch = OVPN_DCO_VERSION_PATCH;
+    status = STATUS_SUCCESS;
 
-    *bytesReturned = sizeof(OVPN_VERSION);
+    LOG_INFO("Set mode", TraceLoggingValue(static_cast<int>(mode->Mode), "mode"));
 
-done:
+    switch (mode->Mode) {
+    case OVPN_MODE_P2P:
+    case OVPN_MODE_MP:
+        device->Mode = mode->Mode;
+        break;
+
+    default:
+        status = STATUS_INVALID_PARAMETER;
+        break;
+    }
+
     return status;
 }
 
+static BOOLEAN
+OvpnDeviceCheckMode(OVPN_MODE mode, ULONG code)
+{
+    if (mode == OVPN_MODE_MP) {
+        switch (code) {
+        // all those IOCTLs are only for P2P mode
+        case OVPN_IOCTL_NEW_PEER:
+        case OVPN_IOCTL_DEL_PEER:
+        case OVPN_IOCTL_SWAP_KEYS:
+        case OVPN_IOCTL_SET_PEER:
+        case OVPN_IOCTL_START_VPN:
+            return FALSE;
+        }
+    }
+    else if (mode == OVPN_MODE_P2P) {
+        switch (code) {
+        // those IOCTLs are for MP mode
+        case OVPN_IOCTL_MP_START_VPN:
+        case OVPN_IOCTL_MP_NEW_PEER:
+            return FALSE;
+        }
+    }
+
+    return TRUE;
+}
+
+static NTSTATUS
+OvpnStopVPN(_In_ POVPN_DEVICE device)
+{
+    LOG_ENTER();
+
+    KIRQL kirql = ExAcquireSpinLockExclusive(&device->SpinLock);
+    PWSK_SOCKET socket = device->Socket.Socket;
+    device->Socket.Socket = NULL;
+
+    OvpnFlushPeers(device);
+
+    device->Mode = OVPN_MODE_P2P;
+
+    RtlZeroMemory(&device->Socket.TcpState, sizeof(OvpnSocketTcpState));
+    RtlZeroMemory(&device->Socket.UdpState, sizeof(OvpnSocketUdpState));
+
+    ExReleaseSpinLockExclusive(&device->SpinLock, kirql);
+
+    if (socket != NULL) {
+        LOG_IF_NOT_NT_SUCCESS(OvpnSocketClose(socket));
+    }
+
+    // flush buffers in control queue so that client won't get control channel messages from previous session
+    while (LIST_ENTRY* entry = OvpnBufferQueueDequeue(device->ControlRxBufferQueue)) {
+        OVPN_RX_BUFFER* buffer = CONTAINING_RECORD(entry, OVPN_RX_BUFFER, QueueListEntry);
+        // return buffer back to pool
+        OvpnRxBufferPoolPut(buffer);
+    }
+
+    WDFREQUEST request;
+    while (NT_SUCCESS(WdfIoQueueRetrieveNextRequest(device->PendingReadsQueue, &request))) {
+        ULONG_PTR bytesCopied = 0;
+        LOG_INFO("Cancel IO request from manual queue");
+        WdfRequestCompleteWithInformation(request, STATUS_CANCELLED, bytesCopied);
+    }
+
+    LOG_EXIT();
+
+    return STATUS_SUCCESS;
+}
+
+_Must_inspect_result_
+_IRQL_requires_(PASSIVE_LEVEL)
+_IRQL_requires_same_
+NTSTATUS
+OvpnMPStartVPN(POVPN_DEVICE device, WDFREQUEST request, ULONG_PTR* bytesReturned)
+{
+    NTSTATUS status = STATUS_SUCCESS;
+
+    LOG_ENTER();
+
+    KIRQL kirql = ExAcquireSpinLockExclusive(&device->SpinLock);
+    if (device->Socket.Socket != NULL) {
+        ExReleaseSpinLockExclusive(&device->SpinLock, kirql);
+
+        status = STATUS_ALREADY_INITIALIZED;
+
+        goto done;
+    }
+    else {
+        ExReleaseSpinLockExclusive(&device->SpinLock, kirql);
+
+        POVPN_MP_START_VPN addrIn = NULL;
+        GOTO_IF_NOT_NT_SUCCESS(done, status, WdfRequestRetrieveInputBuffer(request, sizeof(OVPN_MP_START_VPN), (PVOID*)&addrIn, NULL));
+
+        PWSK_SOCKET socket = NULL;
+        POVPN_DRIVER driver = OvpnGetDriverContext(WdfGetDriver());
+
+        // Bind to the address provided
+        status = OvpnSocketInit(&driver->WskProviderNpi, &driver->WskRegistration,
+            addrIn->ListenAddress.Addr4.sin_family, false,
+            (PSOCKADDR)&addrIn->ListenAddress, NULL,
+            0, device, &socket);
+        if (!NT_SUCCESS(status)) {
+            LOG_ERROR("Socket create failed", TraceLoggingValue((UINT32)status),
+                TraceLoggingHexUInt32(*(UINT32*)(&addrIn->ListenAddress.Addr4.sin_addr), "addr"));
+            goto done;
+        }
+
+        kirql = ExAcquireSpinLockExclusive(&device->SpinLock);
+        device->Socket.Socket = socket;
+        ExReleaseSpinLockExclusive(&device->SpinLock, kirql);
+
+        // we might bind the socket to port 0 and we want to get actual port back to userspace
+        POVPN_MP_START_VPN addrOut = NULL;
+        GOTO_IF_NOT_NT_SUCCESS(done, status, WdfRequestRetrieveOutputBuffer(request, sizeof(OVPN_MP_START_VPN), (PVOID*)&addrOut, NULL));
+        RtlCopyMemory(addrOut, addrIn, sizeof(OVPN_MP_START_VPN));
+        *bytesReturned = sizeof(OVPN_MP_START_VPN);
+    }
+
+    OvpnAdapterSetLinkState(OvpnGetAdapterContext(device->Adapter), MediaConnectStateConnected);
+
+done:
+    LOG_EXIT();
+
+    return status;
+}
 
 EVT_WDF_IO_QUEUE_IO_DEVICE_CONTROL OvpnEvtIoDeviceControl;
 
@@ -247,6 +435,12 @@ OvpnEvtIoDeviceControl(WDFQUEUE queue, WDFREQUEST request, size_t outputBufferLe
 
     ULONG_PTR bytesReturned = 0;
 
+    if (!OvpnDeviceCheckMode(device->Mode, ioControlCode))
+    {
+        WdfRequestCompleteWithInformation(request, STATUS_INVALID_DEVICE_STATE, bytesReturned);
+        return;
+    }
+
     KIRQL kirql = 0;
     switch ((long)ioControlCode) {
     case OVPN_IOCTL_GET_STATS:
@@ -260,7 +454,7 @@ OvpnEvtIoDeviceControl(WDFQUEUE queue, WDFREQUEST request, size_t outputBufferLe
         break;
 
     case OVPN_IOCTL_DEL_PEER:
-        status = OvpnPeerDel(device);
+        status = OvpnStopVPN(device);
         break;
 
     case OVPN_IOCTL_START_VPN:
@@ -270,6 +464,12 @@ OvpnEvtIoDeviceControl(WDFQUEUE queue, WDFREQUEST request, size_t outputBufferLe
     case OVPN_IOCTL_NEW_KEY:
         kirql = ExAcquireSpinLockExclusive(&device->SpinLock);
         status = OvpnPeerNewKey(device, request);
+        ExReleaseSpinLockExclusive(&device->SpinLock, kirql);
+        break;
+
+    case OVPN_IOCTL_NEW_KEY_V2:
+        kirql = ExAcquireSpinLockExclusive(&device->SpinLock);
+        status = OvpnPeerNewKeyV2(device, request);
         ExReleaseSpinLockExclusive(&device->SpinLock, kirql);
         break;
 
@@ -287,6 +487,20 @@ OvpnEvtIoDeviceControl(WDFQUEUE queue, WDFREQUEST request, size_t outputBufferLe
 
     case OVPN_IOCTL_GET_VERSION:
         status = OvpnGetVersion(request, &bytesReturned);
+        break;
+
+    case OVPN_IOCTL_SET_MODE:
+        kirql = ExAcquireSpinLockExclusive(&device->SpinLock);
+        status = OvpnSetMode(device, request);
+        ExReleaseSpinLockExclusive(&device->SpinLock, kirql);
+        break;
+
+    case OVPN_IOCTL_MP_START_VPN:
+        status = OvpnMPStartVPN(device, request, &bytesReturned);
+        break;
+
+    case OVPN_IOCTL_MP_NEW_PEER:
+        status = OvpnMPPeerNew(device, request);
         break;
 
     default:
@@ -307,8 +521,7 @@ VOID OvpnEvtFileCleanup(WDFFILEOBJECT fileObject) {
 
     POVPN_DEVICE device = OvpnGetDeviceContext(WdfFileObjectGetDevice(fileObject));
 
-    // peer might already be deleted
-    (VOID)OvpnPeerDel(device);
+    (VOID)OvpnStopVPN(device);
 
     if (device->Adapter != NULL) {
         OvpnAdapterSetLinkState(OvpnGetAdapterContext(device->Adapter), MediaConnectStateDisconnected);
@@ -339,6 +552,15 @@ VOID OvpnEvtDeviceCleanup(WDFOBJECT obj) {
     // it requires PASSIVE_LEVEL.
     OvpnCryptoUninitAlgHandles(device->AesAlgHandle, device->ChachaAlgHandle);
 
+    // delete control device if there are no devices left
+    POVPN_DRIVER driverCtx = OvpnGetDriverContext(WdfGetDriver());
+    LONG deviceCount = InterlockedDecrement(&driverCtx->DeviceCount);
+    LOG_INFO("Device count", TraceLoggingValue(deviceCount, "deviceCount"));
+    if ((deviceCount == 0) && (driverCtx->ControlDevice != NULL)) {
+        LOG_INFO("Delete control device");
+        WdfObjectDelete(driverCtx->ControlDevice);
+        driverCtx->ControlDevice = NULL;
+    }
     LOG_EXIT();
 }
 
@@ -436,6 +658,17 @@ OvpnEvtDeviceAdd(WDFDRIVER wdfDriver, PWDFDEVICE_INIT deviceInit) {
     WDFDEVICE wdfDevice;
     GOTO_IF_NOT_NT_SUCCESS(done, status, WdfDeviceCreate(&deviceInit, &objAttributes, &wdfDevice));
 
+    POVPN_DRIVER driverCtx = OvpnGetDriverContext(WdfGetDriver());
+    InterlockedIncrement(&driverCtx->DeviceCount);
+
+    LOG_INFO("Device count", TraceLoggingValue(driverCtx->DeviceCount, "count"));
+
+    if (driverCtx->DeviceCount == 1)
+    {
+        // create non-exclusive control device to get the version information
+        GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnCreateControlDevice(wdfDriver));
+    }
+
     // this will fail if one device has already been created but that's ok, since
     // openvpn2/3 accesses devices via Device Interface GUID, and symlink is used only by test client.
     LOG_IF_NOT_NT_SUCCESS(WdfDeviceCreateSymbolicLink(wdfDevice, &symLink));
@@ -475,8 +708,10 @@ OvpnEvtDeviceAdd(WDFDRIVER wdfDriver, PWDFDEVICE_INIT deviceInit) {
 
     GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnCryptoInitAlgHandles(&device->AesAlgHandle, &device->ChachaAlgHandle));
 
-    // Initialize peers tree
+    // Initialize peers tables
     RtlInitializeGenericTable(&device->Peers, OvpnPeerCompareByPeerIdRoutine, OvpnPeerAllocateRoutine, OvpnPeerFreeRoutine, NULL);
+    RtlInitializeGenericTable(&device->PeersByVpn4, OvpnPeerCompareByVPN4Routine, OvpnPeerAllocateRoutine, OvpnPeerFreeRoutine, NULL);
+    RtlInitializeGenericTable(&device->PeersByVpn6, OvpnPeerCompareByVPN6Routine, OvpnPeerAllocateRoutine, OvpnPeerFreeRoutine, NULL);
 
     LOG_IF_NOT_NT_SUCCESS(status = OvpnAdapterCreate(device));
 
@@ -486,17 +721,17 @@ done:
     return status;
 }
 
-_Use_decl_annotations_
 NTSTATUS
-OvpnAddPeer(POVPN_DEVICE device, OvpnPeerContext* peer)
+OvpnAddPeerToTable(_In_ RTL_GENERIC_TABLE* table, _In_ OvpnPeerContext* peer)
 {
     NTSTATUS status;
     BOOLEAN newElem;
 
-    RtlInsertElementGenericTable(&device->Peers, (PVOID)&peer, sizeof(OvpnPeerContext*), &newElem);
+    RtlInsertElementGenericTable(table, (PVOID)&peer, sizeof(OvpnPeerContext*), &newElem);
 
     if (newElem) {
         status = STATUS_SUCCESS;
+        InterlockedIncrement(&peer->RefCounter);
     }
     else {
         LOG_ERROR("Unable to add new peer");
@@ -505,9 +740,33 @@ OvpnAddPeer(POVPN_DEVICE device, OvpnPeerContext* peer)
     return status;
 }
 
+
+_Use_decl_annotations_
+NTSTATUS
+OvpnAddPeer(POVPN_DEVICE device, OvpnPeerContext* peer)
+{
+    return OvpnAddPeerToTable(&device->Peers, peer);
+}
+
+_Use_decl_annotations_
+NTSTATUS
+OvpnAddPeerVpn4(POVPN_DEVICE device, OvpnPeerContext* peer)
+{
+    return OvpnAddPeerToTable(&device->PeersByVpn4, peer);
+}
+
+_Use_decl_annotations_
+NTSTATUS
+OvpnAddPeerVpn6(POVPN_DEVICE device, OvpnPeerContext* peer)
+{
+    return OvpnAddPeerToTable(&device->PeersByVpn6, peer);
+}
+
 _Use_decl_annotations_
 VOID
 OvpnFlushPeers(POVPN_DEVICE device) {
+    OvpnCleanupPeerTable(&device->PeersByVpn6);
+    OvpnCleanupPeerTable(&device->PeersByVpn4);
     OvpnCleanupPeerTable(&device->Peers);
 }
 
@@ -520,7 +779,9 @@ OvpnCleanupPeerTable(RTL_GENERIC_TABLE* peers)
         OvpnPeerContext* peer = *(OvpnPeerContext**)ptr;
         RtlDeleteElementGenericTable(peers, ptr);
 
-        OvpnPeerCtxFree(peer);
+        if (InterlockedDecrement(&peer->RefCounter) == 0) {
+            OvpnPeerCtxFree(peer);
+        }
     }
 }
 
@@ -529,5 +790,53 @@ OvpnPeerContext*
 OvpnGetFirstPeer(RTL_GENERIC_TABLE* peers)
 {
     OvpnPeerContext** ptr = (OvpnPeerContext**)RtlGetElementGenericTable(peers, 0);
+    return ptr ? (OvpnPeerContext*)*ptr : NULL;
+}
+
+_Use_decl_annotations_
+OvpnPeerContext*
+OvpnFindPeer(POVPN_DEVICE device, INT32 PeerId)
+{
+    if (device->Mode == OVPN_MODE_P2P) {
+        return OvpnGetFirstPeer(&device->Peers);
+    }
+
+    OvpnPeerContext p {};
+    p.PeerId = PeerId;
+
+    auto* pp = &p;
+    OvpnPeerContext** ptr = (OvpnPeerContext**)RtlLookupElementGenericTable(&device->Peers, &pp);
+    return ptr ? (OvpnPeerContext*)*ptr : NULL;
+}
+
+_Use_decl_annotations_
+OvpnPeerContext*
+OvpnFindPeerVPN4(POVPN_DEVICE device, IN_ADDR addr)
+{
+    if (device->Mode == OVPN_MODE_P2P) {
+        return OvpnGetFirstPeer(&device->Peers);
+    }
+
+    OvpnPeerContext p{};
+    p.VpnAddrs.IPv4 = addr;
+
+    auto* pp = &p;
+    OvpnPeerContext** ptr = (OvpnPeerContext**)RtlLookupElementGenericTable(&device->PeersByVpn4, &pp);
+    return ptr ? (OvpnPeerContext*)*ptr : NULL;
+}
+
+_Use_decl_annotations_
+OvpnPeerContext*
+OvpnFindPeerVPN6(POVPN_DEVICE device, IN6_ADDR addr)
+{
+    if (device->Mode == OVPN_MODE_P2P) {
+        return OvpnGetFirstPeer(&device->Peers);
+    }
+
+    OvpnPeerContext p{};
+    p.VpnAddrs.IPv6 = addr;
+
+    auto* pp = &p;
+    OvpnPeerContext** ptr = (OvpnPeerContext**)RtlLookupElementGenericTable(&device->PeersByVpn6, &pp);
     return ptr ? (OvpnPeerContext*)*ptr : NULL;
 }

@@ -27,6 +27,7 @@
 
 #include "driver.h"
 #include "bufferpool.h"
+#include "peer.h"
 #include "rxqueue.h"
 #include "netringiterator.h"
 #include "trace.h"
@@ -115,7 +116,7 @@ OvpnEvtRxQueueAdvance(NETPACKETQUEUE netPacketQueue)
         fragment->ValidLength = buffer->Len;
         fragment->Offset = 0;
         NET_FRAGMENT_VIRTUAL_ADDRESS* virtualAddr = NetExtensionGetFragmentVirtualAddress(&queue->VirtualAddressExtension, NetFragmentIteratorGetIndex(&fi));
-        RtlCopyMemory(virtualAddr->VirtualAddress, buffer->Data + device->CryptoOverhead, buffer->Len);
+        RtlCopyMemory(virtualAddr->VirtualAddress, buffer->Data, buffer->Len);
 
         InterlockedExchangeAddNoFence64(&device->Stats.TunBytesReceived, buffer->Len);
 

@@ -53,6 +53,7 @@ Thumbs.db
 Debug
 Release
 x64
+x86
 Win32
 sdv
 ARM64
@@ -72,3 +73,9 @@ smvstats.txt
 *.cab
 
 *.vcxproj.user
+
+**/out
+**/build
+**/.vscode
+**/signed
+msm/tmp

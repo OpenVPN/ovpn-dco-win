@@ -1,8 +1,7 @@
 /*
  *  ovpn-dco-win OpenVPN protocol accelerator for Windows
  *
- *  Copyright (C) 2020-2021 OpenVPN Inc <sales@openvpn.net>
- *  Copyright (C) 2023 Rubicon Communications LLC (Netgate)
+ *  Copyright (C) 2024- OpenVPN Inc <sales@openvpn.net>
  *
  *  Author:	Lev Stipakov <lev@openvpn.net>
  *
@@ -25,25 +24,8 @@
 #include <ntddk.h>
 #include <wdf.h>
 
-VOID
-OvpnTimerResetXmit(WDFTIMER timer);
-
-VOID
-OvpnTimerResetRecv(WDFTIMER timer);
-
-_Must_inspect_result_
 NTSTATUS
-OvpnTimerCreate(WDFOBJECT parent, OvpnPeerContext* peer, _Inout_ WDFTIMER* timer);
+OvpnGetVersion(WDFREQUEST request, _Out_ ULONG_PTR* bytesReturned);
 
-VOID
-OvpnTimerSetXmitInterval(WDFTIMER timer, LONG xmitInterval);
-
-VOID
-OvpnTimerSetRecvTimeout(WDFTIMER timer, LONG recvTimeout);
-
-VOID
-OvpnTimerDestroy(_Inout_ WDFTIMER* timer);
-
-_Must_inspect_result_
-BOOLEAN
-OvpnTimerIsKeepaliveMessage(_In_reads_(len) const PUCHAR buf, SIZE_T len);
+NTSTATUS
+OvpnCreateControlDevice(WDFDRIVER wdfDriver);
