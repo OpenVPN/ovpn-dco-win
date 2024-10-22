@@ -897,3 +897,49 @@ OvpnFindPeerVPN6(POVPN_DEVICE device, IN6_ADDR addr)
     OvpnPeerContext** ptr = (OvpnPeerContext**)RtlLookupElementGenericTable(&device->PeersByVpn6, &pp);
     return ptr ? (OvpnPeerContext*)*ptr : NULL;
 }
+
+VOID
+OvpnDeletePeerFromTable(RTL_GENERIC_TABLE *table, OvpnPeerContext *peer, char* tableName)
+{
+    auto peerId = peer->PeerId;
+    auto pp = &peer;
+
+    if (RtlDeleteElementGenericTable(table, pp)) {
+        LOG_INFO("Peer deleted", TraceLoggingValue(tableName, "table"), TraceLoggingValue(peerId, "peer-id"));
+
+        if (InterlockedDecrement(&peer->RefCounter) == 0) {
+            OvpnPeerCtxFree(peer);
+            LOG_INFO("Peer freed", TraceLoggingValue(peerId, "peer-id"));
+        }
+    }
+    else {
+        LOG_INFO("Peer not found", TraceLoggingValue(tableName, "table"), TraceLoggingValue(peerId, "peer-id"));
+    }
+}
+
+NTSTATUS
+OvpnDeletePeer(POVPN_DEVICE device, INT32 peerId)
+{
+    NTSTATUS status = STATUS_SUCCESS;
+
+    KIRQL kirql = ExAcquireSpinLockExclusive(&device->SpinLock);
+
+    LOG_INFO("Deleting peer", TraceLoggingValue(peerId, "peer-id"));
+
+    // get peer from main table
+    OvpnPeerContext* peerCtx = OvpnFindPeer(device, peerId);
+    if (peerCtx == NULL) {
+        status = STATUS_NOT_FOUND;
+        LOG_WARN("Peer not found", TraceLoggingValue(peerId, "peer-id"));
+    }
+    else {
+        OvpnDeletePeerFromTable(&device->PeersByVpn4, peerCtx, "vpn4");
+        OvpnDeletePeerFromTable(&device->PeersByVpn6, peerCtx, "vpn6");
+
+        OvpnDeletePeerFromTable(&device->Peers, peerCtx, "peers");
+    }
+
+    ExReleaseSpinLockExclusive(&device->SpinLock, kirql);
+
+    return status;
+}

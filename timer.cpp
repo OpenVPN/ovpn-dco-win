@@ -117,7 +117,7 @@ static BOOLEAN OvpnTimerRecv(WDFTIMER timer)
     if (device->Mode == OVPN_MODE_P2P) {
         status = WdfIoQueueRetrieveNextRequest(device->PendingReadsQueue, &request);
         if (!NT_SUCCESS(status)) {
-            LOG_WARN("No pending request for keepalive timeout notification");
+            LOG_INFO("No pending request for keepalive timeout notification");
             return FALSE;
         }
 
@@ -125,12 +125,15 @@ static BOOLEAN OvpnTimerRecv(WDFTIMER timer)
         WdfRequestCompleteWithInformation(request, STATUS_CONNECTION_DISCONNECTED, bytesSent);
     }
     else {
+        (VOID)OvpnDeletePeer(device, peerId);
+
         status = WdfIoQueueRetrieveNextRequest(device->PendingNotificationRequestsQueue, &request);
         if (!NT_SUCCESS(status)) {
-            LOG_WARN("Adding keepalive timeout notification to the queue");
+            LOG_INFO("Adding keepalive timeout notification to the queue");
             return NT_SUCCESS(device->PendingNotificationsQueue.AddEvent(OVPN_CMD_DEL_PEER, peerId, OVPN_DEL_PEER_REASON_EXPIRED));
         }
         else {
+            LOG_INFO("Notify userspace about expired peer");
             OVPN_NOTIFY_EVENT *evt;
             ULONG_PTR bytesSent = 0;
             LOG_IF_NOT_NT_SUCCESS(status = WdfRequestRetrieveOutputBuffer(request, sizeof(OVPN_NOTIFY_EVENT), (PVOID*)&evt, nullptr));
@@ -141,8 +144,6 @@ static BOOLEAN OvpnTimerRecv(WDFTIMER timer)
                 bytesSent = sizeof(OVPN_NOTIFY_EVENT);
             }
             WdfRequestCompleteWithInformation(request, status, bytesSent);
-
-            // TODO: remove peer
         }
     }
 

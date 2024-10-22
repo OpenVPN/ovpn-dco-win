@@ -150,3 +150,7 @@ OvpnFindPeerVPN4(_In_ POVPN_DEVICE device, _In_ IN_ADDR addr);
 _Must_inspect_result_
 OvpnPeerContext*
 OvpnFindPeerVPN6(_In_ POVPN_DEVICE device, _In_ IN6_ADDR addr);
+
+_Must_inspect_result_
+NTSTATUS
+OvpnDeletePeer(_In_ POVPN_DEVICE device, INT32 peerId);
