@@ -31,6 +31,7 @@
 #include "adapter.h"
 #include "bufferpool.h"
 #include "crypto.h"
+#include "notifyqueue.h"
 #include "socket.h"
 #include "uapi\ovpn-dco.h"
 
@@ -60,6 +61,7 @@ struct OVPN_DEVICE {
 
     WDFQUEUE PendingReadsQueue;
     WDFQUEUE PendingWritesQueue;
+    WDFQUEUE PendingNotificationRequestsQueue;
 
     // NEW_PEER request may be enqueued here if TCP connect doesn't finish immediatelly
     WDFQUEUE PendingNewPeerQueue;
@@ -75,6 +77,9 @@ struct OVPN_DEVICE {
 
     // buffer pool for encrypted data channel and control channel packets to be sent
     OVPN_TX_BUFFER_POOL TxBufferPool;
+
+    // queue to store pending userspace notifications
+    NotifyQueue PendingNotificationsQueue;
 
     OVPN_STATS Stats;
 

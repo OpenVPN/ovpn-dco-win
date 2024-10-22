@@ -107,18 +107,46 @@ static BOOLEAN OvpnTimerRecv(WDFTIMER timer)
 {
     POVPN_DEVICE device = OvpnGetDeviceContext(WdfTimerGetParentObject(timer));
 
+    POVPN_PEER_TIMER_CONTEXT timerCtx = OvpnGetPeerTimerContext(timer);
+    auto peerId = timerCtx->Peer->PeerId;
+    LOG_INFO("Keepalive timeout", TraceLoggingValue(peerId, "peer-id"));
+
     WDFREQUEST request;
-    NTSTATUS status = WdfIoQueueRetrieveNextRequest(device->PendingReadsQueue, &request);
-    if (!NT_SUCCESS(status)) {
-        LOG_WARN("No pending request for keepalive timeout notification");
-        return FALSE;
-    }
-    else {
-        LOG_INFO("Notify userspace about keepalive timeout");
+    NTSTATUS status = STATUS_SUCCESS;
+
+    if (device->Mode == OVPN_MODE_P2P) {
+        status = WdfIoQueueRetrieveNextRequest(device->PendingReadsQueue, &request);
+        if (!NT_SUCCESS(status)) {
+            LOG_WARN("No pending request for keepalive timeout notification");
+            return FALSE;
+        }
+
         ULONG_PTR bytesSent = 0;
         WdfRequestCompleteWithInformation(request, STATUS_CONNECTION_DISCONNECTED, bytesSent);
-        return TRUE;
     }
+    else {
+        status = WdfIoQueueRetrieveNextRequest(device->PendingNotificationRequestsQueue, &request);
+        if (!NT_SUCCESS(status)) {
+            LOG_WARN("Adding keepalive timeout notification to the queue");
+            return NT_SUCCESS(device->PendingNotificationsQueue.AddEvent(OVPN_CMD_DEL_PEER, peerId, OVPN_DEL_PEER_REASON_EXPIRED));
+        }
+        else {
+            OVPN_NOTIFY_EVENT *evt;
+            ULONG_PTR bytesSent = 0;
+            LOG_IF_NOT_NT_SUCCESS(status = WdfRequestRetrieveOutputBuffer(request, sizeof(OVPN_NOTIFY_EVENT), (PVOID*)&evt, nullptr));
+            if (NT_SUCCESS(status)) {
+                evt->Cmd = OVPN_CMD_DEL_PEER;
+                evt->PeerId = peerId;
+                evt->DelPeerReason = OVPN_DEL_PEER_REASON_EXPIRED;
+                bytesSent = sizeof(OVPN_NOTIFY_EVENT);
+            }
+            WdfRequestCompleteWithInformation(request, status, bytesSent);
+
+            // TODO: remove peer
+        }
+    }
+
+    return NT_SUCCESS(status);
 }
 
 _Use_decl_annotations_

@@ -73,6 +73,7 @@
     <ClCompile Include="crypto.cpp" />
     <ClCompile Include="driver.cpp" />
     <ClCompile Include="mss.cpp" />
+    <ClCompile Include="notifyqueue.cpp" />
     <ClCompile Include="peer.cpp" />
     <ClCompile Include="pktid.cpp" />
     <ClCompile Include="rxqueue.cpp" />
@@ -88,6 +89,7 @@
     <ClInclude Include="driver.h" />
     <ClInclude Include="mss.h" />
     <ClInclude Include="netringiterator.h" />
+    <ClInclude Include="notifyqueue.h" />
     <ClInclude Include="peer.h" />
     <ClInclude Include="pktid.h" />
     <ClInclude Include="rxqueue.h" />

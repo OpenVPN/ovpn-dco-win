@@ -356,9 +356,17 @@ OvpnStopVPN(_In_ POVPN_DEVICE device)
     WDFREQUEST request;
     while (NT_SUCCESS(WdfIoQueueRetrieveNextRequest(device->PendingReadsQueue, &request))) {
         ULONG_PTR bytesCopied = 0;
-        LOG_INFO("Cancel IO request from manual queue");
+        LOG_INFO("Cancel pending read requests");
         WdfRequestCompleteWithInformation(request, STATUS_CANCELLED, bytesCopied);
     }
+
+    while (NT_SUCCESS(WdfIoQueueRetrieveNextRequest(device->PendingNotificationRequestsQueue, &request))) {
+        ULONG_PTR bytesCopied = 0;
+        LOG_INFO("Cancel pending notifications");
+        WdfRequestCompleteWithInformation(request, STATUS_CANCELLED, bytesCopied);
+    }
+
+    device->PendingNotificationsQueue.FlushEvents();
 
     LOG_EXIT();
 
@@ -417,6 +425,37 @@ OvpnMPStartVPN(POVPN_DEVICE device, WDFREQUEST request, ULONG_PTR* bytesReturned
     OvpnAdapterSetLinkState(OvpnGetAdapterContext(device->Adapter), MediaConnectStateConnected);
 
 done:
+    LOG_EXIT();
+
+    return status;
+}
+
+NTSTATUS
+OvpnNotifyEvent(POVPN_DEVICE device, WDFREQUEST request, _Out_ ULONG_PTR* bytesReturned) {
+    LOG_ENTER();
+
+    NTSTATUS status = STATUS_SUCCESS;
+
+    *bytesReturned = 0;
+
+    // do we have pending notifications?
+    auto event = device->PendingNotificationsQueue.GetEvent();
+    if (event != nullptr) {
+        OVPN_NOTIFY_EVENT* evt;
+        LOG_IF_NOT_NT_SUCCESS(status = WdfRequestRetrieveOutputBuffer(request, sizeof(OVPN_NOTIFY_EVENT), (PVOID*)&evt, nullptr));
+        if (NT_SUCCESS(status)) {
+            evt->Cmd = event->Cmd;
+            evt->PeerId = event->PeerId;
+            evt->DelPeerReason = event->DelPeerReason;
+            *bytesReturned = sizeof(OVPN_NOTIFY_EVENT);
+        }
+        device->PendingNotificationsQueue.FreeEvent(event);
+    }
+    else {
+        LOG_IF_NOT_NT_SUCCESS(WdfRequestForwardToIoQueue(request, device->PendingNotificationRequestsQueue));
+        status = STATUS_PENDING;
+    }
+
     LOG_EXIT();
 
     return status;
@@ -508,6 +547,10 @@ OvpnEvtIoDeviceControl(WDFQUEUE queue, WDFREQUEST request, size_t outputBufferLe
         kirql = ExAcquireSpinLockExclusive(&device->SpinLock);
         status = OvpnMPPeerSet(device, request);
         ExReleaseSpinLockExclusive(&device->SpinLock, kirql);
+        break;
+
+    case OVPN_IOCTL_NOTIFY_EVENT:
+        status = OvpnNotifyEvent(device, request, &bytesReturned);
         break;
 
     default:
@@ -707,11 +750,18 @@ OvpnEvtDeviceAdd(WDFDRIVER wdfDriver, PWDFDEVICE_INIT deviceInit) {
     WDF_IO_QUEUE_CONFIG_INIT(&queueConfig, WdfIoQueueDispatchManual);
     GOTO_IF_NOT_NT_SUCCESS(done, status, WdfIoQueueCreate(wdfDevice, &queueConfig, WDF_NO_OBJECT_ATTRIBUTES, &device->PendingNewPeerQueue));
 
+    // create manual queue which handles userspace notification requests
+    WDF_IO_QUEUE_CONFIG_INIT(&queueConfig, WdfIoQueueDispatchManual);
+    GOTO_IF_NOT_NT_SUCCESS(done, status, WdfIoQueueCreate(wdfDevice, &queueConfig, WDF_NO_OBJECT_ATTRIBUTES, &device->PendingNotificationRequestsQueue));
+
     GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnTxBufferPoolCreate(&device->TxBufferPool, device));
     GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnRxBufferPoolCreate(&device->RxBufferPool));
 
     GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnBufferQueueCreate(&device->ControlRxBufferQueue));
     GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnBufferQueueCreate(&device->DataRxBufferQueue));
+
+    // constructors are not called for the members of WDF object context, so we use Init() method
+    device->PendingNotificationsQueue.Init();
 
     GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnCryptoInitAlgHandles(&device->AesAlgHandle, &device->ChachaAlgHandle));
 
