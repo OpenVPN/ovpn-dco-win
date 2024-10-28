@@ -72,7 +72,12 @@ static VOID OvpnTimerXmit(WDFTIMER timer)
     RtlCopyMemory(OvpnBufferPut(buffer, sizeof(OvpnKeepaliveMessage)), OvpnKeepaliveMessage, sizeof(OvpnKeepaliveMessage));
 
     OvpnPeerContext* peer = timerCtx->Peer;
-    KIRQL kiqrl = ExAcquireSpinLockShared(&device->SpinLock);
+
+    ExAcquireSpinLockSharedAtDpcLevel(&peer->SpinLock);
+
+    auto peerId = peer->PeerId;
+    auto addr = peer->TransportAddrs.Remote;
+
     OvpnCryptoContext* cryptoContext = &peer->CryptoContext;
     if (cryptoContext->Encrypt) {
         // make space to crypto overhead
@@ -88,19 +93,19 @@ static VOID OvpnTimerXmit(WDFTIMER timer)
         status = STATUS_INVALID_DEVICE_STATE;
         // LOG_WARN("CryptoContext not initialized");
     }
+    ExReleaseSpinLockSharedFromDpcLevel(&peer->SpinLock);
 
     if (NT_SUCCESS(status)) {
         // start async send, completion handler will return ciphertext buffer to the pool
-        SOCKADDR* sa = (SOCKADDR*)&(peer->TransportAddrs.Remote);
+        SOCKADDR* sa = (SOCKADDR*)&(addr);
         LOG_IF_NOT_NT_SUCCESS(status = OvpnSocketSend(&device->Socket, buffer, sa));
         if (NT_SUCCESS(status)) {
-            LOG_INFO("Ping sent", TraceLoggingValue(peer->PeerId, "peer-id"));
+            LOG_INFO("Ping sent", TraceLoggingValue(peerId, "peer-id"));
         }
     }
     else {
         OvpnTxBufferPoolPut(buffer);
     }
-    ExReleaseSpinLockShared(&device->SpinLock, kiqrl);
 }
 
 static BOOLEAN OvpnTimerRecv(WDFTIMER timer)
@@ -168,6 +173,7 @@ static VOID OvpnTimerTick(WDFTIMER timer)
     KeQuerySystemTime(&now);
 
     POVPN_PEER_TIMER_CONTEXT timerCtx = OvpnGetPeerTimerContext(timer);
+
     if ((timerCtx->xmitInterval > 0) && (((now.QuadPart - timerCtx->lastXmit.QuadPart) / WDF_TIMEOUT_TO_SEC) > timerCtx->xmitInterval))
     {
         OvpnTimerXmit(timer);

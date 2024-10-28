@@ -108,36 +108,21 @@ typedef OVPN_DEVICE * POVPN_DEVICE;
 
 WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(OVPN_DEVICE, OvpnGetDeviceContext)
 
-static inline
-BOOLEAN
-OvpnHasPeers(_In_ POVPN_DEVICE device)
-{
-    return !RtlIsGenericTableEmpty(&device->Peers);
-}
-
 struct OvpnPeerContext;
 
 _Must_inspect_result_
 NTSTATUS
-OvpnAddPeer(_In_ POVPN_DEVICE device, _In_ OvpnPeerContext* PeerCtx);
-
-_Must_inspect_result_
-NTSTATUS
-OvpnAddPeerVpn4(_In_ POVPN_DEVICE device, _In_ OvpnPeerContext* PeerCtx);
-
-_Must_inspect_result_
-NTSTATUS
-OvpnAddPeerVpn6(_In_ POVPN_DEVICE device, _In_ OvpnPeerContext* PeerCtx);
+OvpnAddPeerToTable(POVPN_DEVICE device, _In_ RTL_GENERIC_TABLE* table, _In_ OvpnPeerContext* peer);
 
 VOID
 OvpnFlushPeers(_In_ POVPN_DEVICE device);
 
 VOID
-OvpnCleanupPeerTable(_In_ RTL_GENERIC_TABLE*);
+OvpnCleanupPeerTable(_In_ POVPN_DEVICE device, _In_ RTL_GENERIC_TABLE*);
 
 _Must_inspect_result_
 OvpnPeerContext*
-OvpnGetFirstPeer(_In_ RTL_GENERIC_TABLE*);
+OvpnGetFirstPeer(_In_ POVPN_DEVICE device);
 
 _Must_inspect_result_
 OvpnPeerContext*

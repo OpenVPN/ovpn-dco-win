@@ -95,7 +95,6 @@ done:
 }
 
 static
-_Requires_shared_lock_held_(device->SpinLock)
 VOID
 OvpnSocketControlPacketReceived(_In_ POVPN_DEVICE device, _In_reads_(len) PUCHAR buf, SIZE_T len, _In_opt_ PSOCKADDR remote)
 {
@@ -188,13 +187,12 @@ OvpnSocketControlPacketReceived(_In_ POVPN_DEVICE device, _In_reads_(len) PUCHAR
 }
 
 static
-_Requires_shared_lock_held_(device->SpinLock)
-VOID OvpnSocketDataPacketReceived(_In_ POVPN_DEVICE device, UCHAR op, UINT32 peerId, _In_reads_(len) PUCHAR cipherTextBuf, SIZE_T len)
+VOID OvpnSocketDataPacketReceived(_In_ POVPN_DEVICE device, UCHAR op, UINT32 peerId, _In_reads_(len) PUCHAR cipherTextBuf, SIZE_T len, BOOLEAN irqlDispatch)
 {
     InterlockedExchangeAddNoFence64(&device->Stats.TransportBytesReceived, len);
 
     OvpnPeerContext* peer = OvpnFindPeer(device, peerId);
-    if (peer == NULL) {
+    if (peer == nullptr) {
         LOG_WARN("Peer not found", TraceLoggingValue(peerId, "peerId"));
         InterlockedIncrementNoFence(&device->Stats.LostInDataPackets);
         return;
@@ -207,7 +205,18 @@ VOID OvpnSocketDataPacketReceived(_In_ POVPN_DEVICE device, UCHAR op, UINT32 pee
     if (!NT_SUCCESS(status)) {
         LOG_ERROR("RxBufferPool exhausted");
         InterlockedIncrementNoFence(&device->Stats.LostInDataPackets);
+        OvpnPeerCtxRelease(peer);
         return;
+    }
+
+    // If we're at dispatch level, we can use a small optimization and use function
+    // which is not calling KeRaiseIRQL to raise the IRQL to DISPATCH_LEVEL before attempting to acquire the lock
+    KIRQL kirql = 0;
+    if (irqlDispatch) {
+        ExAcquireSpinLockSharedAtDpcLevel(&peer->SpinLock);
+    }
+    else {
+        kirql = ExAcquireSpinLockShared(&peer->SpinLock);
     }
 
     OvpnCryptoContext* cryptoContext = &peer->CryptoContext;
@@ -245,62 +254,59 @@ VOID OvpnSocketDataPacketReceived(_In_ POVPN_DEVICE device, UCHAR op, UINT32 pee
         // LOG_WARN("CryptoContext not yet initialized");
     }
 
-    if (!NT_SUCCESS(status)) {
-        OvpnRxBufferPoolPut(buffer);
-        return;
-    }
-
-    OvpnTimerResetRecv(peer->Timer);
-
-    // ping packet?
-    if (OvpnTimerIsKeepaliveMessage(buffer->Data, buffer->Len)) {
-        LOG_INFO("Ping received", TraceLoggingValue(peer->PeerId, "peer-id"));
-
-        // no need to inject ping packet into OS, return buffer to the pool
-        OvpnRxBufferPoolPut(buffer);
+    if (NT_SUCCESS(status)) {
+        OvpnTimerResetRecv(peer->Timer);
     }
     else {
-        if (OvpnMssIsIPv4(buffer->Data, buffer->Len)) {
-            OvpnMssDoIPv4(buffer->Data, buffer->Len, peer->MSS);
-        } else if (OvpnMssIsIPv6(buffer->Data, buffer->Len)) {
-            OvpnMssDoIPv6(buffer->Data, buffer->Len, peer->MSS);
+        OvpnRxBufferPoolPut(buffer);
+    }
+
+    auto mss = peer->MSS;
+
+    // don't forget to release spinlock
+    if (irqlDispatch) {
+        ExReleaseSpinLockSharedFromDpcLevel(&peer->SpinLock);
+    }
+    else {
+        ExReleaseSpinLockShared(&peer->SpinLock, kirql);
+    }
+
+    OvpnPeerCtxRelease(peer);
+
+    if (NT_SUCCESS(status)) {
+        // ping packet?
+        if (OvpnTimerIsKeepaliveMessage(buffer->Data, buffer->Len)) {
+            LOG_INFO("Ping received", TraceLoggingValue(peerId, "peer-id"));
+
+            // no need to inject ping packet into OS, return buffer to the pool
+            OvpnRxBufferPoolPut(buffer);
         }
+        else {
+            if (OvpnMssIsIPv4(buffer->Data, buffer->Len)) {
+                OvpnMssDoIPv4(buffer->Data, buffer->Len, mss);
+            }
+            else if (OvpnMssIsIPv6(buffer->Data, buffer->Len)) {
+                OvpnMssDoIPv6(buffer->Data, buffer->Len, mss);
+            }
 
-        // enqueue plaintext buffer, it will be dequeued by NetAdapter RX datapath
-        OvpnBufferQueueEnqueue(device->DataRxBufferQueue, &buffer->QueueListEntry);
+            // enqueue plaintext buffer, it will be dequeued by NetAdapter RX datapath
+            OvpnBufferQueueEnqueue(device->DataRxBufferQueue, &buffer->QueueListEntry);
 
-        OvpnAdapterNotifyRx(device->Adapter);
+            OvpnAdapterNotifyRx(device->Adapter);
+        }
     }
 }
 
 VOID
 OvpnSocketProcessIncomingPacket(_In_ POVPN_DEVICE device, _In_reads_(packetLength) PUCHAR buf, SIZE_T packetLength, BOOLEAN irqlDispatch, _In_opt_ PSOCKADDR remoteAddr)
 {
-    // If we're at dispatch level, we can use a small optimization and use function
-    // which is not calling KeRaiseIRQL to raise the IRQL to DISPATCH_LEVEL before attempting to acquire the lock
-    KIRQL kirql = 0;
-    if (irqlDispatch) {
-        ExAcquireSpinLockSharedAtDpcLevel(&device->SpinLock);
-    }
-    else {
-        kirql = ExAcquireSpinLockShared(&device->SpinLock);
-    }
-
     UCHAR op = RtlUlongByteSwap(*(ULONG*)(buf)) >> 24;
     if (OvpnCryptoOpcodeExtract(op) == OVPN_OP_DATA_V2) {
         UINT32 peerId = RtlUlongByteSwap(*(ULONG*)(buf)) & OVPN_PEER_ID_MASK;
-        OvpnSocketDataPacketReceived(device, op, peerId, buf, packetLength);
+        OvpnSocketDataPacketReceived(device, op, peerId, buf, packetLength, irqlDispatch);
     }
     else {
         OvpnSocketControlPacketReceived(device, buf, packetLength, remoteAddr);
-    }
-
-    // don't forget to release spinlock
-    if (irqlDispatch) {
-        ExReleaseSpinLockSharedFromDpcLevel(&device->SpinLock);
-    }
-    else {
-        ExReleaseSpinLockShared(&device->SpinLock, kirql);
     }
 }
 
@@ -550,6 +556,11 @@ OvpnSocketInit(WSK_PROVIDER_NPI* wskProviderNpi, WSK_REGISTRATION* wskRegistrati
         }, [](PIRP) {}));
 
         // connect will be done later
+
+        BOOLEAN tcpNoDelay = TRUE;
+        SIZE_T outputSizeReturned = 0;
+        GOTO_IF_NOT_NT_SUCCESS(error, status, connectionDispatch->Basic.WskControlSocket(*socket, WskSetOption, TCP_NODELAY, IPPROTO_TCP,
+            sizeof(tcpNoDelay), &tcpNoDelay, 0, NULL, &outputSizeReturned, NULL));
     }
     else {
         // bind

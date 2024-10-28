@@ -34,16 +34,32 @@ OvpnPeerCtxAlloc()
     OvpnPeerContext* peer = (OvpnPeerContext*)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(OvpnPeerContext), 'ovpn');
     if (peer != NULL) {
         RtlZeroMemory(peer, sizeof(OvpnPeerContext));
-    }
+        InterlockedIncrement(&peer->RefCounter);
+    }    
     return peer;
+}
+
+_Use_decl_annotations_
+VOID
+OvpnPeerCtxRelease(OvpnPeerContext* peer)
+{
+    if (InterlockedDecrement(&peer->RefCounter) == 0) {
+        auto peerId = peer->PeerId;
+        OvpnPeerCtxFree(peer);
+        LOG_INFO("Peer freed", TraceLoggingValue(peerId, "peer-id"));
+    }
 }
 
 _Use_decl_annotations_
 VOID
 OvpnPeerCtxFree(OvpnPeerContext* peer)
 {
+    auto irql = ExAcquireSpinLockExclusive(&peer->SpinLock);
+
     OvpnCryptoUninit(&peer->CryptoContext);
     OvpnTimerDestroy(&peer->Timer);
+
+    ExReleaseSpinLockExclusive(&peer->SpinLock, irql);
 
     ExFreePoolWithTag(peer, 'ovpn');
 }
@@ -142,16 +158,15 @@ OvpnPeerNew(POVPN_DEVICE device, WDFREQUEST request)
 
     POVPN_NEW_PEER peer = NULL;
     NTSTATUS status;
-    GOTO_IF_NOT_NT_SUCCESS(done, status, WdfRequestRetrieveInputBuffer(request, sizeof(OVPN_NEW_PEER), (PVOID*)&peer, nullptr));
 
-    KIRQL kirql = ExAcquireSpinLockExclusive(&device->SpinLock);
-    const BOOLEAN peerExists = OvpnHasPeers(device);
-    ExReleaseSpinLockExclusive(&device->SpinLock, kirql);
-    if (peerExists) {
+    auto peerCtx = OvpnGetFirstPeer(device);
+    if (peerCtx != nullptr) {
         LOG_WARN("Peer already exists");
         status = STATUS_OBJECTID_EXISTS;
         goto done;
     }
+
+    GOTO_IF_NOT_NT_SUCCESS(done, status, WdfRequestRetrieveInputBuffer(request, sizeof(OVPN_NEW_PEER), (PVOID*)&peer, nullptr));
 
     if ((peer->Remote.Addr4.sin_family != AF_INET) && (peer->Remote.Addr4.sin_family != AF_INET6))
     {
@@ -165,7 +180,7 @@ OvpnPeerNew(POVPN_DEVICE device, WDFREQUEST request)
     BOOLEAN proto_tcp = peer->Proto == OVPN_PROTO_TCP;
     SIZE_T remoteAddrSize = peer->Remote.Addr4.sin_family == AF_INET ? sizeof(peer->Remote.Addr4) : sizeof(peer->Remote.Addr6);
 
-    OvpnPeerContext* peerCtx = OvpnPeerCtxAlloc();
+    peerCtx = OvpnPeerCtxAlloc();
     if (peerCtx == NULL) {
         status = STATUS_NO_MEMORY;
         goto done;
@@ -185,33 +200,28 @@ OvpnPeerNew(POVPN_DEVICE device, WDFREQUEST request)
         (PSOCKADDR)&peer->Remote,
         remoteAddrSize, device, &socket));
 
-    kirql = ExAcquireSpinLockExclusive(&device->SpinLock);
+    GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnAddPeerToTable(device, &device->Peers, peerCtx));
 
-    LOG_IF_NOT_NT_SUCCESS(status = OvpnAddPeer(device, peerCtx));
-    if (status != STATUS_SUCCESS) {
-        ExReleaseSpinLockExclusive(&device->SpinLock, kirql);
-        OvpnPeerCtxFree(peerCtx);
-        LOG_IF_NOT_NT_SUCCESS(OvpnSocketClose(socket));
-    }
-    else {
-        device->Socket.Socket = socket;
-        device->Socket.Tcp = proto_tcp;
-        RtlZeroMemory(&device->Socket.TcpState, sizeof(OvpnSocketTcpState));
-        RtlZeroMemory(&device->Socket.UdpState, sizeof(OvpnSocketUdpState));
-        ExReleaseSpinLockExclusive(&device->SpinLock, kirql);
+    device->Socket.Socket = socket;
+    device->Socket.Tcp = proto_tcp;
+    RtlZeroMemory(&device->Socket.TcpState, sizeof(OvpnSocketTcpState));
+    RtlZeroMemory(&device->Socket.UdpState, sizeof(OvpnSocketUdpState));
 
-        OvpnPeerZeroStats(&device->Stats);
+    OvpnPeerZeroStats(&device->Stats);
 
-        GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnTimerCreate(device->WdfDevice, peerCtx, &peerCtx->Timer));
+    GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnTimerCreate(device->WdfDevice, peerCtx, &peerCtx->Timer));
 
-        if (proto_tcp) {
-            LOG_IF_NOT_NT_SUCCESS(status = WdfRequestForwardToIoQueue(request, device->PendingNewPeerQueue));
-            // start async connect
-            status = OvpnSocketTcpConnect(socket, device, (PSOCKADDR)&peer->Remote);
-        }
+    if (proto_tcp) {
+        LOG_IF_NOT_NT_SUCCESS(status = WdfRequestForwardToIoQueue(request, device->PendingNewPeerQueue));
+        // start async connect
+        status = OvpnSocketTcpConnect(socket, device, (PSOCKADDR)&peer->Remote);
     }
 
 done:
+    if (peerCtx != nullptr) {
+        OvpnPeerCtxRelease(peerCtx);
+    }
+
     LOG_EXIT();
 
     return status;
@@ -228,14 +238,13 @@ OvpnMPPeerNew(POVPN_DEVICE device, WDFREQUEST request)
     NTSTATUS status = STATUS_SUCCESS;
 
     POVPN_MP_NEW_PEER peer;
+    OvpnPeerContext* peerCtx = nullptr;
 
     GOTO_IF_NOT_NT_SUCCESS(done, status, WdfRequestRetrieveInputBuffer(request, sizeof(OVPN_MP_NEW_PEER), (PVOID*)&peer, nullptr));
 
     // check if we already have a peer with the same peer-id
-    KIRQL kirql = ExAcquireSpinLockExclusive(&device->SpinLock);
-    OvpnPeerContext* peerCtx = OvpnFindPeer(device, peer->PeerId);
-    ExReleaseSpinLockExclusive(&device->SpinLock, kirql);
-    if (peerCtx != NULL) {
+    peerCtx = OvpnFindPeer(device, peer->PeerId);
+    if (peerCtx != nullptr) {
         status = STATUS_OBJECTID_EXISTS;
         goto done;
     }
@@ -284,27 +293,17 @@ OvpnMPPeerNew(POVPN_DEVICE device, WDFREQUEST request)
     peerCtx->PeerId = peer->PeerId;
 
     // create peer-specific timer
-    LOG_IF_NOT_NT_SUCCESS(status = OvpnTimerCreate(device->WdfDevice, peerCtx, &peerCtx->Timer));
-    if (status != STATUS_SUCCESS) {
-        OvpnPeerCtxFree(peerCtx);
-        goto done;
+    GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnTimerCreate(device->WdfDevice, peerCtx, &peerCtx->Timer));
+
+    GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnAddPeerToTable(device, &device->Peers, peerCtx));
+    
+    if (peer->VpnAddr4.S_un.S_addr != INADDR_ANY) {
+        LOG_IF_NOT_NT_SUCCESS(status = OvpnAddPeerToTable(device, &device->PeersByVpn4, peerCtx));
     }
 
-    kirql = ExAcquireSpinLockExclusive(&device->SpinLock);
-    LOG_IF_NOT_NT_SUCCESS(status = OvpnAddPeer(device, peerCtx));
-    if (status == STATUS_SUCCESS) {
-        if (peer->VpnAddr4.S_un.S_addr != INADDR_ANY) {
-            LOG_IF_NOT_NT_SUCCESS(status = OvpnAddPeerVpn4(device, peerCtx));
-        }
-
-        if (RtlCompareMemory(&peer->VpnAddr6, &ovpn_in6addr_any, sizeof(IN6_ADDR)) != sizeof(IN6_ADDR)) {
-            LOG_IF_NOT_NT_SUCCESS(status = OvpnAddPeerVpn6(device, peerCtx));
-        }
+    if (RtlCompareMemory(&peer->VpnAddr6, &ovpn_in6addr_any, sizeof(IN6_ADDR)) != sizeof(IN6_ADDR)) {
+        LOG_IF_NOT_NT_SUCCESS(status = OvpnAddPeerToTable(device, &device->PeersByVpn6, peerCtx));
     }
-    else {
-        OvpnPeerCtxFree(peerCtx);
-    }
-    ExReleaseSpinLockExclusive(&device->SpinLock, kirql);
 
     if (ipv4) {
         LOG_INFO("Peer added", TraceLoggingValue(peer->PeerId, "peer-id"),
@@ -320,6 +319,10 @@ OvpnMPPeerNew(POVPN_DEVICE device, WDFREQUEST request)
     }
 
 done:
+    if (peerCtx != nullptr) {
+        OvpnPeerCtxRelease(peerCtx);
+    }
+
     LOG_EXIT();
 
     return status;
@@ -327,6 +330,8 @@ done:
 
 VOID OvpnPeerSetDoWork(OvpnPeerContext *peer, LONG keepaliveInterval, LONG keepaliveTimeout, LONG mss)
 {
+    auto irql = ExAcquireSpinLockExclusive(&peer->SpinLock);
+
     if (mss != -1) {
         peer->MSS = (UINT16)mss;
     }
@@ -344,6 +349,8 @@ VOID OvpnPeerSetDoWork(OvpnPeerContext *peer, LONG keepaliveInterval, LONG keepa
         // keepalive recv timer, detects keepalive timeout
         OvpnTimerSetRecvTimeout(peer->Timer, peer->KeepaliveTimeout);
     }
+
+    ExReleaseSpinLockExclusive(&peer->SpinLock, irql);
 }
 
 _Use_decl_annotations_
@@ -353,9 +360,8 @@ NTSTATUS OvpnPeerSet(POVPN_DEVICE device, WDFREQUEST request)
 
     NTSTATUS status = STATUS_SUCCESS;
 
-    OvpnPeerContext* peer = OvpnGetFirstPeer(&device->Peers);
-
-    if (peer == NULL) {
+    OvpnPeerContext* peer = OvpnGetFirstPeer(device);
+    if (peer == nullptr) {
         LOG_ERROR("Peer not added");
         status = STATUS_INVALID_DEVICE_REQUEST;
         goto done;
@@ -371,6 +377,10 @@ NTSTATUS OvpnPeerSet(POVPN_DEVICE device, WDFREQUEST request)
     OvpnPeerSetDoWork(peer, set_peer->KeepaliveInterval, set_peer->KeepaliveTimeout, set_peer->MSS);
 
 done:
+    if (peer != nullptr) {
+        OvpnPeerCtxRelease(peer);
+    }
+
     LOG_EXIT();
     return status;
 }
@@ -382,6 +392,8 @@ NTSTATUS OvpnMPPeerSet(POVPN_DEVICE device, WDFREQUEST request)
 
     NTSTATUS status = STATUS_SUCCESS;
 
+    OvpnPeerContext* peer = nullptr;
+
     POVPN_MP_SET_PEER set_peer = NULL;
     GOTO_IF_NOT_NT_SUCCESS(done, status, WdfRequestRetrieveInputBuffer(request, sizeof(OVPN_MP_SET_PEER), (PVOID*)&set_peer, nullptr));
 
@@ -390,8 +402,8 @@ NTSTATUS OvpnMPPeerSet(POVPN_DEVICE device, WDFREQUEST request)
         TraceLoggingValue(set_peer->KeepaliveTimeout, "timeout"),
         TraceLoggingValue(set_peer->MSS, "MSS"));
 
-    OvpnPeerContext* peer = OvpnFindPeer(device, set_peer->PeerId);
-    if (peer == NULL) {
+    peer = OvpnFindPeer(device, set_peer->PeerId);
+    if (peer == nullptr) {
         LOG_ERROR("Peer not found", TraceLoggingValue(set_peer->PeerId, "peer-id"));
         status = STATUS_INVALID_DEVICE_REQUEST;
         goto done;
@@ -400,6 +412,10 @@ NTSTATUS OvpnMPPeerSet(POVPN_DEVICE device, WDFREQUEST request)
     OvpnPeerSetDoWork(peer, set_peer->KeepaliveInterval, set_peer->KeepaliveTimeout, set_peer->MSS);
 
 done:
+    if (peer != nullptr) {
+        OvpnPeerCtxRelease(peer);
+    }
+
     LOG_EXIT();
     return status;
 }
@@ -409,13 +425,6 @@ NTSTATUS
 OvpnPeerGetStats(POVPN_DEVICE device, WDFREQUEST request, ULONG_PTR* bytesReturned)
 {
     NTSTATUS status = STATUS_SUCCESS;
-
-    OvpnPeerContext* peer = OvpnGetFirstPeer(&device->Peers);
-    if (peer == NULL) {
-        LOG_ERROR("Peer not added");
-        status = STATUS_INVALID_DEVICE_REQUEST;
-        goto done;
-    }
 
     POVPN_STATS stats = NULL;
     GOTO_IF_NOT_NT_SUCCESS(done, status, WdfRequestRetrieveOutputBuffer(request, sizeof(OVPN_STATS), (PVOID*)&stats, NULL));
@@ -447,7 +456,8 @@ OvpnPeerStartVPN(POVPN_DEVICE device)
 
     NTSTATUS status = STATUS_SUCCESS;
 
-    if (!OvpnHasPeers(device)) {
+    auto peer = OvpnGetFirstPeer(device);
+    if (peer == nullptr) {
         LOG_ERROR("Peer not added");
         status = STATUS_INVALID_DEVICE_REQUEST;
         goto done;
@@ -456,6 +466,10 @@ OvpnPeerStartVPN(POVPN_DEVICE device)
     OvpnAdapterSetLinkState(OvpnGetAdapterContext(device->Adapter), MediaConnectStateConnected);
 
 done:
+    if (peer != nullptr) {
+        OvpnPeerCtxRelease(peer);
+    }
+
     LOG_EXIT();
 
     return status;
@@ -496,20 +510,15 @@ OvpnPeerNewKey(POVPN_DEVICE device, WDFREQUEST request)
 
     POVPN_CRYPTO_DATA cryptoData = NULL;
     OVPN_CRYPTO_DATA_V2 cryptoDataV2{};
-
-    if (!OvpnHasPeers(device)) {
-        LOG_ERROR("Peer not added");
-        status = STATUS_INVALID_DEVICE_REQUEST;
-        goto done;
-    }
+    OvpnPeerContext* peer = nullptr;
 
     GOTO_IF_NOT_NT_SUCCESS(done, status, WdfRequestRetrieveInputBuffer(request, sizeof(OVPN_CRYPTO_DATA), (PVOID*)&cryptoData, nullptr));
 
     BCRYPT_ALG_HANDLE algHandle = NULL;
     GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnPeerGetAlgHandle(device, cryptoData->CipherAlg, algHandle));
 
-    OvpnPeerContext* peer = OvpnFindPeer(device, cryptoData->PeerId);
-    if (peer == NULL) {
+    peer = OvpnFindPeer(device, cryptoData->PeerId);
+    if (peer == nullptr) {
         status = STATUS_OBJECTID_NOT_FOUND;
         goto done;
     }
@@ -518,6 +527,10 @@ OvpnPeerNewKey(POVPN_DEVICE device, WDFREQUEST request)
     GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnCryptoNewKey(&peer->CryptoContext, &cryptoDataV2, algHandle));
 
 done:
+    if (peer != nullptr) {
+        OvpnPeerCtxRelease(peer);
+    }
+
     LOG_EXIT();
 
     return status;
@@ -530,29 +543,30 @@ OvpnPeerNewKeyV2(POVPN_DEVICE device, WDFREQUEST request)
     LOG_ENTER();
 
     NTSTATUS status = STATUS_SUCCESS;
+    OvpnPeerContext* peer = nullptr;
 
     POVPN_CRYPTO_DATA_V2 cryptoDataV2 = NULL;
-
-    if (!OvpnHasPeers(device)) {
-        LOG_ERROR("Peer not added");
-        status = STATUS_INVALID_DEVICE_REQUEST;
-        goto done;
-    }
-
     GOTO_IF_NOT_NT_SUCCESS(done, status, WdfRequestRetrieveInputBuffer(request, sizeof(OVPN_CRYPTO_DATA_V2), (PVOID*)&cryptoDataV2, nullptr));
 
     BCRYPT_ALG_HANDLE algHandle = NULL;
     GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnPeerGetAlgHandle(device, cryptoDataV2->V1.CipherAlg, algHandle));
 
-    OvpnPeerContext* peer = OvpnFindPeer(device, cryptoDataV2->V1.PeerId);
-    if (peer == NULL) {
+    peer = OvpnFindPeer(device, cryptoDataV2->V1.PeerId);
+
+    if (peer == nullptr) {
         status = STATUS_OBJECTID_NOT_FOUND;
         goto done;
     }
 
-    GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnCryptoNewKey(&peer->CryptoContext, cryptoDataV2, algHandle));
+    KIRQL irql = ExAcquireSpinLockExclusive(&peer->SpinLock);
+    LOG_IF_NOT_NT_SUCCESS(status = OvpnCryptoNewKey(&peer->CryptoContext, cryptoDataV2, algHandle));
+    ExReleaseSpinLockExclusive(&peer->SpinLock, irql);
 
 done:
+    if (peer != nullptr) {
+        OvpnPeerCtxRelease(peer);
+    }
+
     LOG_EXIT();
 
     return status;
@@ -566,22 +580,22 @@ OvpnPeerSwapKeys(POVPN_DEVICE device)
 
     NTSTATUS status = STATUS_SUCCESS;
 
-    if (!OvpnHasPeers(device)) {
-        LOG_ERROR("Peer not added");
-        status = STATUS_INVALID_DEVICE_REQUEST;
-        goto done;
-    }
-
-    OvpnPeerContext* peer = OvpnGetFirstPeer(&device->Peers);
-    if (peer == NULL) {
+    OvpnPeerContext* peer = OvpnGetFirstPeer(device);
+    if (peer == nullptr) {
         LOG_ERROR("Peer not found");
         status = STATUS_INVALID_DEVICE_REQUEST;
         goto done;
     }
 
+    KIRQL irql = ExAcquireSpinLockExclusive(&peer->SpinLock);
     OvpnCryptoSwapKeys(&peer->CryptoContext);
+    ExReleaseSpinLockExclusive(&peer->SpinLock, irql);
 
 done:
+    if (peer != nullptr) {
+        OvpnPeerCtxRelease(peer);
+    }
+
     LOG_EXIT();
 
     return status;

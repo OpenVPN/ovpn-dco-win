@@ -29,6 +29,8 @@
 
 struct OvpnPeerContext
 {
+    EX_SPIN_LOCK SpinLock;
+
     OvpnCryptoContext CryptoContext;
 
     INT32 PeerId;
@@ -71,6 +73,9 @@ OvpnPeerCtxAlloc();
 
 VOID
 OvpnPeerCtxFree(_In_ OvpnPeerContext*);
+
+VOID
+OvpnPeerCtxRelease(_In_ OvpnPeerContext*);
 
 RTL_GENERIC_ALLOCATE_ROUTINE OvpnPeerAllocateRoutine;
 RTL_GENERIC_FREE_ROUTINE OvpnPeerFreeRoutine;

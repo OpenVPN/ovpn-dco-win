@@ -329,11 +329,11 @@ OvpnStopVPN(_In_ POVPN_DEVICE device)
 {
     LOG_ENTER();
 
+    OvpnFlushPeers(device);
+
     KIRQL kirql = ExAcquireSpinLockExclusive(&device->SpinLock);
     PWSK_SOCKET socket = device->Socket.Socket;
     device->Socket.Socket = NULL;
-
-    OvpnFlushPeers(device);
 
     device->Mode = OVPN_MODE_P2P;
 
@@ -481,12 +481,9 @@ OvpnEvtIoDeviceControl(WDFQUEUE queue, WDFREQUEST request, size_t outputBufferLe
         return;
     }
 
-    KIRQL kirql = 0;
     switch ((long)ioControlCode) {
     case OVPN_IOCTL_GET_STATS:
-        kirql = ExAcquireSpinLockShared(&device->SpinLock);
         status = OvpnPeerGetStats(device, request, &bytesReturned);
-        ExReleaseSpinLockShared(&device->SpinLock, kirql);
         break;
 
     case OVPN_IOCTL_NEW_PEER:
@@ -502,27 +499,19 @@ OvpnEvtIoDeviceControl(WDFQUEUE queue, WDFREQUEST request, size_t outputBufferLe
         break;
 
     case OVPN_IOCTL_NEW_KEY:
-        kirql = ExAcquireSpinLockExclusive(&device->SpinLock);
         status = OvpnPeerNewKey(device, request);
-        ExReleaseSpinLockExclusive(&device->SpinLock, kirql);
         break;
 
     case OVPN_IOCTL_NEW_KEY_V2:
-        kirql = ExAcquireSpinLockExclusive(&device->SpinLock);
         status = OvpnPeerNewKeyV2(device, request);
-        ExReleaseSpinLockExclusive(&device->SpinLock, kirql);
         break;
 
     case OVPN_IOCTL_SWAP_KEYS:
-        kirql = ExAcquireSpinLockExclusive(&device->SpinLock);
         status = OvpnPeerSwapKeys(device);
-        ExReleaseSpinLockExclusive(&device->SpinLock, kirql);
         break;
 
     case OVPN_IOCTL_SET_PEER:
-        kirql = ExAcquireSpinLockExclusive(&device->SpinLock);
         status = OvpnPeerSet(device, request);
-        ExReleaseSpinLockExclusive(&device->SpinLock, kirql);
         break;
 
     case OVPN_IOCTL_GET_VERSION:
@@ -530,9 +519,7 @@ OvpnEvtIoDeviceControl(WDFQUEUE queue, WDFREQUEST request, size_t outputBufferLe
         break;
 
     case OVPN_IOCTL_SET_MODE:
-        kirql = ExAcquireSpinLockExclusive(&device->SpinLock);
         status = OvpnSetMode(device, request);
-        ExReleaseSpinLockExclusive(&device->SpinLock, kirql);
         break;
 
     case OVPN_IOCTL_MP_START_VPN:
@@ -544,9 +531,7 @@ OvpnEvtIoDeviceControl(WDFQUEUE queue, WDFREQUEST request, size_t outputBufferLe
         break;
 
     case OVPN_IOCTL_MP_SET_PEER:
-        kirql = ExAcquireSpinLockExclusive(&device->SpinLock);
         status = OvpnMPPeerSet(device, request);
-        ExReleaseSpinLockExclusive(&device->SpinLock, kirql);
         break;
 
     case OVPN_IOCTL_NOTIFY_EVENT:
@@ -778,11 +763,14 @@ done:
     return status;
 }
 
+_Use_decl_annotations_
 NTSTATUS
-OvpnAddPeerToTable(_In_ RTL_GENERIC_TABLE* table, _In_ OvpnPeerContext* peer)
+OvpnAddPeerToTable(POVPN_DEVICE device, RTL_GENERIC_TABLE* table, OvpnPeerContext* peer)
 {
     NTSTATUS status;
     BOOLEAN newElem;
+
+    auto irql = ExAcquireSpinLockExclusive(&device->SpinLock);
 
     RtlInsertElementGenericTable(table, (PVOID)&peer, sizeof(OvpnPeerContext*), &newElem);
 
@@ -794,115 +782,153 @@ OvpnAddPeerToTable(_In_ RTL_GENERIC_TABLE* table, _In_ OvpnPeerContext* peer)
         LOG_ERROR("Unable to add new peer");
         status = STATUS_NO_MEMORY;
     }
+
+    ExReleaseSpinLockExclusive(&device->SpinLock, irql);
+
     return status;
-}
-
-
-_Use_decl_annotations_
-NTSTATUS
-OvpnAddPeer(POVPN_DEVICE device, OvpnPeerContext* peer)
-{
-    return OvpnAddPeerToTable(&device->Peers, peer);
-}
-
-_Use_decl_annotations_
-NTSTATUS
-OvpnAddPeerVpn4(POVPN_DEVICE device, OvpnPeerContext* peer)
-{
-    return OvpnAddPeerToTable(&device->PeersByVpn4, peer);
-}
-
-_Use_decl_annotations_
-NTSTATUS
-OvpnAddPeerVpn6(POVPN_DEVICE device, OvpnPeerContext* peer)
-{
-    return OvpnAddPeerToTable(&device->PeersByVpn6, peer);
 }
 
 _Use_decl_annotations_
 VOID
 OvpnFlushPeers(POVPN_DEVICE device) {
-    OvpnCleanupPeerTable(&device->PeersByVpn6);
-    OvpnCleanupPeerTable(&device->PeersByVpn4);
-    OvpnCleanupPeerTable(&device->Peers);
+    OvpnCleanupPeerTable(device, &device->PeersByVpn6);
+    OvpnCleanupPeerTable(device, &device->PeersByVpn4);
+    OvpnCleanupPeerTable(device, &device->Peers);
 }
 
 _Use_decl_annotations_
 VOID
-OvpnCleanupPeerTable(RTL_GENERIC_TABLE* peers)
+OvpnCleanupPeerTable(POVPN_DEVICE device, RTL_GENERIC_TABLE* peers)
 {
+    auto irql = ExAcquireSpinLockExclusive(&device->SpinLock);
+
     while (!RtlIsGenericTableEmpty(peers)) {
         PVOID ptr = RtlGetElementGenericTable(peers, 0);
         OvpnPeerContext* peer = *(OvpnPeerContext**)ptr;
         RtlDeleteElementGenericTable(peers, ptr);
 
-        if (InterlockedDecrement(&peer->RefCounter) == 0) {
-            OvpnPeerCtxFree(peer);
-        }
+        OvpnPeerCtxRelease(peer);
     }
+
+    ExReleaseSpinLockExclusive(&device->SpinLock, irql);
 }
 
 _Use_decl_annotations_
 OvpnPeerContext*
-OvpnGetFirstPeer(RTL_GENERIC_TABLE* peers)
+OvpnGetFirstPeer(POVPN_DEVICE device)
 {
-    OvpnPeerContext** ptr = (OvpnPeerContext**)RtlGetElementGenericTable(peers, 0);
-    return ptr ? (OvpnPeerContext*)*ptr : NULL;
+    auto irql = ExAcquireSpinLockShared(&device->SpinLock);
+
+    OvpnPeerContext** ptr = (OvpnPeerContext**)RtlGetElementGenericTable(&device->Peers, 0);
+    OvpnPeerContext* peer = ptr ? (OvpnPeerContext*)*ptr : nullptr;
+
+    if (peer != nullptr) {
+        InterlockedIncrement(&peer->RefCounter);
+    }
+
+    ExReleaseSpinLockShared(&device->SpinLock, irql);
+
+    return peer;
 }
 
 _Use_decl_annotations_
 OvpnPeerContext*
 OvpnFindPeer(POVPN_DEVICE device, INT32 PeerId)
 {
+    OvpnPeerContext* peer = nullptr;
+    OvpnPeerContext** ptr = nullptr;
+
+    auto kirql = ExAcquireSpinLockShared(&device->SpinLock);
+
     if (device->Mode == OVPN_MODE_P2P) {
-        return OvpnGetFirstPeer(&device->Peers);
+        ptr = (OvpnPeerContext**)RtlGetElementGenericTable(&device->Peers, 0);
+    }
+    else {
+        OvpnPeerContext p{};
+        p.PeerId = PeerId;
+
+        auto* pp = &p;
+        ptr = (OvpnPeerContext**)RtlLookupElementGenericTable(&device->Peers, &pp);
     }
 
-    OvpnPeerContext p {};
-    p.PeerId = PeerId;
+    peer = ptr ? (OvpnPeerContext*)*ptr : nullptr;
 
-    auto* pp = &p;
-    OvpnPeerContext** ptr = (OvpnPeerContext**)RtlLookupElementGenericTable(&device->Peers, &pp);
-    return ptr ? (OvpnPeerContext*)*ptr : NULL;
+    if (peer) {
+        InterlockedIncrement(&peer->RefCounter);
+    }
+
+    ExReleaseSpinLockShared(&device->SpinLock, kirql);
+
+    return peer;
 }
 
 _Use_decl_annotations_
 OvpnPeerContext*
 OvpnFindPeerVPN4(POVPN_DEVICE device, IN_ADDR addr)
 {
+    OvpnPeerContext* peer = nullptr;
+    OvpnPeerContext** ptr = nullptr;
+
+    auto kirql = ExAcquireSpinLockShared(&device->SpinLock);
+
     if (device->Mode == OVPN_MODE_P2P) {
-        return OvpnGetFirstPeer(&device->Peers);
+        ptr = (OvpnPeerContext**)RtlGetElementGenericTable(&device->Peers, 0);
+    }
+    else {
+        OvpnPeerContext p{};
+        p.VpnAddrs.IPv4 = addr;
+
+        auto* pp = &p;
+        ptr = (OvpnPeerContext**)RtlLookupElementGenericTable(&device->PeersByVpn4, &pp);
     }
 
-    OvpnPeerContext p{};
-    p.VpnAddrs.IPv4 = addr;
+    peer = ptr ? (OvpnPeerContext*)*ptr : nullptr;
+    if (peer) {
+        InterlockedIncrement(&peer->RefCounter);
+    }
 
-    auto* pp = &p;
-    OvpnPeerContext** ptr = (OvpnPeerContext**)RtlLookupElementGenericTable(&device->PeersByVpn4, &pp);
-    return ptr ? (OvpnPeerContext*)*ptr : NULL;
+    ExReleaseSpinLockShared(&device->SpinLock, kirql);
+
+    return peer;
 }
 
 _Use_decl_annotations_
 OvpnPeerContext*
 OvpnFindPeerVPN6(POVPN_DEVICE device, IN6_ADDR addr)
 {
+    OvpnPeerContext* peer = nullptr;
+    OvpnPeerContext** ptr = nullptr;
+
+    auto kirql = ExAcquireSpinLockShared(&device->SpinLock);
+
     if (device->Mode == OVPN_MODE_P2P) {
-        return OvpnGetFirstPeer(&device->Peers);
+        ptr = (OvpnPeerContext**)RtlGetElementGenericTable(&device->Peers, 0);
+    }
+    else {
+        OvpnPeerContext p{};
+        p.VpnAddrs.IPv6 = addr;
+
+        auto* pp = &p;
+        ptr = (OvpnPeerContext**)RtlLookupElementGenericTable(&device->PeersByVpn6, &pp);
     }
 
-    OvpnPeerContext p{};
-    p.VpnAddrs.IPv6 = addr;
+    peer = ptr ? (OvpnPeerContext*)*ptr : nullptr;
+    if (peer) {
+        InterlockedIncrement(&peer->RefCounter);
+    }
 
-    auto* pp = &p;
-    OvpnPeerContext** ptr = (OvpnPeerContext**)RtlLookupElementGenericTable(&device->PeersByVpn6, &pp);
-    return ptr ? (OvpnPeerContext*)*ptr : NULL;
+    ExReleaseSpinLockShared(&device->SpinLock, kirql);
+
+    return peer;
 }
 
 VOID
-OvpnDeletePeerFromTable(RTL_GENERIC_TABLE *table, OvpnPeerContext *peer, char* tableName)
+OvpnDeletePeerFromTable(POVPN_DEVICE device, RTL_GENERIC_TABLE *table, OvpnPeerContext *peer, char* tableName)
 {
     auto peerId = peer->PeerId;
     auto pp = &peer;
+
+    auto kirql = ExAcquireSpinLockExclusive(&device->SpinLock);
 
     if (RtlDeleteElementGenericTable(table, pp)) {
         LOG_INFO("Peer deleted", TraceLoggingValue(tableName, "table"), TraceLoggingValue(peerId, "peer-id"));
@@ -915,31 +941,31 @@ OvpnDeletePeerFromTable(RTL_GENERIC_TABLE *table, OvpnPeerContext *peer, char* t
     else {
         LOG_INFO("Peer not found", TraceLoggingValue(tableName, "table"), TraceLoggingValue(peerId, "peer-id"));
     }
+
+    ExReleaseSpinLockExclusive(&device->SpinLock, kirql);
 }
 
+_Use_decl_annotations_
 NTSTATUS
 OvpnDeletePeer(POVPN_DEVICE device, INT32 peerId)
 {
     NTSTATUS status = STATUS_SUCCESS;
 
-    KIRQL kirql = ExAcquireSpinLockExclusive(&device->SpinLock);
-
     LOG_INFO("Deleting peer", TraceLoggingValue(peerId, "peer-id"));
 
     // get peer from main table
-    OvpnPeerContext* peerCtx = OvpnFindPeer(device, peerId);
-    if (peerCtx == NULL) {
+    OvpnPeerContext* peer = OvpnFindPeer(device, peerId);
+    if (peer == NULL) {
         status = STATUS_NOT_FOUND;
         LOG_WARN("Peer not found", TraceLoggingValue(peerId, "peer-id"));
     }
     else {
-        OvpnDeletePeerFromTable(&device->PeersByVpn4, peerCtx, "vpn4");
-        OvpnDeletePeerFromTable(&device->PeersByVpn6, peerCtx, "vpn6");
+        OvpnDeletePeerFromTable(device, &device->PeersByVpn4, peer, "vpn4");
+        OvpnDeletePeerFromTable(device, &device->PeersByVpn6, peer, "vpn6");
+        OvpnDeletePeerFromTable(device, &device->Peers, peer, "peers");
 
-        OvpnDeletePeerFromTable(&device->Peers, peerCtx, "peers");
+        OvpnPeerCtxRelease(peer);
     }
-
-    ExReleaseSpinLockExclusive(&device->SpinLock, kirql);
 
     return status;
 }

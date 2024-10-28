@@ -36,14 +36,56 @@
 #include "socket.h"
 #include "peer.h"
 
+template<typename T>
+static
+VOID
+OvpnTxCopyRemoteToSockaddr(T& remote, SOCKADDR* sockaddr) {
+    // Copy the appropriate address based on the family
+    if (remote.IPv4.sin_family == AF_INET) {
+        RtlCopyMemory(sockaddr, &remote.IPv4, sizeof(SOCKADDR_IN));
+    }
+    else if (remote.IPv6.sin6_family == AF_INET6) {
+        RtlCopyMemory(sockaddr, &remote.IPv6, sizeof(SOCKADDR_IN6));
+    }
+}
+
+static
+BOOLEAN
+OvpnTxAreSockaddrEqual(const SOCKADDR* addr1, const SOCKADDR* addr2) {
+    // First, check if the address families are the same
+    if (addr1->sa_family != addr2->sa_family) {
+        return 0;  // Not equal if the families are different
+    }
+
+    if (addr1->sa_family == AF_INET) {
+        // Compare IPv4 addresses
+        SOCKADDR_IN* ipv4_1 = (SOCKADDR_IN*)addr1;
+        SOCKADDR_IN* ipv4_2 = (SOCKADDR_IN*)addr2;
+        return (ipv4_1->sin_addr.s_addr == ipv4_2->sin_addr.s_addr &&
+            ipv4_1->sin_port == ipv4_2->sin_port);
+    }
+    else if (addr1->sa_family == AF_INET6) {
+        // Compare IPv6 addresses
+        SOCKADDR_IN6* ipv6_1 = (SOCKADDR_IN6*)addr1;
+        SOCKADDR_IN6* ipv6_2 = (SOCKADDR_IN6*)addr2;
+        SIZE_T result = RtlCompareMemory(&ipv6_1->sin6_addr, &ipv6_2->sin6_addr, sizeof(ipv6_1->sin6_addr));
+        return (result == sizeof(ipv6_1->sin6_addr) &&
+            ipv6_1->sin6_port == ipv6_2->sin6_port);
+    }
+
+    // If the address family is neither AF_INET nor AF_INET6, return not equal
+    return 0;
+}
+
 _Must_inspect_result_
-_Requires_shared_lock_held_(device->SpinLock)
 static
 NTSTATUS
 OvpnTxProcessPacket(_In_ POVPN_DEVICE device, _In_ POVPN_TXQUEUE queue, _In_ NET_RING_PACKET_ITERATOR *pi,
-    _Inout_ OVPN_TX_BUFFER **head, _Inout_ OVPN_TX_BUFFER** tail, _Inout_ SOCKADDR **headSockaddr)
+    _Inout_ OVPN_TX_BUFFER **head, _Inout_ OVPN_TX_BUFFER** tail, _Inout_ SOCKADDR *headSockaddr)
 {
     NET_RING_FRAGMENT_ITERATOR fi = NetPacketIteratorGetFragments(pi);
+
+    OvpnPeerContext* peer = NULL;
 
     // get buffer into which we gather plaintext fragments and do in-place encryption
     OVPN_TX_BUFFER* buffer;
@@ -77,23 +119,23 @@ OvpnTxProcessPacket(_In_ POVPN_DEVICE device, _In_ POVPN_TXQUEUE queue, _In_ NET
         NetFragmentIteratorAdvance(&fi);
     }
 
-    OvpnPeerContext* peer = NULL;
-
     if (OvpnMssIsIPv4(buffer->Data, buffer->Len)) {
         auto addr = ((IPV4_HEADER*)buffer->Data)->DestinationAddress;
+
         peer = OvpnFindPeerVPN4(device, addr);
-        if (peer != NULL) {
+        if (peer != nullptr) {
             OvpnMssDoIPv4(buffer->Data, buffer->Len, peer->MSS);
         }
     } else if (OvpnMssIsIPv6(buffer->Data, buffer->Len)) {
         auto addr = ((IPV6_HEADER*)buffer->Data)->DestinationAddress;
+
         peer = OvpnFindPeerVPN6(device, addr);
-        if (peer != NULL) {
+        if (peer != nullptr) {
             OvpnMssDoIPv6(buffer->Data, buffer->Len, peer->MSS);
         }
     }
 
-    if (peer == NULL) {
+    if (peer == nullptr) {
         status = STATUS_ADDRESS_NOT_ASSOCIATED;
         OvpnTxBufferPoolPut(buffer);
         goto out;
@@ -101,7 +143,11 @@ OvpnTxProcessPacket(_In_ POVPN_DEVICE device, _In_ POVPN_TXQUEUE queue, _In_ NET
 
     InterlockedExchangeAddNoFence64(&device->Stats.TunBytesSent, buffer->Len);
 
+    auto irql = ExAcquireSpinLockShared(&peer->SpinLock);
+
     OvpnCryptoContext* cryptoContext = &peer->CryptoContext;
+    auto remoteAddr = peer->TransportAddrs.Remote;
+    auto timer = peer->Timer;
 
     if (cryptoContext->Encrypt) {
         auto aeadTagEnd = cryptoContext->CryptoOptions & CRYPTO_OPTIONS_AEAD_TAG_END;
@@ -121,6 +167,11 @@ OvpnTxProcessPacket(_In_ POVPN_DEVICE device, _In_ POVPN_TXQUEUE queue, _In_ NET
         status = STATUS_INVALID_DEVICE_STATE;
         // LOG_WARN("CryptoContext not initialized");
     }
+    ExReleaseSpinLockShared(&peer->SpinLock, irql);
+
+    if (peer != nullptr) {
+        OvpnPeerCtxRelease(peer);
+    }
 
     if (NT_SUCCESS(status)) {
         // start async send, this will return ciphertext buffer to the pool
@@ -138,17 +189,16 @@ OvpnTxProcessPacket(_In_ POVPN_DEVICE device, _In_ POVPN_TXQUEUE queue, _In_ NET
             // If this peer is different (head sockaddr != peer sockaddr) to the previous buffer chain peers,
             // then flush those and restart with a new buffer list.
 
-            if ((*head != NULL) && *headSockaddr != (SOCKADDR*)&(peer->TransportAddrs.Remote))
+            if ((*head != NULL) && !(OvpnTxAreSockaddrEqual(headSockaddr, (const SOCKADDR*)&remoteAddr)))
             {
-                LOG_IF_NOT_NT_SUCCESS(OvpnSocketSend(&device->Socket, *head, *headSockaddr));
+                LOG_IF_NOT_NT_SUCCESS(OvpnSocketSend(&device->Socket, *head, headSockaddr));
                 *head = buffer;
                 *tail = buffer;
-                *headSockaddr = (SOCKADDR*)&(peer->TransportAddrs.Remote);
-            }
-            else {
+                OvpnTxCopyRemoteToSockaddr(remoteAddr, headSockaddr);
+            } else {
                 if (*head == NULL) {
                     *head = buffer;
-                    *headSockaddr = (SOCKADDR*)&(peer->TransportAddrs.Remote);
+                    OvpnTxCopyRemoteToSockaddr(remoteAddr, headSockaddr);
                 }
                 else {
                     (*tail)->WskBufList.Next = &buffer->WskBufList;
@@ -158,7 +208,7 @@ OvpnTxProcessPacket(_In_ POVPN_DEVICE device, _In_ POVPN_TXQUEUE queue, _In_ NET
             }
         }
 
-        OvpnTimerResetXmit(peer->Timer);
+        OvpnTimerResetXmit(timer);
     }
     else {
         OvpnTxBufferPoolPut(buffer);
@@ -184,11 +234,9 @@ OvpnEvtTxQueueAdvance(NETPACKETQUEUE netPacketQueue)
     POVPN_DEVICE device = OvpnGetDeviceContext(queue->Adapter->WdfDevice);
     BOOLEAN packetSent = false;
 
-    KIRQL kirql = ExAcquireSpinLockShared(&device->SpinLock);
-
     OVPN_TX_BUFFER* txBufferHead = NULL;
     OVPN_TX_BUFFER* txBufferTail = NULL;
-    SOCKADDR* headSockaddr = NULL;
+    SOCKADDR headSockaddr = {0};
 
     while (NetPacketIteratorHasAny(&pi)) {
         NET_PACKET* packet = NetPacketIteratorGetPacket(&pi);
@@ -213,11 +261,9 @@ OvpnEvtTxQueueAdvance(NETPACKETQUEUE netPacketQueue)
     if (packetSent) {
         if (!device->Socket.Tcp) {
             // this will use WskSendMessages to send buffers list which we constructed before
-            LOG_IF_NOT_NT_SUCCESS(OvpnSocketSend(&device->Socket, txBufferHead, headSockaddr));
+            LOG_IF_NOT_NT_SUCCESS(OvpnSocketSend(&device->Socket, txBufferHead, &headSockaddr));
         }
     }
-
-    ExReleaseSpinLockShared(&device->SpinLock, kirql);
 }
 
 _Use_decl_annotations_
