@@ -25,7 +25,8 @@ HWND hMPListenAddress, hMPListenPort,
     hCCMessage, hCCRemoteAddress, hCCRemotePort,
     hMPNewPeerLocalIP, hMPNewPeerLocalPort, hMPNewPeerRemoteIP, hMPNewPeerRemotePort, hMPNewPeerVPNIP, hMPNewPeerPeerId,
     hNewKeyPeerId,
-    hSetPeerPeerId, hSetPeerInterval, hSetPeerTimeout, hSetPeerMSS;
+    hSetPeerPeerId, hSetPeerInterval, hSetPeerTimeout, hSetPeerMSS,
+    hDelPeerPeerId;
 
 HWND hLogArea;
 std::unordered_map<DWORD, std::wstring> buttons = {
@@ -42,7 +43,8 @@ std::unordered_map<DWORD, std::wstring> buttons = {
     {OVPN_IOCTL_MP_START_VPN, L"MP Start VPN"},
     {OVPN_IOCTL_MP_NEW_PEER, L"MP New Peer"},
     {OVPN_IOCTL_NEW_KEY, L"New Key"},
-    {OVPN_IOCTL_SET_PEER, L"Set Peer"}
+    {OVPN_IOCTL_SET_PEER, L"Set Peer"},
+    {OVPN_IOCTL_MP_DEL_PEER, L"MP Del Peer"}
 };
 
 #define MIN_FUNCTION_CODE 1
@@ -523,8 +525,25 @@ SetPeer()
             Log("Peer set");
         }
     }
+}
 
-    
+void
+MPDelPeer()
+{
+    wchar_t peerId[6];
+
+    GetWindowText(hDelPeerPeerId, peerId, 16);
+
+    OVPN_MP_DEL_PEER del_peer = {};
+    del_peer.PeerId = _wtoi(peerId);
+
+    DWORD bytesReturned;
+    if (!DeviceIoControl(hDev, OVPN_IOCTL_MP_DEL_PEER, &del_peer, sizeof(del_peer), NULL, 0, &bytesReturned, NULL)) {
+        Log("DeviceIoControl(OVPN_IOCTL_MP_DEL_PEER) failed with code ", GetLastError());
+    }
+    else {
+        Log("MP Peer deleted", peerId);
+    }
 }
 
 void
@@ -634,6 +653,9 @@ LRESULT CALLBACK WindowProcedure(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         hSetPeerTimeout = CreateEditBox(hwnd, L"30", 330, 310, 60);
         hSetPeerMSS = CreateEditBox(hwnd, L"-1", 420, 310, 60);
 
+        CreatePushButton(hwnd, OVPN_IOCTL_MP_DEL_PEER, 10, 360);
+        hDelPeerPeerId = CreateEditBox(hwnd, L"1", 150, 360, 60);
+
         SendMessage(hModes[0], BM_SETCHECK, BST_CHECKED, 0);
 
         // log area
@@ -683,6 +705,11 @@ LRESULT CALLBACK WindowProcedure(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 
             case OVPN_IOCTL_SET_PEER:
                 SetPeer();
+                break;
+
+            case OVPN_IOCTL_MP_DEL_PEER:
+                MPDelPeer();
+                break;
             }
         }
         else if ((ULONG)wp == BTN_SEND_CC) {
