@@ -776,27 +776,84 @@ done:
     return status;
 }
 
+PCCH
+OvpnPeerGetDelReasonString(OVPN_DEL_PEER_REASON reason) {
+    switch (reason) {
+    case OVPN_DEL_PEER_REASON_TEARDOWN:
+        return "Teardown";
+    case OVPN_DEL_PEER_REASON_USERSPACE:
+        return "Userspace";
+    case OVPN_DEL_PEER_REASON_EXPIRED:
+        return "Expired";
+    case OVPN_DEL_PEER_REASON_TRANSPORT_ERROR:
+        return "Transport Error";
+    case OVPN_DEL_PEER_REASON_TRANSPORT_DISCONNECT:
+        return "Transport Disconnect";
+    default:
+        return "Unknown Reason";
+    }
+}
+
 _Use_decl_annotations_
 NTSTATUS
-OvpnPeerDelete(POVPN_DEVICE device, INT32 peerId)
+OvpnPeerDelete(POVPN_DEVICE device, INT32 peerId, OVPN_DEL_PEER_REASON reason)
 {
     NTSTATUS status = STATUS_SUCCESS;
 
-    LOG_INFO("Deleting peer", TraceLoggingValue(peerId, "peer-id"));
+    LOG_INFO("Deleting peer", TraceLoggingValue(peerId, "peer-id"), TraceLoggingValue(OvpnPeerGetDelReasonString(reason), "reason"));
 
     // get peer from main table
     OvpnPeerContext* peer = OvpnFindPeer(device, peerId);
-    if (peer == NULL) {
-        status = STATUS_NOT_FOUND;
-        LOG_WARN("Peer not found", TraceLoggingValue(peerId, "peer-id"));
-    }
-    else {
+    if (peer != nullptr) {
         OvpnDeletePeerFromTable(device, &device->PeersByVpn4, peer, "vpn4");
         OvpnDeletePeerFromTable(device, &device->PeersByVpn6, peer, "vpn6");
         OvpnDeletePeerFromTable(device, &device->Peers, peer, "peers");
 
         OvpnPeerCtxRelease(peer);
+
+        // notify userspace
+        WDFREQUEST request;
+        status = WdfIoQueueRetrieveNextRequest(device->PendingNotificationRequestsQueue, &request);
+        if (!NT_SUCCESS(status)) {
+            LOG_INFO("Adding del peer notification to the queue");
+            return device->PendingNotificationsQueue.AddEvent(OVPN_CMD_DEL_PEER, peerId, reason);
+        }
+        else {
+            LOG_INFO("Notify userspace about deleted peer", TraceLoggingValue(OvpnPeerGetDelReasonString(reason), "reason"));
+            OVPN_NOTIFY_EVENT* evt;
+            ULONG_PTR bytesSent = 0;
+            LOG_IF_NOT_NT_SUCCESS(status = WdfRequestRetrieveOutputBuffer(request, sizeof(OVPN_NOTIFY_EVENT), (PVOID*)&evt, nullptr));
+            if (NT_SUCCESS(status)) {
+                evt->Cmd = OVPN_CMD_DEL_PEER;
+                evt->PeerId = peerId;
+                evt->DelPeerReason = reason;
+                bytesSent = sizeof(OVPN_NOTIFY_EVENT);
+            }
+            WdfRequestCompleteWithInformation(request, status, bytesSent);
+        }
+    } else {
+        status = STATUS_NOT_FOUND;
+        LOG_WARN("Peer not found", TraceLoggingValue(peerId, "peer-id"));
     }
+
+    return status;
+}
+
+_Use_decl_annotations_
+NTSTATUS
+OvpnMPPeerDelete(POVPN_DEVICE device, WDFREQUEST request)
+{
+    NTSTATUS status = STATUS_SUCCESS;
+
+    LOG_ENTER();
+
+    POVPN_MP_DEL_PEER del_peer = NULL;
+    GOTO_IF_NOT_NT_SUCCESS(done, status, WdfRequestRetrieveInputBuffer(request, sizeof(OVPN_MP_DEL_PEER), (PVOID*)&del_peer, nullptr));
+
+    LOG_IF_NOT_NT_SUCCESS(status = OvpnPeerDelete(device, del_peer->PeerId, OVPN_DEL_PEER_REASON_USERSPACE));
+
+done:
+    LOG_EXIT();
 
     return status;
 }

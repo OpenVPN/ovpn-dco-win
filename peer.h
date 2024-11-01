@@ -157,4 +157,8 @@ OvpnPeerSwapKeys(_In_ POVPN_DEVICE device);
 
 _Must_inspect_result_
 NTSTATUS
-OvpnPeerDelete(_In_ POVPN_DEVICE device, INT32 peerId);
+OvpnPeerDelete(POVPN_DEVICE device, INT32 peerId, OVPN_DEL_PEER_REASON reason);
+
+_Must_inspect_result_
+NTSTATUS
+OvpnMPPeerDelete(POVPN_DEVICE device, WDFREQUEST request);

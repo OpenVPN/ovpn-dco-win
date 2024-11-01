@@ -317,6 +317,7 @@ OvpnDeviceCheckMode(OVPN_MODE mode, ULONG code)
         case OVPN_IOCTL_MP_START_VPN:
         case OVPN_IOCTL_MP_NEW_PEER:
         case OVPN_IOCTL_MP_SET_PEER:
+        case OVPN_IOCTL_MP_DEL_PEER:
             return FALSE;
         }
     }
@@ -538,6 +539,10 @@ OvpnEvtIoDeviceControl(WDFQUEUE queue, WDFREQUEST request, size_t outputBufferLe
 
     case OVPN_IOCTL_NOTIFY_EVENT:
         status = OvpnNotifyEvent(device, request, &bytesReturned);
+        break;
+
+    case OVPN_IOCTL_MP_DEL_PEER:
+        status = OvpnMPPeerDelete(device, request);
         break;
 
     default:
