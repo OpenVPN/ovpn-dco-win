@@ -25,6 +25,8 @@
 #include <ntddk.h>
 #include <wdf.h>
 
+#include "peer.h"
+
 VOID
 OvpnTimerResetXmit(WDFTIMER timer);
 

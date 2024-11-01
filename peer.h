@@ -84,6 +84,32 @@ RTL_GENERIC_COMPARE_ROUTINE OvpnPeerCompareByVPN4Routine;
 RTL_GENERIC_COMPARE_ROUTINE OvpnPeerCompareByVPN6Routine;
 
 _Must_inspect_result_
+NTSTATUS
+OvpnAddPeerToTable(POVPN_DEVICE device, _In_ RTL_GENERIC_TABLE* table, _In_ OvpnPeerContext* peer);
+
+VOID
+OvpnCleanupPeerTable(_In_ POVPN_DEVICE device, _In_ RTL_GENERIC_TABLE*);
+
+_Must_inspect_result_
+OvpnPeerContext*
+OvpnGetFirstPeer(_In_ POVPN_DEVICE device);
+
+_Must_inspect_result_
+OvpnPeerContext*
+OvpnFindPeer(_In_ POVPN_DEVICE device, INT32 PeerId);
+
+_Must_inspect_result_
+OvpnPeerContext*
+OvpnFindPeerVPN4(_In_ POVPN_DEVICE device, _In_ IN_ADDR addr);
+
+_Must_inspect_result_
+OvpnPeerContext*
+OvpnFindPeerVPN6(_In_ POVPN_DEVICE device, _In_ IN6_ADDR addr);
+
+VOID
+OvpnDeletePeerFromTable(POVPN_DEVICE device, RTL_GENERIC_TABLE* table, OvpnPeerContext* peer, char* tableName);
+
+_Must_inspect_result_
 _IRQL_requires_(PASSIVE_LEVEL)
 NTSTATUS
 OvpnPeerNew(_In_ POVPN_DEVICE device, WDFREQUEST request);
@@ -128,3 +154,7 @@ _Must_inspect_result_
 _Requires_exclusive_lock_held_(device->SpinLock)
 NTSTATUS
 OvpnPeerSwapKeys(_In_ POVPN_DEVICE device);
+
+_Must_inspect_result_
+NTSTATUS
+OvpnPeerDelete(_In_ POVPN_DEVICE device, INT32 peerId);

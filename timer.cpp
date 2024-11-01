@@ -130,7 +130,7 @@ static BOOLEAN OvpnTimerRecv(WDFTIMER timer)
         WdfRequestCompleteWithInformation(request, STATUS_CONNECTION_DISCONNECTED, bytesSent);
     }
     else {
-        (VOID)OvpnDeletePeer(device, peerId);
+        (VOID)OvpnPeerDelete(device, peerId);
 
         status = WdfIoQueueRetrieveNextRequest(device->PendingNotificationRequestsQueue, &request);
         if (!NT_SUCCESS(status)) {

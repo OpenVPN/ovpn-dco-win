@@ -107,35 +107,3 @@ struct OVPN_DEVICE {
 typedef OVPN_DEVICE * POVPN_DEVICE;
 
 WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(OVPN_DEVICE, OvpnGetDeviceContext)
-
-struct OvpnPeerContext;
-
-_Must_inspect_result_
-NTSTATUS
-OvpnAddPeerToTable(POVPN_DEVICE device, _In_ RTL_GENERIC_TABLE* table, _In_ OvpnPeerContext* peer);
-
-VOID
-OvpnFlushPeers(_In_ POVPN_DEVICE device);
-
-VOID
-OvpnCleanupPeerTable(_In_ POVPN_DEVICE device, _In_ RTL_GENERIC_TABLE*);
-
-_Must_inspect_result_
-OvpnPeerContext*
-OvpnGetFirstPeer(_In_ POVPN_DEVICE device);
-
-_Must_inspect_result_
-OvpnPeerContext*
-OvpnFindPeer(_In_ POVPN_DEVICE device, INT32 PeerId);
-
-_Must_inspect_result_
-OvpnPeerContext*
-OvpnFindPeerVPN4(_In_ POVPN_DEVICE device, _In_ IN_ADDR addr);
-
-_Must_inspect_result_
-OvpnPeerContext*
-OvpnFindPeerVPN6(_In_ POVPN_DEVICE device, _In_ IN6_ADDR addr);
-
-_Must_inspect_result_
-NTSTATUS
-OvpnDeletePeer(_In_ POVPN_DEVICE device, INT32 peerId);
