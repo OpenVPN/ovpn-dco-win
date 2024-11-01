@@ -329,7 +329,7 @@ OvpnCryptoNewKey(OvpnCryptoContext* cryptoContext, POVPN_CRYPTO_DATA_V2 cryptoDa
         keySlot->PeerId = cryptoData->PeerId;
 
         LOG_INFO("New key", TraceLoggingValue(cryptoData->CipherAlg == OVPN_CIPHER_ALG_AES_GCM ? "aes-gcm" : "chacha20-poly1305", "alg"),
-            TraceLoggingValue(cryptoData->KeyId, "KeyId"), TraceLoggingValue(cryptoData->KeyId, "PeerId"));
+            TraceLoggingValue(cryptoData->KeyId, "KeyId"), TraceLoggingValue(cryptoData->PeerId, "PeerId"));
     }
     else if (cryptoData->CipherAlg == OVPN_CIPHER_ALG_NONE) {
         cryptoContext->Encrypt = OvpnCryptoEncryptNone;
