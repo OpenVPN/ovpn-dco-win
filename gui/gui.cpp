@@ -24,9 +24,10 @@ HWND hMPListenAddress, hMPListenPort,
     hP2PRemoteAddress, hP2PRemotePort,
     hCCMessage, hCCRemoteAddress, hCCRemotePort,
     hMPNewPeerLocalIP, hMPNewPeerLocalPort, hMPNewPeerRemoteIP, hMPNewPeerRemotePort, hMPNewPeerVPNIP, hMPNewPeerPeerId,
-    hNewKeyPeerId,
+    hNewKeyPeerId, hNewKeyKeySlot, hNewKeyKeyId,
     hSetPeerPeerId, hSetPeerInterval, hSetPeerTimeout, hSetPeerMSS,
-    hDelPeerPeerId;
+    hDelPeerPeerId,
+    hSwapKeysPeerId;
 
 HWND hLogArea;
 std::unordered_map<DWORD, std::wstring> buttons = {
@@ -43,7 +44,6 @@ std::unordered_map<DWORD, std::wstring> buttons = {
     {OVPN_IOCTL_MP_START_VPN, L"MP Start VPN"},
     {OVPN_IOCTL_MP_NEW_PEER, L"MP New Peer"},
     {OVPN_IOCTL_NEW_KEY, L"New Key"},
-    {OVPN_IOCTL_SET_PEER, L"Set Peer"},
     {OVPN_IOCTL_MP_DEL_PEER, L"MP Del Peer"}
 };
 
@@ -435,8 +435,11 @@ void MPNewPeer()
 void
 NewKey()
 {
-    wchar_t peerId[6];
+    wchar_t peerId[6], keyId[6];
     GetWindowText(hNewKeyPeerId, peerId, 6);
+    GetWindowText(hNewKeyKeyId, keyId, 6);
+
+    auto keySlot = SendMessageW(hNewKeyKeySlot, LB_GETCURSEL, 0, 0);
 
     std::ifstream file("data64.key");
     if (!file) return;
@@ -475,13 +478,15 @@ NewKey()
 
     crypto_data.CipherAlg = OVPN_CIPHER_ALG::OVPN_CIPHER_ALG_AES_GCM;
     crypto_data.PeerId = _wtoi(peerId);
+    crypto_data.KeySlot = (keySlot == 0) ? OVPN_KEY_SLOT_PRIMARY : OVPN_KEY_SLOT_SECONDARY;
+    crypto_data.KeyId = _wtoi(keyId);
 
     DWORD bytesReturned;
     if (!DeviceIoControl(hDev, OVPN_IOCTL_NEW_KEY, &crypto_data, sizeof(crypto_data), NULL, 0, &bytesReturned, NULL)) {
         Log("DeviceIoControl(OVPN_IOCTL_NEW_KEY) failed with code ", GetLastError());
     }
     else {
-        Log("New key added");
+        Log("New key added, peer-id: ", peerId, ", slot: ", (keySlot == 0) ? "primary" : "secondary", ", key-id: ", keyId);
     }
 }
 
@@ -547,6 +552,35 @@ MPDelPeer()
 }
 
 void
+SwapKeys()
+{
+    bool mp = SendMessage(hModes[1], BM_GETCHECK, 0, 0) == BST_CHECKED;
+    if (mp) {
+        wchar_t peerId[6];
+        GetWindowText(hSwapKeysPeerId, peerId, 16);
+
+        OVPN_MP_SWAP_KEYS swap_keys = {};
+        swap_keys.PeerId = _wtoi(peerId);
+
+        DWORD bytesReturned;
+        if (!DeviceIoControl(hDev, OVPN_IOCTL_MP_SWAP_KEYS, &swap_keys, sizeof(swap_keys), NULL, 0, &bytesReturned, NULL)) {
+            Log("DeviceIoControl(OVPN_IOCTL_MP_SWAP_KEYS) failed with code ", GetLastError());
+        }
+        else {
+            Log("MP Keys swapped", peerId);
+        }
+    } else {
+        DWORD bytesReturned;
+        if (!DeviceIoControl(hDev, OVPN_IOCTL_SWAP_KEYS, NULL, 0, NULL, 0, &bytesReturned, NULL)) {
+            Log("DeviceIoControl(OVPN_IOCTL_SWAP_KEYS) failed with code ", GetLastError());
+        }
+        else {
+            Log("Keys swapped");
+        }
+    }
+}
+
+void
 CreatePushButton(HWND hWnd, DWORD ioctl, int x, int y)
 {
     CreateWindowW(L"Button", buttons[ioctl].c_str(), WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON, x, y, 100, 30,
@@ -563,6 +597,26 @@ HWND
 CreateEditBox(HWND hWnd, WCHAR* text, int x, int y, int width)
 {
     return CreateWindowW(L"Edit", text, WS_VISIBLE | WS_CHILD | WS_BORDER | ES_LEFT, x, y, width, 20, hWnd, NULL, NULL, NULL);
+}
+
+HWND CreateTextLabel(HWND hWnd, WCHAR* text, int x, int y, int width)
+{
+    return CreateWindowW(L"Static", text, WS_VISIBLE | WS_CHILD, x, y, width, 20, hWnd, NULL, NULL, NULL);
+}
+
+HWND CreateListBox(HWND hWnd, int x, int y, int width, std::vector<std::wstring> lines)
+{
+    // Create the list box
+    HWND hListBox = CreateWindowW(L"ListBox", NULL, WS_VISIBLE | WS_CHILD | WS_BORDER | LBS_STANDARD,
+                                  x, y, width, 40, hWnd, NULL, NULL, NULL);
+
+    for (const auto& str : lines) {
+        SendMessageW(hListBox, LB_ADDSTRING, 0, (LPARAM)str.c_str());
+    }
+
+    SendMessageW(hListBox, LB_SETCURSEL, 0, 0);
+
+    return hListBox;
 }
 
 void
@@ -645,7 +699,11 @@ LRESULT CALLBACK WindowProcedure(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         hMPNewPeerPeerId = CreateEditBox(hwnd, L"1", 790, 210, 60);
 
         CreatePushButton(hwnd, OVPN_IOCTL_NEW_KEY, 10, 260);
-        hNewKeyPeerId = CreateEditBox(hwnd, L"1", 150, 260, 60);
+        CreateTextLabel(hwnd, L"peer-id", 150, 260, 60);
+        hNewKeyPeerId = CreateEditBox(hwnd, L"1", 210, 260, 60);
+        hNewKeyKeySlot = CreateListBox(hwnd, 300, 250, 100, {L"Primary", L"Secondary"});
+        CreateTextLabel(hwnd, L"key-id", 420, 260, 60);
+        hNewKeyKeyId = CreateEditBox(hwnd, L"0", 480, 260, 60);
 
         CreatePushButton(hwnd, OVPN_IOCTL_SET_PEER, 10, 310);
         hSetPeerPeerId = CreateEditBox(hwnd, L"1", 150, 310, 60);
@@ -655,6 +713,9 @@ LRESULT CALLBACK WindowProcedure(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 
         CreatePushButton(hwnd, OVPN_IOCTL_MP_DEL_PEER, 10, 360);
         hDelPeerPeerId = CreateEditBox(hwnd, L"1", 150, 360, 60);
+
+        CreatePushButton(hwnd, OVPN_IOCTL_SWAP_KEYS, 10, 410);
+        hSwapKeysPeerId = CreateEditBox(hwnd, L"1", 150, 410, 60);
 
         SendMessage(hModes[0], BM_SETCHECK, BST_CHECKED, 0);
 
@@ -709,6 +770,10 @@ LRESULT CALLBACK WindowProcedure(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 
             case OVPN_IOCTL_MP_DEL_PEER:
                 MPDelPeer();
+                break;
+
+            case OVPN_IOCTL_SWAP_KEYS:
+                SwapKeys();
                 break;
             }
         }
