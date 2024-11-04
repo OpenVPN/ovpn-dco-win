@@ -747,33 +747,34 @@ done:
     return status;
 }
 
+NTSTATUS
+OvpnPeerDoSwapKeys(POVPN_DEVICE device, INT32 peerId)
+{
+    LOG_INFO("Swap Keys", TraceLoggingValue(peerId, "peer-id"));
+
+    // in client mode this returns the only peer
+    OvpnPeerContext* peer = OvpnFindPeer(device, peerId);
+    if (peer != nullptr) {
+        KIRQL irql = ExAcquireSpinLockExclusive(&peer->SpinLock);
+        OvpnCryptoSwapKeys(&peer->CryptoContext);
+        ExReleaseSpinLockExclusive(&peer->SpinLock, irql);
+
+        OvpnPeerCtxRelease(peer);
+
+        return STATUS_SUCCESS;
+    }
+    else {
+        LOG_ERROR("Peer not found");
+        return STATUS_INVALID_DEVICE_REQUEST;
+    }
+}
+
 _Use_decl_annotations_
 NTSTATUS
 OvpnPeerSwapKeys(POVPN_DEVICE device)
 {
-    LOG_ENTER();
-
-    NTSTATUS status = STATUS_SUCCESS;
-
-    OvpnPeerContext* peer = OvpnGetFirstPeer(device);
-    if (peer == nullptr) {
-        LOG_ERROR("Peer not found");
-        status = STATUS_INVALID_DEVICE_REQUEST;
-        goto done;
-    }
-
-    KIRQL irql = ExAcquireSpinLockExclusive(&peer->SpinLock);
-    OvpnCryptoSwapKeys(&peer->CryptoContext);
-    ExReleaseSpinLockExclusive(&peer->SpinLock, irql);
-
-done:
-    if (peer != nullptr) {
-        OvpnPeerCtxRelease(peer);
-    }
-
-    LOG_EXIT();
-
-    return status;
+    // in client mode peer-id doesn't matter
+    return OvpnPeerDoSwapKeys(device, 0);
 }
 
 PCCH
@@ -855,5 +856,20 @@ OvpnMPPeerDelete(POVPN_DEVICE device, WDFREQUEST request)
 done:
     LOG_EXIT();
 
+    return status;
+}
+
+_Use_decl_annotations_
+NTSTATUS
+OvpnMPPeerSwapKeys(POVPN_DEVICE device, WDFREQUEST request)
+{
+    NTSTATUS status = STATUS_SUCCESS;
+
+    POVPN_MP_SWAP_KEYS swap_keys = NULL;
+    GOTO_IF_NOT_NT_SUCCESS(done, status, WdfRequestRetrieveInputBuffer(request, sizeof(OVPN_MP_SWAP_KEYS), (PVOID*)&swap_keys, nullptr));
+
+    LOG_IF_NOT_NT_SUCCESS(status = OvpnPeerDoSwapKeys(device, swap_keys->PeerId));
+
+done:
     return status;
 }

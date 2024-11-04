@@ -151,7 +151,6 @@ NTSTATUS
 OvpnPeerNewKeyV2(_In_ POVPN_DEVICE device, WDFREQUEST request);
 
 _Must_inspect_result_
-_Requires_exclusive_lock_held_(device->SpinLock)
 NTSTATUS
 OvpnPeerSwapKeys(_In_ POVPN_DEVICE device);
 
@@ -162,3 +161,7 @@ OvpnPeerDelete(POVPN_DEVICE device, INT32 peerId, OVPN_DEL_PEER_REASON reason);
 _Must_inspect_result_
 NTSTATUS
 OvpnMPPeerDelete(POVPN_DEVICE device, WDFREQUEST request);
+
+_Must_inspect_result_
+NTSTATUS
+OvpnMPPeerSwapKeys(_In_ POVPN_DEVICE device, WDFREQUEST request);
