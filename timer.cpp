@@ -76,7 +76,8 @@ static VOID OvpnTimerXmit(WDFTIMER timer)
     ExAcquireSpinLockSharedAtDpcLevel(&peer->SpinLock);
 
     auto peerId = peer->PeerId;
-    auto addr = peer->TransportAddrs.Remote;
+    SOCKADDR_STORAGE sa;
+    OvpnSocketCopyRemoteToSockaddr(peer->TransportAddrs.Remote, &sa);
 
     OvpnCryptoContext* cryptoContext = &peer->CryptoContext;
     if (cryptoContext->Encrypt) {
@@ -97,8 +98,7 @@ static VOID OvpnTimerXmit(WDFTIMER timer)
 
     if (NT_SUCCESS(status)) {
         // start async send, completion handler will return ciphertext buffer to the pool
-        SOCKADDR* sa = (SOCKADDR*)&(addr);
-        LOG_IF_NOT_NT_SUCCESS(status = OvpnSocketSend(&device->Socket, buffer, sa));
+        LOG_IF_NOT_NT_SUCCESS(status = OvpnSocketSend(&device->Socket, buffer, (SOCKADDR*)&sa));
         if (NT_SUCCESS(status)) {
             LOG_INFO("Ping sent", TraceLoggingValue(peerId, "peer-id"));
         }

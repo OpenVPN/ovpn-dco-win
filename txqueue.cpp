@@ -36,19 +36,6 @@
 #include "socket.h"
 #include "peer.h"
 
-template<typename T>
-static
-VOID
-OvpnTxCopyRemoteToSockaddr(T& remote, SOCKADDR* sockaddr) {
-    // Copy the appropriate address based on the family
-    if (remote.IPv4.sin_family == AF_INET) {
-        RtlCopyMemory(sockaddr, &remote.IPv4, sizeof(SOCKADDR_IN));
-    }
-    else if (remote.IPv6.sin6_family == AF_INET6) {
-        RtlCopyMemory(sockaddr, &remote.IPv6, sizeof(SOCKADDR_IN6));
-    }
-}
-
 static
 BOOLEAN
 OvpnTxAreSockaddrEqual(const SOCKADDR* addr1, const SOCKADDR* addr2) {
@@ -81,7 +68,7 @@ _Must_inspect_result_
 static
 NTSTATUS
 OvpnTxProcessPacket(_In_ POVPN_DEVICE device, _In_ POVPN_TXQUEUE queue, _In_ NET_RING_PACKET_ITERATOR *pi,
-    _Inout_ OVPN_TX_BUFFER **head, _Inout_ OVPN_TX_BUFFER** tail, _Inout_ SOCKADDR *headSockaddr)
+    _Inout_ OVPN_TX_BUFFER **head, _Inout_ OVPN_TX_BUFFER** tail, _Inout_ SOCKADDR_STORAGE *headSockaddr)
 {
     NET_RING_FRAGMENT_ITERATOR fi = NetPacketIteratorGetFragments(pi);
 
@@ -189,16 +176,16 @@ OvpnTxProcessPacket(_In_ POVPN_DEVICE device, _In_ POVPN_TXQUEUE queue, _In_ NET
             // If this peer is different (head sockaddr != peer sockaddr) to the previous buffer chain peers,
             // then flush those and restart with a new buffer list.
 
-            if ((*head != NULL) && !(OvpnTxAreSockaddrEqual(headSockaddr, (const SOCKADDR*)&remoteAddr)))
+            if ((*head != NULL) && !(OvpnTxAreSockaddrEqual((const SOCKADDR*)headSockaddr, (const SOCKADDR*)&remoteAddr)))
             {
-                LOG_IF_NOT_NT_SUCCESS(OvpnSocketSend(&device->Socket, *head, headSockaddr));
+                LOG_IF_NOT_NT_SUCCESS(OvpnSocketSend(&device->Socket, *head, (SOCKADDR*)headSockaddr));
                 *head = buffer;
                 *tail = buffer;
-                OvpnTxCopyRemoteToSockaddr(remoteAddr, headSockaddr);
+                OvpnSocketCopyRemoteToSockaddr(remoteAddr, headSockaddr);
             } else {
                 if (*head == NULL) {
                     *head = buffer;
-                    OvpnTxCopyRemoteToSockaddr(remoteAddr, headSockaddr);
+                    OvpnSocketCopyRemoteToSockaddr(remoteAddr, headSockaddr);
                 }
                 else {
                     (*tail)->WskBufList.Next = &buffer->WskBufList;
@@ -236,7 +223,7 @@ OvpnEvtTxQueueAdvance(NETPACKETQUEUE netPacketQueue)
 
     OVPN_TX_BUFFER* txBufferHead = NULL;
     OVPN_TX_BUFFER* txBufferTail = NULL;
-    SOCKADDR headSockaddr = {0};
+    SOCKADDR_STORAGE headSockaddr = {0};
 
     while (NetPacketIteratorHasAny(&pi)) {
         NET_PACKET* packet = NetPacketIteratorGetPacket(&pi);
@@ -261,7 +248,7 @@ OvpnEvtTxQueueAdvance(NETPACKETQUEUE netPacketQueue)
     if (packetSent) {
         if (!device->Socket.Tcp) {
             // this will use WskSendMessages to send buffers list which we constructed before
-            LOG_IF_NOT_NT_SUCCESS(OvpnSocketSend(&device->Socket, txBufferHead, &headSockaddr));
+            LOG_IF_NOT_NT_SUCCESS(OvpnSocketSend(&device->Socket, txBufferHead, (SOCKADDR*)&headSockaddr));
         }
     }
 }

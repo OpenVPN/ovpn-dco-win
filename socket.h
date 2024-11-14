@@ -75,3 +75,16 @@ OvpnSocketSend(_In_ OvpnSocket* ovpnSocket, _In_ OVPN_TX_BUFFER* buffer, _In_opt
 _Must_inspect_result_
 NTSTATUS
 OvpnSocketTcpConnect(_In_ PWSK_SOCKET socket, _In_ PVOID context, _In_ PSOCKADDR remote);
+
+template<typename T>
+static
+VOID
+OvpnSocketCopyRemoteToSockaddr(T& remote, SOCKADDR_STORAGE* sockaddr) {
+    // Copy the appropriate address based on the family
+    if (remote.IPv4.sin_family == AF_INET) {
+        RtlCopyMemory(sockaddr, &remote.IPv4, sizeof(SOCKADDR_IN));
+    }
+    else if (remote.IPv6.sin6_family == AF_INET6) {
+        RtlCopyMemory(sockaddr, &remote.IPv6, sizeof(SOCKADDR_IN6));
+    }
+}
