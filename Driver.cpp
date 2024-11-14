@@ -283,15 +283,15 @@ OvpnSetMode(POVPN_DEVICE device, WDFREQUEST request)
 
     LOG_INFO("Set mode", TraceLoggingValue(static_cast<int>(mode->Mode), "mode"));
 
-    switch (mode->Mode) {
-    case OVPN_MODE_P2P:
-    case OVPN_MODE_MP:
-        device->Mode = mode->Mode;
-        break;
+    if (mode->Mode == OVPN_MODE_MP) {
+        OvpnAdapterSetLinkState(OvpnGetAdapterContext(device->Adapter), MediaConnectStateConnected);
 
-    default:
+        device->Mode = mode->Mode;
+    }
+    else if (mode->Mode == OVPN_MODE_P2P) {
+        device->Mode = mode->Mode;
+    } else {
         status = STATUS_INVALID_PARAMETER;
-        break;
     }
 
     return status;
@@ -425,8 +425,6 @@ OvpnMPStartVPN(POVPN_DEVICE device, WDFREQUEST request, ULONG_PTR* bytesReturned
         RtlCopyMemory(addrOut, addrIn, sizeof(OVPN_MP_START_VPN));
         *bytesReturned = sizeof(OVPN_MP_START_VPN);
     }
-
-    OvpnAdapterSetLinkState(OvpnGetAdapterContext(device->Adapter), MediaConnectStateConnected);
 
 done:
     LOG_EXIT();
