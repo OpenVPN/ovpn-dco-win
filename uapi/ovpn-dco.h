@@ -152,6 +152,7 @@ typedef struct _OVPN_MP_START_VPN {
         SOCKADDR_IN Addr4;
         SOCKADDR_IN6 Addr6;
     } ListenAddress;
+    int IPv6Only;
 } OVPN_MP_START_VPN, * POVPN_MP_START_VPN;
 
 typedef enum {

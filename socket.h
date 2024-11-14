@@ -61,7 +61,7 @@ _IRQL_requires_(PASSIVE_LEVEL)
 NTSTATUS
 OvpnSocketInit(_In_ WSK_PROVIDER_NPI* wskProviderNpi, _In_ WSK_REGISTRATION* wskRegistration, ADDRESS_FAMILY addrFamily,
 	BOOLEAN tcp, _In_ PSOCKADDR localAddr, _In_opt_ PSOCKADDR remoteAddr, SIZE_T remoteAddrSize,
-	_In_ PVOID deviceContext, _Out_ PWSK_SOCKET* socket);
+	_In_ PVOID deviceContext, _Out_ PWSK_SOCKET* socket, BOOLEAN ipv6only);
 
 _Must_inspect_result_
 _IRQL_requires_(PASSIVE_LEVEL)

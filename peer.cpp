@@ -373,7 +373,7 @@ OvpnPeerNew(POVPN_DEVICE device, WDFREQUEST request)
         &driver->WskRegistration, peer->Local.Addr4.sin_family, proto_tcp,
         (PSOCKADDR)&peer->Local,
         (PSOCKADDR)&peer->Remote,
-        remoteAddrSize, device, &socket));
+        remoteAddrSize, device, &socket, TRUE));
 
     GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnAddPeerToTable(device, &device->Peers, peerCtx));
 

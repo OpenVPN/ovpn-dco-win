@@ -521,7 +521,7 @@ const WSK_CLIENT_CONNECTION_DISPATCH OvpnSocketTcpDispatch = { OvpnSocketTcpRece
 _Use_decl_annotations_
 NTSTATUS
 OvpnSocketInit(WSK_PROVIDER_NPI* wskProviderNpi, WSK_REGISTRATION* wskRegistration, ADDRESS_FAMILY addressFamily, BOOLEAN tcp, PSOCKADDR localAddr,
-    PSOCKADDR remoteAddr, SIZE_T remoteAddrSize, PVOID deviceContext, PWSK_SOCKET* socket)
+    PSOCKADDR remoteAddr, SIZE_T remoteAddrSize, PVOID deviceContext, PWSK_SOCKET* socket, BOOLEAN ipv6only)
 {
     NTSTATUS status;
     WSK_EVENT_CALLBACK_CONTROL eventCallbackControl = {};
@@ -563,6 +563,17 @@ OvpnSocketInit(WSK_PROVIDER_NPI* wskProviderNpi, WSK_REGISTRATION* wskRegistrati
             sizeof(tcpNoDelay), &tcpNoDelay, 0, NULL, &outputSizeReturned, NULL));
     }
     else {
+        PWSK_PROVIDER_BASIC_DISPATCH basicDispatch = (PWSK_PROVIDER_BASIC_DISPATCH)(*socket)->Dispatch;
+
+        if (!ipv6only) {
+            LOG_INFO("Enable dual-stack");
+            // enable dual-stack
+            LOG_IF_NOT_NT_SUCCESS(status = OvpnSocketSyncOp("IPV6_V6ONLY", [basicDispatch, socket](PIRP irp) {
+                ULONG ipv6Only = 0;
+                return basicDispatch->WskControlSocket(*socket, WskSetOption, IPV6_V6ONLY, IPPROTO_IPV6, sizeof(ipv6Only), &ipv6Only, 0, NULL, NULL, irp);
+                }, [](PIRP) {}));
+        }
+
         // bind
         PWSK_PROVIDER_DATAGRAM_DISPATCH datagramDispatch = (PWSK_PROVIDER_DATAGRAM_DISPATCH)(*socket)->Dispatch;
 
@@ -577,8 +588,6 @@ OvpnSocketInit(WSK_PROVIDER_NPI* wskProviderNpi, WSK_REGISTRATION* wskRegistrati
 
         if (remoteAddr != NULL) {
             // set remote
-            PWSK_PROVIDER_BASIC_DISPATCH basicDispatch = (PWSK_PROVIDER_BASIC_DISPATCH)(*socket)->Dispatch;
-
             GOTO_IF_NOT_NT_SUCCESS(error, status, OvpnSocketSyncOp("SetRemote", [basicDispatch, socket, remoteAddrSize, remoteAddr](PIRP irp) {
                 return basicDispatch->WskControlSocket(*socket, WskIoctl, SIO_WSK_SET_REMOTE_ADDRESS, 0, remoteAddrSize, remoteAddr, 0, NULL, NULL, irp);
                 }, [](PIRP) {}));
