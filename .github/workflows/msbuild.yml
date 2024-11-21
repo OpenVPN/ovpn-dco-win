@@ -60,7 +60,6 @@ jobs:
         name: ovpn-dco_${{ matrix.arch }}_${{ matrix.build_conf }}
         path: |
           ${{ matrix.arch }}\${{matrix.build_conf}}\ovpn-dco\ovpn-dco.*
-          ${{ matrix.arch }}\${{matrix.build_conf}}\ovpn-dco-cli.exe
           msm\${{ matrix.arch }}\${{matrix.build_conf}}\installer.dll
           msm\*.msi
           msm\*.msm
