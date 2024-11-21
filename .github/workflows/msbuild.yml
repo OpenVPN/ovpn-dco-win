@@ -45,6 +45,13 @@ jobs:
       run: |
         msbuild /m /p:Configuration=${{ matrix.build_conf }} /p:Platform="${{ matrix.arch }}" ${{env.SOLUTION_FILE_PATH}}
 
+    - name: Build GUI
+      working-directory: gui
+      shell: cmd
+      run: |
+        mkdir build&& cd build&& cmake ..&& cmake --build . --config Release
+        cp ..\data64.key Release
+
     - name: Build MSM
       working-directory: msm
       if: ${{ matrix.build_conf == 'Release' }}
@@ -63,3 +70,4 @@ jobs:
           msm\${{ matrix.arch }}\${{matrix.build_conf}}\installer.dll
           msm\*.msi
           msm\*.msm
+          gui\build\Release\*.*
