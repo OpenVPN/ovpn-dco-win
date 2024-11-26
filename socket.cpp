@@ -273,26 +273,53 @@ VOID OvpnSocketDataPacketReceived(_In_ POVPN_DEVICE device, UCHAR op, UINT32 pee
 
     OvpnPeerCtxRelease(peer);
 
-    if (NT_SUCCESS(status)) {
-        // ping packet?
-        if (OvpnTimerIsKeepaliveMessage(buffer->Data, buffer->Len)) {
-            LOG_INFO("Ping received", TraceLoggingValue(peerId, "peer-id"));
+    if (!NT_SUCCESS(status)) {
+        return;
+    }
 
-            // no need to inject ping packet into OS, return buffer to the pool
-            OvpnRxBufferPoolPut(buffer);
-        }
-        else {
-            if (OvpnMssIsIPv4(buffer->Data, buffer->Len)) {
+    // ping packet?
+    if (OvpnTimerIsKeepaliveMessage(buffer->Data, buffer->Len)) {
+        LOG_INFO("Ping received", TraceLoggingValue(peerId, "peer-id"));
+
+        // no need to inject ping packet into OS, return buffer to the pool
+        OvpnRxBufferPoolPut(buffer);
+    }
+    else {
+        BOOLEAN drop = TRUE;
+        OvpnPeerContext* lookup_peer = NULL;
+
+        if (OvpnMssIsIPv4(buffer->Data, buffer->Len)) {
+            // perform Reverse Path Filtering
+            auto addr = ((IPV4_HEADER*)(buffer->Data))->SourceAddress;
+            lookup_peer = OvpnFindPeerVPN4(device, addr);
+            if (lookup_peer == peer) {
+                drop = FALSE;
                 OvpnMssDoIPv4(buffer->Data, buffer->Len, mss);
             }
-            else if (OvpnMssIsIPv6(buffer->Data, buffer->Len)) {
+        }
+        else if (OvpnMssIsIPv6(buffer->Data, buffer->Len)) {
+            // perform Reverse Path Filtering
+            auto addr = ((IPV6_HEADER*)(buffer->Data))->SourceAddress;
+            lookup_peer = OvpnFindPeerVPN6(device, addr);
+            if (lookup_peer == peer) {
+                drop = FALSE;
                 OvpnMssDoIPv6(buffer->Data, buffer->Len, mss);
             }
+        }
 
+        if (lookup_peer) {
+            OvpnPeerCtxRelease(lookup_peer);
+        }
+
+        if (!drop) {
             // enqueue plaintext buffer, it will be dequeued by NetAdapter RX datapath
             OvpnBufferQueueEnqueue(device->DataRxBufferQueue, &buffer->QueueListEntry);
 
             OvpnAdapterNotifyRx(device->Adapter);
+        }
+        else {
+            // packet is dropped dur to RPF, return buffer to the pool
+            OvpnRxBufferPoolPut(buffer);
         }
     }
 }
