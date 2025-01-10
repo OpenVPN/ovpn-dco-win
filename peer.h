@@ -29,6 +29,8 @@
 
 struct OvpnPeerContext
 {
+    LIST_ENTRY ListEntry; // used by iroute tries for deferred cleanup
+
     EX_SPIN_LOCK SpinLock;
 
     OvpnCryptoContext CryptoContext;

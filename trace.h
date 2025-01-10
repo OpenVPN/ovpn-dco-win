@@ -116,3 +116,11 @@ TRACELOGGING_DECLARE_PROVIDER(g_hOvpnEtwProvider);
         goto Label; \
     } \
 } while(0,0)
+
+#ifndef TraceLoggingIPv4Address
+#define TraceLoggingIPv4Address(value, ...) _tlgArgScalarVal(UINT32, value, TlgInUINT32, (TlgOutIPV4),  __VA_ARGS__)
+#endif
+
+#ifndef TraceLoggingIPv6Address
+#define TraceLoggingIPv6Address(pValue, ...) _tlgArgBinary(void, pValue, 16u, TlgInBINARY, (TlgOutIPV6), __VA_ARGS__)
+#endif

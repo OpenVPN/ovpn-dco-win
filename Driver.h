@@ -33,6 +33,7 @@
 #include "crypto.h"
 #include "notifyqueue.h"
 #include "socket.h"
+#include "trie.h"
 #include "uapi\ovpn-dco.h"
 
 extern "C" {
@@ -102,6 +103,9 @@ struct OVPN_DEVICE {
     RTL_GENERIC_TABLE PeersByVpn6;
 
     OVPN_MODE Mode;
+
+    IPTrie IRoutesIPV4;
+    IPTrie IRoutesIPV6;
 };
 
 typedef OVPN_DEVICE * POVPN_DEVICE;

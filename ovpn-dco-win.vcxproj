@@ -78,6 +78,7 @@
     <ClCompile Include="pktid.cpp" />
     <ClCompile Include="rxqueue.cpp" />
     <ClCompile Include="timer.cpp" />
+    <ClCompile Include="trie.cpp" />
     <ClCompile Include="txqueue.cpp" />
     <ClCompile Include="socket.cpp" />
   </ItemGroup>
@@ -87,6 +88,7 @@
     <ClInclude Include="control.h" />
     <ClInclude Include="crypto.h" />
     <ClInclude Include="driver.h" />
+    <ClInclude Include="trie.h" />
     <ClInclude Include="mss.h" />
     <ClInclude Include="netringiterator.h" />
     <ClInclude Include="notifyqueue.h" />

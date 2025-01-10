@@ -316,8 +316,7 @@ VOID OvpnSocketDataPacketReceived(_In_ POVPN_DEVICE device, UCHAR op, UINT32 pee
             OvpnBufferQueueEnqueue(device->DataRxBufferQueue, &buffer->QueueListEntry);
 
             OvpnAdapterNotifyRx(device->Adapter);
-        }
-        else {
+        } else {
             // packet is dropped dur to RPF, return buffer to the pool
             OvpnRxBufferPoolPut(buffer);
         }

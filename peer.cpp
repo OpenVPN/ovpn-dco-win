@@ -27,14 +27,6 @@
 #include "timer.h"
 #include "socket.h"
 
-#ifndef TraceLoggingIPv4Address
-#define TraceLoggingIPv4Address(value, ...) _tlgArgScalarVal(UINT32, value, TlgInUINT32, (TlgOutIPV4),  __VA_ARGS__)
-#endif
-
-#ifndef TraceLoggingIPv6Address
-#define TraceLoggingIPv6Address(pValue, ...) _tlgArgBinary(void, pValue, 16u, TlgInBINARY, (TlgOutIPV6), __VA_ARGS__)
-#endif
-
 _Use_decl_annotations_
 OvpnPeerContext*
 OvpnPeerCtxAlloc()
@@ -42,6 +34,7 @@ OvpnPeerCtxAlloc()
     OvpnPeerContext* peer = (OvpnPeerContext*)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(OvpnPeerContext), 'ovpn');
     if (peer != NULL) {
         RtlZeroMemory(peer, sizeof(OvpnPeerContext));
+        InitializeListHead(&peer->ListEntry);
         InterlockedIncrement(&peer->RefCounter);
     }    
     return peer;
@@ -313,7 +306,6 @@ OvpnDeletePeerFromTable(POVPN_DEVICE device, RTL_GENERIC_TABLE* table, OvpnPeerC
         OvpnPeerCtxRelease(cleanupPeer);
     }
 }
-
 
 static
 VOID
@@ -817,6 +809,9 @@ OvpnPeerDelete(POVPN_DEVICE device, INT32 peerId, OVPN_DEL_PEER_REASON reason)
         OvpnDeletePeerFromTable(device, &device->PeersByVpn4, peer, "vpn4");
         OvpnDeletePeerFromTable(device, &device->PeersByVpn6, peer, "vpn6");
         OvpnDeletePeerFromTable(device, &device->Peers, peer, "peers");
+
+        device->IRoutesIPV4.RemoveByPeerId(peer->PeerId);
+        device->IRoutesIPV6.RemoveByPeerId(peer->PeerId);
 
         OvpnPeerCtxRelease(peer);
 

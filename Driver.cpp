@@ -319,6 +319,8 @@ OvpnDeviceCheckMode(OVPN_MODE mode, ULONG code)
         case OVPN_IOCTL_MP_SET_PEER:
         case OVPN_IOCTL_MP_DEL_PEER:
         case OVPN_IOCTL_MP_SWAP_KEYS:
+        case OVPN_IOCTL_MP_ADD_IROUTE:
+        case OVPN_IOCTL_MP_DEL_IROUTE:
             return FALSE;
         }
     }
@@ -371,6 +373,9 @@ OvpnStopVPN(_In_ POVPN_DEVICE device)
     }
 
     device->PendingNotificationsQueue.FlushEvents();
+
+    device->IRoutesIPV4.Cleanup();
+    device->IRoutesIPV6.Cleanup();
 
     LOG_EXIT();
 
@@ -463,6 +468,67 @@ OvpnNotifyEvent(POVPN_DEVICE device, WDFREQUEST request, _Out_ ULONG_PTR* bytesR
     return status;
 }
 
+NTSTATUS
+OvpnMPAddIRoute(POVPN_DEVICE device, WDFREQUEST request) {
+    NTSTATUS status = STATUS_SUCCESS;
+
+    POVPN_MP_IROUTE iroute = NULL;
+    GOTO_IF_NOT_NT_SUCCESS(done, status, WdfRequestRetrieveInputBuffer(request, sizeof(OVPN_MP_IROUTE), (PVOID*)&iroute, NULL));
+
+    auto peer = OvpnFindPeer(device, iroute->PeerId);
+    if (peer == nullptr) {
+        LOG_ERROR("Peer not found", TraceLoggingValue(iroute->PeerId, "peer-id"));
+        status = STATUS_INVALID_DEVICE_REQUEST;
+        goto done;
+    }
+
+    if (iroute->IPv6) {
+        LOG_INFO("Add IPV6 iroute", TraceLoggingValue(iroute->PeerId, "peer-id"),
+            TraceLoggingIPv6Address(&iroute->Addr.Addr6, "network"),
+            TraceLoggingValue(iroute->Netbits, "netbits"));
+
+        status = device->IRoutesIPV6.Insert(reinterpret_cast<UCHAR*>(&iroute->Addr.Addr6), iroute->Netbits, peer);
+    }
+    else {
+        LOG_INFO("Add IPV4 iroute", TraceLoggingValue(iroute->PeerId, "peer-id"),
+            TraceLoggingIPv4Address(iroute->Addr.Addr4.S_un.S_addr, "network"),
+            TraceLoggingValue(iroute->Netbits, "netbits"));
+
+        status = device->IRoutesIPV4.Insert(reinterpret_cast<UCHAR*>(&iroute->Addr.Addr4), iroute->Netbits, peer);
+    }
+
+    if (peer != nullptr) {
+        OvpnPeerCtxRelease(peer);
+    }
+
+done:
+    return status;
+}
+
+NTSTATUS
+OvpnMPDelIRoute(POVPN_DEVICE device, WDFREQUEST request) {
+    NTSTATUS status = STATUS_SUCCESS;
+
+    POVPN_MP_IROUTE iroute = NULL;
+    GOTO_IF_NOT_NT_SUCCESS(done, status, WdfRequestRetrieveInputBuffer(request, sizeof(OVPN_MP_IROUTE), (PVOID*)&iroute, NULL));
+
+    if (iroute->IPv6) {
+        LOG_INFO("Delete IPV6 iroute", TraceLoggingIPv6Address(&iroute->Addr.Addr6, "network"),
+            TraceLoggingValue(iroute->Netbits, "netbits"));
+
+        status = device->IRoutesIPV6.Remove(reinterpret_cast<UCHAR*>(&iroute->Addr.Addr6), iroute->Netbits);
+    }
+    else {
+        LOG_INFO("Delete IPV4 iroute", TraceLoggingIPv4Address(iroute->Addr.Addr4.S_un.S_addr, "network"),
+            TraceLoggingValue(iroute->Netbits, "netbits"));
+
+        status = device->IRoutesIPV4.Remove(reinterpret_cast<UCHAR*>(&iroute->Addr.Addr4), iroute->Netbits);
+    }
+
+done:
+    return status;
+}
+
 EVT_WDF_IO_QUEUE_IO_DEVICE_CONTROL OvpnEvtIoDeviceControl;
 
 _Use_decl_annotations_
@@ -546,6 +612,14 @@ OvpnEvtIoDeviceControl(WDFQUEUE queue, WDFREQUEST request, size_t outputBufferLe
 
     case OVPN_IOCTL_MP_SWAP_KEYS:
         status = OvpnMPPeerSwapKeys(device, request);
+        break;
+
+    case OVPN_IOCTL_MP_ADD_IROUTE:
+        status = OvpnMPAddIRoute(device, request);
+        break;
+
+    case OVPN_IOCTL_MP_DEL_IROUTE:
+        status = OvpnMPDelIRoute(device, request);
         break;
 
     default:
@@ -757,6 +831,8 @@ OvpnEvtDeviceAdd(WDFDRIVER wdfDriver, PWDFDEVICE_INIT deviceInit) {
 
     // constructors are not called for the members of WDF object context, so we use Init() method
     device->PendingNotificationsQueue.Init();
+    device->IRoutesIPV4.Init(FALSE);
+    device->IRoutesIPV6.Init(TRUE);
 
     GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnCryptoInitAlgHandles(&device->AesAlgHandle, &device->ChachaAlgHandle));
 
