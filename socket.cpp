@@ -292,6 +292,9 @@ VOID OvpnSocketDataPacketReceived(_In_ POVPN_DEVICE device, UCHAR op, UINT32 pee
             // perform Reverse Path Filtering
             auto addr = ((IPV4_HEADER*)(buffer->Data))->SourceAddress;
             lookup_peer = OvpnFindPeerVPN4(device, addr);
+            if (lookup_peer == nullptr) {
+                lookup_peer = device->IRoutesIPV4.Find(reinterpret_cast<UCHAR*>(&addr));
+            }
             if (lookup_peer == peer) {
                 drop = FALSE;
                 OvpnMssDoIPv4(buffer->Data, buffer->Len, mss);
@@ -301,6 +304,9 @@ VOID OvpnSocketDataPacketReceived(_In_ POVPN_DEVICE device, UCHAR op, UINT32 pee
             // perform Reverse Path Filtering
             auto addr = ((IPV6_HEADER*)(buffer->Data))->SourceAddress;
             lookup_peer = OvpnFindPeerVPN6(device, addr);
+            if (lookup_peer == nullptr) {
+                lookup_peer = device->IRoutesIPV6.Find(reinterpret_cast<UCHAR*>(&addr));
+            }
             if (lookup_peer == peer) {
                 drop = FALSE;
                 OvpnMssDoIPv6(buffer->Data, buffer->Len, mss);
