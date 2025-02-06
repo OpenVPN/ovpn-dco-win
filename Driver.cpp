@@ -340,7 +340,7 @@ OvpnStopVPN(_In_ POVPN_DEVICE device)
     KIRQL kirql = ExAcquireSpinLockExclusive(&device->SpinLock);
     PWSK_SOCKET socket = device->Socket.Socket;
     device->Socket.Socket = NULL;
-
+    device->Socket.Tcp = FALSE;
     device->Mode = OVPN_MODE_P2P;
 
     RtlZeroMemory(&device->Socket.TcpState, sizeof(OvpnSocketTcpState));
@@ -422,6 +422,7 @@ OvpnMPStartVPN(POVPN_DEVICE device, WDFREQUEST request, ULONG_PTR* bytesReturned
 
         kirql = ExAcquireSpinLockExclusive(&device->SpinLock);
         device->Socket.Socket = socket;
+        device->Socket.Tcp = FALSE;
         ExReleaseSpinLockExclusive(&device->SpinLock, kirql);
 
         // we might bind the socket to port 0 and we want to get actual port back to userspace
