@@ -586,13 +586,6 @@ OvpnSocketInit(WSK_PROVIDER_NPI* wskProviderNpi, WSK_REGISTRATION* wskRegistrati
         GOTO_IF_NOT_NT_SUCCESS(error, status, OvpnSocketSyncOp("BindSocket", [connectionDispatch, socket, localAddr](PIRP irp) {
             return connectionDispatch->WskBind(*socket, localAddr, 0, irp);
         }, [](PIRP) {}));
-
-        // connect will be done later
-
-        BOOLEAN tcpNoDelay = TRUE;
-        SIZE_T outputSizeReturned = 0;
-        GOTO_IF_NOT_NT_SUCCESS(error, status, connectionDispatch->Basic.WskControlSocket(*socket, WskSetOption, TCP_NODELAY, IPPROTO_TCP,
-            sizeof(tcpNoDelay), &tcpNoDelay, 0, NULL, &outputSizeReturned, NULL));
     }
     else {
         PWSK_PROVIDER_BASIC_DISPATCH basicDispatch = (PWSK_PROVIDER_BASIC_DISPATCH)(*socket)->Dispatch;
@@ -827,7 +820,7 @@ OvpnSocketSend(OvpnSocket* ovpnSocket, OVPN_TX_BUFFER* buffer, SOCKADDR* sa) {
     if (ovpnSocket->Tcp) {
         WSK_BUF wskBuf{ buffer->Mdl, FIELD_OFFSET(OVPN_TX_BUFFER, Head) + (ULONG)(buffer->Data - buffer->Head), buffer->Len };
         PWSK_PROVIDER_CONNECTION_DISPATCH connectionDispatch = (PWSK_PROVIDER_CONNECTION_DISPATCH)socket->Dispatch;
-        LOG_IF_NOT_NT_SUCCESS(status = connectionDispatch->WskSend(socket, &wskBuf, 0, irp));
+        LOG_IF_NOT_NT_SUCCESS(status = connectionDispatch->WskSend(socket, &wskBuf, WSK_FLAG_NODELAY, irp));
     }
     else if (buffer->WskBufList.Buffer.Length != 0) {
         PWSK_PROVIDER_DATAGRAM_DISPATCH datagramDispatch = (PWSK_PROVIDER_DATAGRAM_DISPATCH)socket->Dispatch;
