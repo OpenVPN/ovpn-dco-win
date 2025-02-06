@@ -445,14 +445,6 @@ OvpnMPPeerNew(POVPN_DEVICE device, WDFREQUEST request)
         goto done;
     }
 
-    // assign local transport address
-    if (peer->Local.Addr4.sin_family == AF_INET) {
-        peerCtx->TransportAddrs.Local.IPv4 = peer->Local.Addr4.sin_addr;
-    }
-    else {
-        peerCtx->TransportAddrs.Local.IPv6 = peer->Local.Addr6.sin6_addr;
-    }
-
     // assign remote transport address
     auto ipv4 = peer->Remote.Addr4.sin_family == AF_INET;
     if (ipv4) {

@@ -55,11 +55,6 @@ struct OvpnPeerContext
 
     struct {
         union {
-            IN_ADDR IPv4;
-            IN6_ADDR IPv6;
-        } Local;
-
-        union {
             SOCKADDR_IN IPv4;
             SOCKADDR_IN6 IPv6;
         } Remote;
