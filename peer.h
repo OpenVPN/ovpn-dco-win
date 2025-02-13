@@ -153,7 +153,7 @@ OvpnPeerSwapKeys(_In_ POVPN_DEVICE device);
 
 _Must_inspect_result_
 NTSTATUS
-OvpnPeerDelete(POVPN_DEVICE device, INT32 peerId, OVPN_DEL_PEER_REASON reason);
+OvpnPeerDelete(POVPN_DEVICE device, INT32 peerId, OVPN_DEL_PEER_REASON reason, BOOLEAN notify);
 
 _Must_inspect_result_
 NTSTATUS

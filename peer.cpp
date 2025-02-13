@@ -336,9 +336,11 @@ OvpnPeerNew(POVPN_DEVICE device, WDFREQUEST request)
 
     auto peerCtx = OvpnGetFirstPeer(device);
     if (peerCtx != nullptr) {
-        LOG_WARN("Peer already exists");
-        status = STATUS_OBJECTID_EXISTS;
-        goto done;
+        LOG_WARN("Peer already added, deleting existing peer");
+
+        GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnPeerDelete(device, 0, OVPN_DEL_PEER_REASON_USERSPACE, FALSE));
+        OvpnPeerCtxRelease(peerCtx);
+        peerCtx = nullptr;
     }
 
     GOTO_IF_NOT_NT_SUCCESS(done, status, WdfRequestRetrieveInputBuffer(request, sizeof(OVPN_NEW_PEER), (PVOID*)&peer, nullptr));
@@ -789,7 +791,7 @@ OvpnPeerGetDelReasonString(OVPN_DEL_PEER_REASON reason) {
 
 _Use_decl_annotations_
 NTSTATUS
-OvpnPeerDelete(POVPN_DEVICE device, INT32 peerId, OVPN_DEL_PEER_REASON reason)
+OvpnPeerDelete(POVPN_DEVICE device, INT32 peerId, OVPN_DEL_PEER_REASON reason, BOOLEAN notify)
 {
     NTSTATUS status = STATUS_SUCCESS;
 
@@ -808,24 +810,26 @@ OvpnPeerDelete(POVPN_DEVICE device, INT32 peerId, OVPN_DEL_PEER_REASON reason)
         OvpnPeerCtxRelease(peer);
 
         // notify userspace
-        WDFREQUEST request;
-        status = WdfIoQueueRetrieveNextRequest(device->PendingNotificationRequestsQueue, &request);
-        if (!NT_SUCCESS(status)) {
-            LOG_INFO("Adding del peer notification to the queue");
-            return device->PendingNotificationsQueue.AddEvent(OVPN_CMD_DEL_PEER, peerId, reason);
-        }
-        else {
-            LOG_INFO("Notify userspace about deleted peer", TraceLoggingValue(OvpnPeerGetDelReasonString(reason), "reason"));
-            OVPN_NOTIFY_EVENT* evt;
-            ULONG_PTR bytesSent = 0;
-            LOG_IF_NOT_NT_SUCCESS(status = WdfRequestRetrieveOutputBuffer(request, sizeof(OVPN_NOTIFY_EVENT), (PVOID*)&evt, nullptr));
-            if (NT_SUCCESS(status)) {
-                evt->Cmd = OVPN_CMD_DEL_PEER;
-                evt->PeerId = peerId;
-                evt->DelPeerReason = reason;
-                bytesSent = sizeof(OVPN_NOTIFY_EVENT);
+        if (notify) {
+            WDFREQUEST request;
+            status = WdfIoQueueRetrieveNextRequest(device->PendingNotificationRequestsQueue, &request);
+            if (!NT_SUCCESS(status)) {
+                LOG_INFO("Adding del peer notification to the queue");
+                return device->PendingNotificationsQueue.AddEvent(OVPN_CMD_DEL_PEER, peerId, reason);
             }
-            WdfRequestCompleteWithInformation(request, status, bytesSent);
+            else {
+                LOG_INFO("Notify userspace about deleted peer", TraceLoggingValue(OvpnPeerGetDelReasonString(reason), "reason"));
+                OVPN_NOTIFY_EVENT* evt;
+                ULONG_PTR bytesSent = 0;
+                LOG_IF_NOT_NT_SUCCESS(status = WdfRequestRetrieveOutputBuffer(request, sizeof(OVPN_NOTIFY_EVENT), (PVOID*)&evt, nullptr));
+                if (NT_SUCCESS(status)) {
+                    evt->Cmd = OVPN_CMD_DEL_PEER;
+                    evt->PeerId = peerId;
+                    evt->DelPeerReason = reason;
+                    bytesSent = sizeof(OVPN_NOTIFY_EVENT);
+                }
+                WdfRequestCompleteWithInformation(request, status, bytesSent);
+            }
         }
     } else {
         status = STATUS_NOT_FOUND;
@@ -846,7 +850,7 @@ OvpnMPPeerDelete(POVPN_DEVICE device, WDFREQUEST request)
     POVPN_MP_DEL_PEER del_peer = NULL;
     GOTO_IF_NOT_NT_SUCCESS(done, status, WdfRequestRetrieveInputBuffer(request, sizeof(OVPN_MP_DEL_PEER), (PVOID*)&del_peer, nullptr));
 
-    LOG_IF_NOT_NT_SUCCESS(status = OvpnPeerDelete(device, del_peer->PeerId, OVPN_DEL_PEER_REASON_USERSPACE));
+    LOG_IF_NOT_NT_SUCCESS(status = OvpnPeerDelete(device, del_peer->PeerId, OVPN_DEL_PEER_REASON_USERSPACE, TRUE));
 
 done:
     LOG_EXIT();

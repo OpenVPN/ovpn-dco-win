@@ -130,7 +130,7 @@ static BOOLEAN OvpnTimerRecv(WDFTIMER timer)
         WdfRequestCompleteWithInformation(request, STATUS_CONNECTION_DISCONNECTED, bytesSent);
     }
     else {
-        (VOID)OvpnPeerDelete(device, peerId, OVPN_DEL_PEER_REASON_EXPIRED);
+        (VOID)OvpnPeerDelete(device, peerId, OVPN_DEL_PEER_REASON_EXPIRED, TRUE);
     }
 
     return NT_SUCCESS(status);
