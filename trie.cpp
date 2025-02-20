@@ -168,6 +168,10 @@ IPTrie::Find(const UCHAR* ip) {
         current = current->children[bit];
     }
 
+    if (current && current->isRoute) {
+        peer = current->peer;
+    }
+
     ExReleaseSpinLockShared(&Lock, kirql);
 
     // before returning the peer, increment refcnt
