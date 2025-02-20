@@ -44,7 +44,7 @@ _Use_decl_annotations_
 VOID
 OvpnPeerCtxRelease(OvpnPeerContext* peer)
 {
-    if (InterlockedDecrement(&peer->RefCounter) == 0) {
+    if (InterlockedDecrement(&peer->RefCounter) <= 0) {
         auto peerId = peer->PeerId;
         OvpnPeerCtxFree(peer);
         LOG_INFO("Peer freed", TraceLoggingValue(peerId, "peer-id"));

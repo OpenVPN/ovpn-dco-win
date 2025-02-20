@@ -211,8 +211,12 @@ IPTrie::RemoveByPeerId(TrieNode* node, INT32 peerId, PLIST_ENTRY cleanupList) {
 
     // Check if this node's peer matches the target peerId
     if (node->peer && node->peer->PeerId == peerId) {
-        // Defer the cleanup by adding the peer to the cleanup list
-        InsertTailList(cleanupList, &node->peer->ListEntry);
+
+        // if we're last to hold a reference, defer the cleanup by adding the peer to the cleanup list
+        if (InterlockedDecrement(&node->peer->RefCounter) == 0) {
+            InsertTailList(cleanupList, &node->peer->ListEntry);
+        }
+
         node->peer = nullptr;
         node->isRoute = false;
     }
