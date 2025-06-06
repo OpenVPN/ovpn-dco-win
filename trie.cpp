@@ -144,6 +144,8 @@ IPTrie::Insert(const UCHAR* ip, int prefixLength, OvpnPeerContext* peer) {
     // increment peer refcnt since it has been stored in a trie
     InterlockedIncrement(&peer->RefCounter);
 
+    LOG_INFO("Peer node", TraceLoggingValue(peer->PeerId, "peerId"));
+
     ExReleaseSpinLockExclusive(&Lock, kirql);
 
 done:
@@ -184,8 +186,6 @@ IPTrie::Find(const UCHAR* ip) {
 
 VOID
 IPTrie::RemoveByPeerId(INT32 peerId) {
-    LOG_ENTER();
-
     LIST_ENTRY cleanupList;
     InitializeListHead(&cleanupList);
 
@@ -201,8 +201,6 @@ IPTrie::RemoveByPeerId(INT32 peerId) {
         OvpnPeerContext* peer = CONTAINING_RECORD(entry, OvpnPeerContext, ListEntry);
         OvpnPeerCtxRelease(peer);
     }
-
-    LOG_EXIT();
 }
 
 IPTrie::TrieNode*
@@ -223,6 +221,8 @@ IPTrie::RemoveByPeerId(TrieNode* node, INT32 peerId, PLIST_ENTRY cleanupList) {
 
         node->peer = nullptr;
         node->isRoute = false;
+
+        LOG_INFO("Peer node", TraceLoggingValue(peerId, "peerId"));
     }
 
     // If this node has no children and is no longer a route, delete it
@@ -243,7 +243,7 @@ IPTrie::Remove(const UCHAR* ip, int prefixLength) {
     OvpnPeerContext* peerToRelease = nullptr;
 
     KIRQL oldIrql = ExAcquireSpinLockExclusive(&Lock);
-    root = RemoveRouteNode(root, ip, prefixLength, &peerToRelease);
+    root = RemoveRouteNode(root, ip, prefixLength, 0, &peerToRelease);
     ExReleaseSpinLockExclusive(&Lock, oldIrql);
 
     // Release the peer outside the lock if needed
@@ -255,16 +255,17 @@ IPTrie::Remove(const UCHAR* ip, int prefixLength) {
 }
 
 IPTrie::TrieNode*
-IPTrie::RemoveRouteNode(TrieNode* node, const UCHAR* ip, int prefixLength, OvpnPeerContext** peerToRelease) {
+IPTrie::RemoveRouteNode(TrieNode* node, const UCHAR* ip, int prefixLength, int depth, OvpnPeerContext** peerToRelease) {
     if (!node) return nullptr;
 
-    if (prefixLength > 0) {
-        int bit = (ip[(maxBits - prefixLength) / 8] >> (7 - ((maxBits - prefixLength) % 8))) & 1;
-        node->children[bit] = RemoveRouteNode(node->children[bit], ip, prefixLength - 1, peerToRelease);
+    if (depth < prefixLength) {
+        int bit = (ip[depth / 8] >> (7 - (depth % 8))) & 1;
+        node->children[bit] = RemoveRouteNode(node->children[bit], ip, prefixLength, depth + 1, peerToRelease);
     }
     else {
         if (node->peer) {
             *peerToRelease = node->peer;
+            LOG_INFO("Peer node", TraceLoggingValue(node->peer->PeerId));
             node->peer = nullptr;
         }
         node->isRoute = false;

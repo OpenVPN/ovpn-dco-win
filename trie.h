@@ -56,7 +56,7 @@ private:
     EX_SPIN_LOCK Lock = 0; // Lock for shared/exclusive access
 
     TrieNode* RemoveByPeerId(TrieNode* node, INT32 peerId, PLIST_ENTRY cleanupList);
-    TrieNode* RemoveRouteNode(TrieNode* node, const UCHAR* ip, int prefixLength, OvpnPeerContext** peerToRelease);
+    TrieNode* RemoveRouteNode(TrieNode* node, const UCHAR* ip, int prefixLength, int depth, OvpnPeerContext** peerToRelease);
 
     VOID FreeTrie(TrieNode* node);
     VOID CleanupNode(TrieNode* node, PLIST_ENTRY cleanupList);
