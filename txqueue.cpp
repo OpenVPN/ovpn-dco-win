@@ -324,6 +324,10 @@ OvpnEvtTxQueueAdvance(NETPACKETQUEUE netPacketQueue)
     POVPN_DEVICE device = OvpnGetDeviceContext(queue->Adapter->WdfDevice);
     BOOLEAN packetSent = false;
 
+    KIRQL kirql = ExAcquireSpinLockShared(&device->SpinLock);
+    BOOLEAN isTcp = device->Socket.Tcp;
+    ExReleaseSpinLockShared(&device->SpinLock, kirql);
+
     OVPN_TX_BUFFER* txBufferHead = NULL;
     OVPN_TX_BUFFER* txBufferTail = NULL;
     SOCKADDR_STORAGE headSockaddr = {0};
@@ -348,11 +352,9 @@ OvpnEvtTxQueueAdvance(NETPACKETQUEUE netPacketQueue)
     }
     NetPacketIteratorSet(&pi);
 
-    if (packetSent) {
-        if (!device->Socket.Tcp) {
-            // this will use WskSendMessages to send buffers list which we constructed before
-            LOG_IF_NOT_NT_SUCCESS(OvpnSocketSend(&device->Socket, txBufferHead, (SOCKADDR*)&headSockaddr));
-        }
+    if (packetSent && !isTcp && txBufferHead != NULL) {
+        // this will use WskSendMessages to send buffers list which we constructed before
+        LOG_IF_NOT_NT_SUCCESS(OvpnSocketSend(&device->Socket, txBufferHead, (SOCKADDR*)&headSockaddr));
     }
 }
 
