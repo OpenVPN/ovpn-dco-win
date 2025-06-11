@@ -596,7 +596,7 @@ CreatePushButton(HWND hWnd, wchar_t* title, HMENU hMenu, int x, int y)
 HWND
 CreateEditBox(HWND hWnd, WCHAR* text, int x, int y, int width)
 {
-    return CreateWindowW(L"Edit", text, WS_VISIBLE | WS_CHILD | WS_BORDER | ES_LEFT, x, y, width, 20, hWnd, NULL, NULL, NULL);
+    return CreateWindowW(L"Edit", text, WS_VISIBLE | WS_CHILD | WS_BORDER | ES_LEFT | ES_AUTOHSCROLL, x, y, width, 20, hWnd, NULL, NULL, NULL);
 }
 
 HWND CreateTextLabel(HWND hWnd, WCHAR* text, int x, int y, int width)
@@ -625,8 +625,8 @@ SendCC()
     bool mp = SendMessage(hModes[1], BM_GETCHECK, 0, 0) == BST_CHECKED;
 
     sockaddr_in sa;
-    char text[1024], remoteAddress[16], remotePort[6];
-    GetWindowTextA(hCCMessage, text, 1024);
+    char text[8192], remoteAddress[16], remotePort[6];
+    GetWindowTextA(hCCMessage, text, 8192);
     GetWindowTextA(hCCRemoteAddress, remoteAddress, 16);
     GetWindowTextA(hCCRemotePort, remotePort, 6);
 
@@ -685,6 +685,7 @@ LRESULT CALLBACK WindowProcedure(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 
         CreatePushButton(hwnd, L"Send CC", (HMENU)BTN_SEND_CC, 10, 160);
         hCCMessage = CreateEditBox(hwnd, L"hello, dco-win", 150, 160, 120);
+        SendMessage(hCCMessage, EM_SETLIMITTEXT, 10000, 0);
         hCCRemoteAddress = CreateEditBox(hwnd, L"192.168.100.1", 290, 160, 120);
         hCCRemotePort = CreateEditBox(hwnd, L"1194", 430, 160, 60);
 
