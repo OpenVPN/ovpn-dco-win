@@ -345,10 +345,24 @@ OvpnPeerNew(POVPN_DEVICE device, WDFREQUEST request)
 
     GOTO_IF_NOT_NT_SUCCESS(done, status, WdfRequestRetrieveInputBuffer(request, sizeof(OVPN_NEW_PEER), (PVOID*)&peer, nullptr));
 
+    if ((peer->Local.Addr4.sin_family != AF_INET) && (peer->Local.Addr4.sin_family != AF_INET6))
+    {
+        status = STATUS_INVALID_DEVICE_REQUEST;
+        LOG_ERROR("Unknown address family in peer->Local", TraceLoggingValue(peer->Local.Addr4.sin_family, "AF"));
+        goto done;
+    }
+
     if ((peer->Remote.Addr4.sin_family != AF_INET) && (peer->Remote.Addr4.sin_family != AF_INET6))
     {
         status = STATUS_INVALID_DEVICE_REQUEST;
         LOG_ERROR("Unknown address family in peer->Remote", TraceLoggingValue(peer->Remote.Addr4.sin_family, "AF"));
+        goto done;
+    }
+
+    if ((peer->Proto != OVPN_PROTO_UDP) && (peer->Proto != OVPN_PROTO_TCP))
+    {
+        status = STATUS_INVALID_DEVICE_REQUEST;
+        LOG_ERROR("Unknown protocol in peer->Proto", TraceLoggingValue((int)peer->Proto, "Proto"));
         goto done;
     }
 

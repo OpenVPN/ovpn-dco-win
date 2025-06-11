@@ -406,6 +406,15 @@ OvpnMPStartVPN(POVPN_DEVICE device, WDFREQUEST request, ULONG_PTR* bytesReturned
         POVPN_MP_START_VPN addrIn = NULL;
         GOTO_IF_NOT_NT_SUCCESS(done, status, WdfRequestRetrieveInputBuffer(request, sizeof(OVPN_MP_START_VPN), (PVOID*)&addrIn, NULL));
 
+        if ((addrIn->ListenAddress.Addr4.sin_family != AF_INET) &&
+            (addrIn->ListenAddress.Addr4.sin_family != AF_INET6))
+        {
+            status = STATUS_INVALID_DEVICE_REQUEST;
+            LOG_ERROR("Unknown address family in ListenAddress",
+                TraceLoggingValue(addrIn->ListenAddress.Addr4.sin_family, "AF"));
+            goto done;
+        }
+
         PWSK_SOCKET socket = NULL;
         POVPN_DRIVER driver = OvpnGetDriverContext(WdfGetDriver());
 
