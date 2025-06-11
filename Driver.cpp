@@ -488,14 +488,26 @@ OvpnMPAddIRoute(POVPN_DEVICE device, WDFREQUEST request) {
             TraceLoggingIPv6Address(&iroute->Addr.Addr6, "network"),
             TraceLoggingValue(iroute->Netbits, "netbits"));
 
-        status = device->IRoutesIPV6.Insert(reinterpret_cast<UCHAR*>(&iroute->Addr.Addr6), iroute->Netbits, peer);
+        if (iroute->Netbits < 0 || iroute->Netbits > 128) {
+            LOG_ERROR("Invalid Netbits", TraceLoggingValue(iroute->Netbits, "netbits"));
+            status = STATUS_INVALID_PARAMETER;
+        }
+        else {
+            status = device->IRoutesIPV6.Insert(reinterpret_cast<UCHAR*>(&iroute->Addr.Addr6), iroute->Netbits, peer);
+        }
     }
     else {
         LOG_INFO("Add IPV4 iroute", TraceLoggingValue(iroute->PeerId, "peer-id"),
             TraceLoggingIPv4Address(iroute->Addr.Addr4.S_un.S_addr, "network"),
             TraceLoggingValue(iroute->Netbits, "netbits"));
 
-        status = device->IRoutesIPV4.Insert(reinterpret_cast<UCHAR*>(&iroute->Addr.Addr4), iroute->Netbits, peer);
+        if (iroute->Netbits < 0 || iroute->Netbits > 32) {
+            LOG_ERROR("Invalid Netbits", TraceLoggingValue(iroute->Netbits, "netbits"));
+            status = STATUS_INVALID_PARAMETER;
+        }
+        else {
+            status = device->IRoutesIPV4.Insert(reinterpret_cast<UCHAR*>(&iroute->Addr.Addr4), iroute->Netbits, peer);
+        }
     }
 
     if (peer != nullptr) {
