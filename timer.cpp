@@ -51,6 +51,10 @@ WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(OVPN_PEER_TIMER_CONTEXT, OvpnGetPeerTimerCont
 _Use_decl_annotations_
 BOOLEAN OvpnTimerIsKeepaliveMessage(const PUCHAR buf, SIZE_T len)
 {
+    if (len != sizeof(OvpnKeepaliveMessage)) {
+        return FALSE;
+    }
+
     return RtlCompareMemory(buf, OvpnKeepaliveMessage, len) == sizeof(OvpnKeepaliveMessage);
 }
 

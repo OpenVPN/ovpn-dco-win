@@ -332,6 +332,11 @@ VOID OvpnSocketDataPacketReceived(_In_ POVPN_DEVICE device, UCHAR op, UINT32 pee
 VOID
 OvpnSocketProcessIncomingPacket(_In_ POVPN_DEVICE device, _In_reads_(packetLength) PUCHAR buf, SIZE_T packetLength, BOOLEAN irqlDispatch, _In_opt_ PSOCKADDR remoteAddr)
 {
+    if (packetLength < OVPN_DATA_V2_LEN) {
+        LOG_ERROR("Packet too short", TraceLoggingValue(packetLength, "len"));
+        return;
+    }
+
     UCHAR op = RtlUlongByteSwap(*(ULONG*)(buf)) >> 24;
     if (OvpnCryptoOpcodeExtract(op) == OVPN_OP_DATA_V2) {
         UINT32 peerId = RtlUlongByteSwap(*(ULONG*)(buf)) & OVPN_PEER_ID_MASK;
