@@ -202,6 +202,12 @@ OvpnEvtIoWrite(WDFQUEUE queue, WDFREQUEST request, size_t length)
     size_t requestBufferLength;
     GOTO_IF_NOT_NT_SUCCESS(error, status, WdfRequestRetrieveInputBuffer(request, 0, &requestBuffer, &requestBufferLength));
 
+    if (requestBufferLength > OVPN_DCO_MTU_MAX) {
+        status = STATUS_INVALID_BUFFER_SIZE;
+        LOG_ERROR("Control message exceeds maximum size", TraceLoggingValue(requestBufferLength, "msgLen"), TraceLoggingValue(OVPN_DCO_MTU_MAX, "max"));
+        goto error;
+    }
+
     // copy data from request to tx buffer
     PUCHAR buf = OvpnTxBufferPut(buffer, requestBufferLength);
     RtlCopyMemory(buf, requestBuffer, requestBufferLength);
