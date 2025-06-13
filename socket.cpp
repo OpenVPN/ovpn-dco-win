@@ -169,11 +169,9 @@ VOID OvpnSocketDataPacketReceived(_In_ POVPN_DEVICE device, UCHAR op, _In_reads_
         return;
     }
 
-    OvpnCryptoContext* cryptoContext = &device->CryptoContext;
-
-    if (cryptoContext->Decrypt) {
+    if (device->CryptoContext.Decrypt) {
         UCHAR keyId = OvpnCryptoKeyIdExtract(op);
-        OvpnCryptoKeySlot* keySlot = OvpnCryptoKeySlotFromKeyId(cryptoContext, keyId);
+        OvpnCryptoKeySlot* keySlot = OvpnCryptoKeySlotFromKeyId(&device->CryptoContext, keyId);
         if (!keySlot) {
             status = STATUS_INVALID_DEVICE_STATE;
 
@@ -181,11 +179,8 @@ VOID OvpnSocketDataPacketReceived(_In_ POVPN_DEVICE device, UCHAR op, _In_reads_
         }
         else {
             // decrypt into plaintext buffer
-            status = cryptoContext->Decrypt(keySlot, cipherTextBuf, len, buffer->Data, cryptoContext->CryptoOptions);
-
-            auto pktId64bit = cryptoContext->CryptoOptions & CRYPTO_OPTIONS_64BIT_PKTID;
-            auto cryptoOverhead = OVPN_DATA_V2_LEN + AEAD_AUTH_TAG_LEN + (pktId64bit ? 8 : 4);
-            buffer->Len = len - cryptoOverhead;
+            status = device->CryptoContext.Decrypt(keySlot, cipherTextBuf, len, buffer->Data);
+            buffer->Len = len - device->CryptoContext.CryptoOverhead;
         }
     }
     else {
@@ -202,23 +197,20 @@ VOID OvpnSocketDataPacketReceived(_In_ POVPN_DEVICE device, UCHAR op, _In_reads_
     OvpnTimerResetRecv(device->Timer);
 
     // points to the beginning of plaintext
-    BOOLEAN pktId64bit = device->CryptoContext.CryptoOptions & CRYPTO_OPTIONS_64BIT_PKTID;
-    BOOLEAN aeadTagEnd = device->CryptoContext.CryptoOptions & CRYPTO_OPTIONS_AEAD_TAG_END;
-    auto payloadOffset = OVPN_DATA_V2_LEN + (pktId64bit ? 8 : 4) + (aeadTagEnd ? 0 : AEAD_AUTH_TAG_LEN);
-    UCHAR* plaintext = buffer->Data + payloadOffset;
+    UCHAR* buf = buffer->Data + device->CryptoContext.CryptoOverhead;
 
     // ping packet?
-    if (OvpnTimerIsKeepaliveMessage(plaintext, buffer->Len)) {
+    if (OvpnTimerIsKeepaliveMessage(buf, buffer->Len)) {
         LOG_INFO("Ping received");
 
         // no need to inject ping packet into OS, return buffer to the pool
         OvpnRxBufferPoolPut(buffer);
     }
     else {
-        if (OvpnMssIsIPv4(plaintext, buffer->Len)) {
-            OvpnMssDoIPv4(plaintext, buffer->Len, device->MSS);
-        } else if (OvpnMssIsIPv6(plaintext, buffer->Len)) {
-            OvpnMssDoIPv6(plaintext, buffer->Len, device->MSS);
+        if (OvpnMssIsIPv4(buf, buffer->Len)) {
+            OvpnMssDoIPv4(buf, buffer->Len, device->MSS);
+        } else if (OvpnMssIsIPv6(buf, buffer->Len)) {
+            OvpnMssDoIPv6(buf, buffer->Len, device->MSS);
         }
 
         // enqueue plaintext buffer, it will be dequeued by NetAdapter RX datapath
