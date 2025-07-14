@@ -351,6 +351,7 @@ OvpnStopVPN(_In_ POVPN_DEVICE device)
 {
     LOG_ENTER();
 
+    OvpnCleanupPeerTable(device, &device->PeersByTransport);
     OvpnCleanupPeerTable(device, &device->PeersByVpn6);
     OvpnCleanupPeerTable(device, &device->PeersByVpn4);
     OvpnCleanupPeerTable(device, &device->Peers);
@@ -482,6 +483,7 @@ OvpnNotifyEvent(POVPN_DEVICE device, WDFREQUEST request, _Out_ ULONG_PTR* bytesR
             evt->Cmd = event->Cmd;
             evt->PeerId = event->PeerId;
             evt->DelPeerReason = event->DelPeerReason;
+            evt->FloatAddress = event->FloatAddress;
             *bytesReturned = sizeof(OVPN_NOTIFY_EVENT);
         }
         device->PendingNotificationsQueue.FreeEvent(event);
@@ -880,6 +882,7 @@ OvpnEvtDeviceAdd(WDFDRIVER wdfDriver, PWDFDEVICE_INIT deviceInit) {
     RtlInitializeGenericTable(&device->Peers, OvpnPeerCompareByPeerIdRoutine, OvpnPeerAllocateRoutine, OvpnPeerFreeRoutine, NULL);
     RtlInitializeGenericTable(&device->PeersByVpn4, OvpnPeerCompareByVPN4Routine, OvpnPeerAllocateRoutine, OvpnPeerFreeRoutine, NULL);
     RtlInitializeGenericTable(&device->PeersByVpn6, OvpnPeerCompareByVPN6Routine, OvpnPeerAllocateRoutine, OvpnPeerFreeRoutine, NULL);
+    RtlInitializeGenericTable(&device->PeersByTransport, OvpnPeerCompareByTransportRoutine, OvpnPeerAllocateRoutine, OvpnPeerFreeRoutine, NULL);
 
     LOG_IF_NOT_NT_SUCCESS(status = OvpnAdapterCreate(device));
 
@@ -887,4 +890,54 @@ done:
     LOG_EXIT();
 
     return status;
+}
+
+NTSTATUS
+OvpnDeviceNotifyPeerDel(POVPN_DEVICE device, INT32 peerId, OVPN_DEL_PEER_REASON reason)
+{
+    NTSTATUS status;
+    WDFREQUEST request;
+    status = WdfIoQueueRetrieveNextRequest(device->PendingNotificationRequestsQueue, &request);
+    if (!NT_SUCCESS(status)) {
+        LOG_INFO("Adding del peer notification to the queue");
+        return device->PendingNotificationsQueue.AddDelPeerEvent(peerId, reason);
+    }
+    else {
+        LOG_INFO("Notify userspace about deleted peer", TraceLoggingValue(OvpnPeerGetDelReasonString(reason), "reason"));
+        OVPN_NOTIFY_EVENT* evt;
+        ULONG_PTR bytesSent = 0;
+        LOG_IF_NOT_NT_SUCCESS(status = WdfRequestRetrieveOutputBuffer(request, sizeof(OVPN_NOTIFY_EVENT), (PVOID*)&evt, nullptr));
+        if (NT_SUCCESS(status)) {
+            evt->Cmd = OVPN_CMD_DEL_PEER;
+            evt->PeerId = peerId;
+            evt->DelPeerReason = reason;
+            bytesSent = sizeof(OVPN_NOTIFY_EVENT);
+        }
+        WdfRequestCompleteWithInformation(request, status, bytesSent);
+        return status;
+    }
+}
+
+NTSTATUS
+OvpnDeviceNotifyPeerFloat(POVPN_DEVICE device, INT32 peerId, PSOCKADDR floatAddr)
+{
+    NTSTATUS status;
+    WDFREQUEST request;
+    status = WdfIoQueueRetrieveNextRequest(device->PendingNotificationRequestsQueue, &request);
+    if (!NT_SUCCESS(status)) {
+        LOG_INFO("Adding float peer notification to the queue");
+        return device->PendingNotificationsQueue.AddFloatEvent(peerId, floatAddr);
+    }
+    else {
+        LOG_INFO("Notify userspace about floated peer");
+        OVPN_NOTIFY_EVENT* evt;
+        ULONG_PTR bytesSent = 0;
+        LOG_IF_NOT_NT_SUCCESS(status = WdfRequestRetrieveOutputBuffer(request, sizeof(OVPN_NOTIFY_EVENT), (PVOID*)&evt, nullptr));
+        if (NT_SUCCESS(status)) {
+            NotifyQueue::FillFloatPeerEvent(evt, peerId, floatAddr);
+            bytesSent = sizeof(OVPN_NOTIFY_EVENT);
+        }
+        WdfRequestCompleteWithInformation(request, status, bytesSent);
+        return status;
+    }
 }

@@ -31,6 +31,7 @@ struct NotifyEvent {
     OVPN_NOTIFY_CMD Cmd;
     int PeerId;
     OVPN_DEL_PEER_REASON DelPeerReason;
+    struct sockaddr_storage FloatAddress;
 };
 
 class NotifyQueue {
@@ -43,11 +44,36 @@ public:
 
     VOID Init();
 
-    NTSTATUS AddEvent(OVPN_NOTIFY_CMD cmd, int peerId, OVPN_DEL_PEER_REASON delPeerReason=OVPN_DEL_PEER_REASON_EXPIRED);
+    NTSTATUS AddDelPeerEvent(int peerId, OVPN_DEL_PEER_REASON delPeerReason=OVPN_DEL_PEER_REASON_EXPIRED);
+    NTSTATUS AddFloatEvent(int peerId, PSOCKADDR floatAddr);
 
     NotifyEvent* GetEvent();
 
     VOID FreeEvent(NotifyEvent* event);
 
     VOID FlushEvents();
+
+    template<class T>
+    static VOID FillFloatPeerEvent(T* evt, INT32 peerId, PSOCKADDR floatAddr)
+    {
+        RtlZeroMemory(evt, sizeof(T));
+
+        evt->Cmd = OVPN_CMD_FLOAT_PEER;
+        evt->PeerId = peerId;
+
+        size_t addr_len;
+        switch (floatAddr->sa_family) {
+        case AF_INET:
+            addr_len = sizeof(struct sockaddr_in);
+            break;
+        case AF_INET6:
+            addr_len = sizeof(struct sockaddr_in6);
+            break;
+        default:
+            // Unsupported or unknown family
+            addr_len = sizeof(struct sockaddr_storage); // fallback
+            break;
+        }
+        RtlCopyMemory(&evt->FloatAddress, floatAddr, addr_len);
+    }
 };
