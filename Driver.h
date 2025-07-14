@@ -102,6 +102,9 @@ struct OVPN_DEVICE {
     _Guarded_by_(SpinLock)
     RTL_GENERIC_TABLE PeersByVpn6;
 
+    _Guarded_by_(SpinLock)
+    RTL_GENERIC_TABLE PeersByTransport;
+
     OVPN_MODE Mode;
 
     IPTrie IRoutesIPV4;
@@ -111,3 +114,9 @@ struct OVPN_DEVICE {
 typedef OVPN_DEVICE * POVPN_DEVICE;
 
 WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(OVPN_DEVICE, OvpnGetDeviceContext)
+
+NTSTATUS
+OvpnDeviceNotifyPeerDel(POVPN_DEVICE device, INT32 peerId, OVPN_DEL_PEER_REASON reason);
+
+NTSTATUS
+OvpnDeviceNotifyPeerFloat(POVPN_DEVICE device, INT32 peerId, PSOCKADDR floatAddr);

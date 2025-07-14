@@ -35,7 +35,7 @@ NotifyQueue::Init()
 }
 
 NTSTATUS
-NotifyQueue::AddEvent(OVPN_NOTIFY_CMD cmd, int peerId, OVPN_DEL_PEER_REASON delPeerReason)
+NotifyQueue::AddDelPeerEvent(int peerId, OVPN_DEL_PEER_REASON delPeerReason)
 {
     NotifyEvent* event = (NotifyEvent*)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(NotifyEvent), 'ovpn');
     if (!event) {
@@ -44,9 +44,24 @@ NotifyQueue::AddEvent(OVPN_NOTIFY_CMD cmd, int peerId, OVPN_DEL_PEER_REASON delP
 
     RtlZeroMemory(event, sizeof(NotifyEvent));
 
-    event->Cmd = cmd;
+    event->Cmd = OVPN_CMD_DEL_PEER;
     event->PeerId = peerId;
     event->DelPeerReason = delPeerReason;
+
+    ExInterlockedInsertTailList(&Head, &event->ListEntry, &Lock);
+
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+NotifyQueue::AddFloatEvent(int peerId, PSOCKADDR floatAddr)
+{
+    NotifyEvent* event = (NotifyEvent*)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(NotifyEvent), 'ovpn');
+    if (!event) {
+        return STATUS_MEMORY_NOT_ALLOCATED;
+    }
+
+    FillFloatPeerEvent(event, peerId, floatAddr);
 
     ExInterlockedInsertTailList(&Head, &event->ListEntry, &Lock);
 

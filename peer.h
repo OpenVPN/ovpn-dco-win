@@ -79,6 +79,7 @@ RTL_GENERIC_FREE_ROUTINE OvpnPeerFreeRoutine;
 RTL_GENERIC_COMPARE_ROUTINE OvpnPeerCompareByPeerIdRoutine;
 RTL_GENERIC_COMPARE_ROUTINE OvpnPeerCompareByVPN4Routine;
 RTL_GENERIC_COMPARE_ROUTINE OvpnPeerCompareByVPN6Routine;
+RTL_GENERIC_COMPARE_ROUTINE OvpnPeerCompareByTransportRoutine;
 
 _Must_inspect_result_
 NTSTATUS
@@ -103,6 +104,9 @@ _Must_inspect_result_
 OvpnPeerContext*
 OvpnFindPeerVPN6(_In_ POVPN_DEVICE device, _In_ IN6_ADDR addr, BOOLEAN dpc);
 
+_Must_inspect_result_
+OvpnPeerContext*
+OvpnFindPeerTransport(_In_ POVPN_DEVICE device, _In_ PSOCKADDR sa, BOOLEAN dpc);
 
 VOID
 OvpnDeletePeerFromTable(POVPN_DEVICE device, RTL_GENERIC_TABLE* table, OvpnPeerContext* peer, char* tableName);
@@ -163,3 +167,9 @@ OvpnMPPeerDelete(POVPN_DEVICE device, WDFREQUEST request);
 _Must_inspect_result_
 NTSTATUS
 OvpnMPPeerSwapKeys(_In_ POVPN_DEVICE device, WDFREQUEST request);
+
+PCCH
+OvpnPeerGetDelReasonString(OVPN_DEL_PEER_REASON reason);
+
+NTSTATUS
+OvpnPeerHandleFloat(OVPN_DEVICE* device, OvpnPeerContext* peer, PSOCKADDR sa, BOOLEAN dpc);

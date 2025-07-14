@@ -133,6 +133,48 @@ OvpnPeerCompareByVPN6Routine(RTL_GENERIC_TABLE* table, PVOID first, PVOID second
         return GenericGreaterThan;
 }
 
+RTL_GENERIC_COMPARE_RESULTS
+OvpnPeerCompareByTransportRoutine(RTL_GENERIC_TABLE* table, PVOID first, PVOID second)
+{
+    UNREFERENCED_PARAMETER(table);
+
+    OvpnPeerContext* peer1 = *(OvpnPeerContext**)first;
+    OvpnPeerContext* peer2 = *(OvpnPeerContext**)second;
+
+    USHORT af1 = peer1->TransportAddrs.Remote.IPv4.sin_family;
+    USHORT af2 = peer2->TransportAddrs.Remote.IPv4.sin_family;
+
+    // Compare address families first (AF_INET < AF_INET6)
+    if (af1 != af2)
+        return (af1 < af2) ? GenericLessThan : GenericGreaterThan;
+
+    if (af1 == AF_INET) {
+        const SOCKADDR_IN* a = &peer1->TransportAddrs.Remote.IPv4;
+        const SOCKADDR_IN* b = &peer2->TransportAddrs.Remote.IPv4;
+
+        if (a->sin_addr.S_un.S_addr != b->sin_addr.S_un.S_addr)
+            return (a->sin_addr.S_un.S_addr < b->sin_addr.S_un.S_addr) ? GenericLessThan : GenericGreaterThan;
+
+        if (a->sin_port != b->sin_port)
+            return (a->sin_port < b->sin_port) ? GenericLessThan : GenericGreaterThan;
+
+        return GenericEqual;
+    }
+    else {
+        const SOCKADDR_IN6* a = &peer1->TransportAddrs.Remote.IPv6;
+        const SOCKADDR_IN6* b = &peer2->TransportAddrs.Remote.IPv6;
+
+        int cmp = memcmp(&a->sin6_addr, &b->sin6_addr, sizeof(IN6_ADDR));
+        if (cmp != 0)
+            return (cmp < 0) ? GenericLessThan : GenericGreaterThan;
+
+        if (a->sin6_port != b->sin6_port)
+            return (a->sin6_port < b->sin6_port) ?  GenericLessThan : GenericGreaterThan;
+
+        return GenericEqual;
+    }
+}
+
 _Use_decl_annotations_
 NTSTATUS
 OvpnAddPeerToTable(POVPN_DEVICE device, RTL_GENERIC_TABLE* table, OvpnPeerContext* peer)
@@ -300,6 +342,53 @@ OvpnFindPeerVPN6(POVPN_DEVICE device, IN6_ADDR addr, BOOLEAN dpc)
 
         auto* pp = &p;
         ptr = (OvpnPeerContext**)RtlLookupElementGenericTable(&device->PeersByVpn6, &pp);
+    }
+
+    peer = ptr ? (OvpnPeerContext*)*ptr : nullptr;
+    if (peer) {
+        InterlockedIncrement(&peer->RefCounter);
+    }
+
+    if (dpc) {
+        ExReleaseSpinLockSharedFromDpcLevel(&device->SpinLock);
+    }
+    else {
+        ExReleaseSpinLockShared(&device->SpinLock, kirql);
+    }
+
+    return peer;
+}
+
+_Use_decl_annotations_
+OvpnPeerContext*
+OvpnFindPeerTransport(POVPN_DEVICE device, PSOCKADDR sa, BOOLEAN dpc)
+{
+    if ((sa->sa_family != AF_INET) && (sa->sa_family != AF_INET6))
+        return nullptr;
+
+    OvpnPeerContext* peer = nullptr;
+    OvpnPeerContext** ptr = nullptr;
+
+    KIRQL kirql = 0;
+    if (dpc) {
+        ExAcquireSpinLockSharedAtDpcLevel(&device->SpinLock);
+    }
+    else {
+        kirql = ExAcquireSpinLockShared(&device->SpinLock);
+    }
+
+    if (device->Mode == OVPN_MODE_P2P) {
+        ptr = (OvpnPeerContext**)RtlGetElementGenericTable(&device->Peers, 0);
+    }
+    else {
+        OvpnPeerContext p{};
+        if (sa->sa_family == AF_INET)
+            RtlCopyMemory(&p.TransportAddrs.Remote.IPv4, sa, sizeof(SOCKADDR_IN));
+        else
+            RtlCopyMemory(&p.TransportAddrs.Remote.IPv6, sa, sizeof(SOCKADDR_IN6));
+
+        auto* pp = &p;
+        ptr = (OvpnPeerContext**)RtlLookupElementGenericTable(&device->PeersByTransport, &pp);
     }
 
     peer = ptr ? (OvpnPeerContext*)*ptr : nullptr;
@@ -520,6 +609,8 @@ OvpnMPPeerNew(POVPN_DEVICE device, WDFREQUEST request)
     if (RtlCompareMemory(&peer->VpnAddr6, &ovpn_in6addr_any, sizeof(IN6_ADDR)) != sizeof(IN6_ADDR)) {
         LOG_IF_NOT_NT_SUCCESS(status = OvpnAddPeerToTable(device, &device->PeersByVpn6, peerCtx));
     }
+
+    LOG_IF_NOT_NT_SUCCESS(status = OvpnAddPeerToTable(device, &device->PeersByTransport, peerCtx));
 
     if (ipv4) {
         LOG_INFO("Peer added", TraceLoggingValue(peer->PeerId, "peer-id"),
@@ -847,6 +938,7 @@ OvpnPeerDelete(POVPN_DEVICE device, INT32 peerId, OVPN_DEL_PEER_REASON reason, B
     // get peer from main table
     OvpnPeerContext* peer = OvpnFindPeer(device, peerId, FALSE);
     if (peer != nullptr) {
+        OvpnDeletePeerFromTable(device, &device->PeersByTransport, peer, "transport");
         OvpnDeletePeerFromTable(device, &device->PeersByVpn4, peer, "vpn4");
         OvpnDeletePeerFromTable(device, &device->PeersByVpn6, peer, "vpn6");
         OvpnDeletePeerFromTable(device, &device->Peers, peer, "peers");
@@ -858,25 +950,7 @@ OvpnPeerDelete(POVPN_DEVICE device, INT32 peerId, OVPN_DEL_PEER_REASON reason, B
 
         // notify userspace
         if (notify) {
-            WDFREQUEST request;
-            status = WdfIoQueueRetrieveNextRequest(device->PendingNotificationRequestsQueue, &request);
-            if (!NT_SUCCESS(status)) {
-                LOG_INFO("Adding del peer notification to the queue");
-                return device->PendingNotificationsQueue.AddEvent(OVPN_CMD_DEL_PEER, peerId, reason);
-            }
-            else {
-                LOG_INFO("Notify userspace about deleted peer", TraceLoggingValue(OvpnPeerGetDelReasonString(reason), "reason"));
-                OVPN_NOTIFY_EVENT* evt;
-                ULONG_PTR bytesSent = 0;
-                LOG_IF_NOT_NT_SUCCESS(status = WdfRequestRetrieveOutputBuffer(request, sizeof(OVPN_NOTIFY_EVENT), (PVOID*)&evt, nullptr));
-                if (NT_SUCCESS(status)) {
-                    evt->Cmd = OVPN_CMD_DEL_PEER;
-                    evt->PeerId = peerId;
-                    evt->DelPeerReason = reason;
-                    bytesSent = sizeof(OVPN_NOTIFY_EVENT);
-                }
-                WdfRequestCompleteWithInformation(request, status, bytesSent);
-            }
+            OvpnDeviceNotifyPeerDel(device, peerId, reason);
         }
     } else {
         status = STATUS_NOT_FOUND;
@@ -918,4 +992,82 @@ OvpnMPPeerSwapKeys(POVPN_DEVICE device, WDFREQUEST request)
 
 done:
     return status;
+}
+
+NTSTATUS
+OvpnPeerHandleFloat(OVPN_DEVICE* device, OvpnPeerContext *peer, PSOCKADDR sa, BOOLEAN dpc)
+{
+    OvpnPeerContext* lookup_peer = OvpnFindPeerTransport(device, sa, dpc);
+
+    // no float?
+    if (lookup_peer == peer) {
+        OvpnPeerCtxRelease(lookup_peer);
+        return STATUS_SUCCESS;
+    }
+
+    // deny float to a taken address
+    if (lookup_peer != nullptr) {
+        if (sa->sa_family == AF_INET)
+            LOG_INFO("Deny float to a taken address", TraceLoggingValue(peer->PeerId, "peer-id-src"),
+                TraceLoggingValue(lookup_peer->PeerId, "peer-id-dst"),
+                TraceLoggingIPv4Address(peer->TransportAddrs.Remote.IPv4.sin_addr.S_un.S_addr, "src"),
+                TraceLoggingIPv4Address(((SOCKADDR_IN*)sa)->sin_addr.S_un.S_addr, "dst"));
+        else
+            LOG_INFO("Deny float to a taken address", TraceLoggingValue(peer->PeerId, "peer-id-src"),
+                TraceLoggingValue(lookup_peer->PeerId, "peer-id-dst"),
+                TraceLoggingIPv6Address(&peer->TransportAddrs.Remote.IPv6.sin6_addr, "src"),
+                TraceLoggingIPv6Address(&((SOCKADDR_IN6*)sa)->sin6_addr, "dst"));
+
+        OvpnPeerCtxRelease(lookup_peer);
+
+        return STATUS_ADDRESS_ALREADY_EXISTS;
+    }
+
+    // commit float
+
+    if (sa->sa_family == AF_INET)
+        LOG_INFO("Peer floated", TraceLoggingValue(peer->PeerId, "peer-id"),
+            TraceLoggingIPv4Address(peer->TransportAddrs.Remote.IPv4.sin_addr.S_un.S_addr, "src"),
+            TraceLoggingIPv4Address(((SOCKADDR_IN*)sa)->sin_addr.S_un.S_addr, "dst"));
+    else
+        LOG_INFO("Peer floated", TraceLoggingValue(peer->PeerId, "peer-id"),
+            TraceLoggingIPv6Address(&peer->TransportAddrs.Remote.IPv6.sin6_addr, "src"),
+            TraceLoggingIPv6Address(&((SOCKADDR_IN6*)sa)->sin6_addr, "dst"));
+
+    KIRQL kirql = 0;
+
+    // remove peer from by-transport-address hashtable
+    OvpnDeletePeerFromTable(device, &device->PeersByTransport, peer, "transport");
+
+    // modify peer's transport address
+    {
+        // exclusive-lock peer
+        if (dpc) {
+            ExAcquireSpinLockExclusiveAtDpcLevel(&peer->SpinLock);
+        }
+        else {
+            kirql = ExAcquireSpinLockExclusive(&peer->SpinLock);
+        }
+
+        // update peer's transport address
+        if (sa->sa_family == AF_INET)
+            RtlCopyMemory(&peer->TransportAddrs.Remote.IPv4, sa, sizeof(SOCKADDR_IN));
+        else
+            RtlCopyMemory(&peer->TransportAddrs.Remote.IPv6, sa, sizeof(SOCKADDR_IN6));
+
+        // exclusive-unlock peer
+        if (dpc) {
+            ExReleaseSpinLockExclusiveFromDpcLevel(&peer->SpinLock);
+        }
+        else {
+            ExReleaseSpinLockExclusive(&peer->SpinLock, kirql);
+        }
+    }
+
+    // add peer back to by-transport-address hashtable
+    LOG_IF_NOT_NT_SUCCESS(OvpnAddPeerToTable(device, &device->PeersByTransport, peer));
+
+    LOG_IF_NOT_NT_SUCCESS(OvpnDeviceNotifyPeerFloat(device, peer->PeerId, sa));
+
+    return STATUS_SUCCESS;
 }

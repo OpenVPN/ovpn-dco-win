@@ -187,7 +187,7 @@ OvpnSocketControlPacketReceived(_In_ POVPN_DEVICE device, _In_reads_(len) PUCHAR
 }
 
 static
-VOID OvpnSocketDataPacketReceived(_In_ POVPN_DEVICE device, UCHAR op, UINT32 peerId, _In_reads_(len) PUCHAR cipherTextBuf, SIZE_T len, BOOLEAN dpc)
+VOID OvpnSocketDataPacketReceived(_In_ POVPN_DEVICE device, UCHAR op, UINT32 peerId, _In_reads_(len) PUCHAR cipherTextBuf, SIZE_T len, BOOLEAN dpc, _In_opt_ PSOCKADDR remoteAddr)
 {
     InterlockedExchangeAddNoFence64(&device->Stats.TransportBytesReceived, len);
 
@@ -277,6 +277,21 @@ VOID OvpnSocketDataPacketReceived(_In_ POVPN_DEVICE device, UCHAR op, UINT32 pee
         return;
     }
 
+    // check if peer has floated
+    if ((remoteAddr != nullptr) && (device->Mode == OVPN_MODE_MP)) {
+        LOG_IF_NOT_NT_SUCCESS(status = OvpnPeerHandleFloat(device, peer, remoteAddr, dpc));
+
+        // don't inject packet into OS if float denied
+        if (!NT_SUCCESS(status)) {
+
+            // return plaintext buffer back to the pool
+            OvpnRxBufferPoolPut(buffer);
+
+            OvpnPeerCtxRelease(peer);
+            return;
+        }
+    }
+
     // ping packet?
     if (OvpnTimerIsKeepaliveMessage(buffer->Data, buffer->Len)) {
         LOG_INFO("Ping received", TraceLoggingValue(peerId, "peer-id"));
@@ -342,7 +357,7 @@ OvpnSocketProcessIncomingPacket(_In_ POVPN_DEVICE device, _In_reads_(packetLengt
     UCHAR op = RtlUlongByteSwap(*(ULONG*)(buf)) >> 24;
     if (OvpnCryptoOpcodeExtract(op) == OVPN_OP_DATA_V2) {
         UINT32 peerId = RtlUlongByteSwap(*(ULONG*)(buf)) & OVPN_PEER_ID_MASK;
-        OvpnSocketDataPacketReceived(device, op, peerId, buf, packetLength, irqlDispatch);
+        OvpnSocketDataPacketReceived(device, op, peerId, buf, packetLength, irqlDispatch, remoteAddr);
     }
     else {
         OvpnSocketControlPacketReceived(device, buf, packetLength, remoteAddr);
