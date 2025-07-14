@@ -93,15 +93,16 @@ OvpnGetFirstPeer(_In_ POVPN_DEVICE device);
 
 _Must_inspect_result_
 OvpnPeerContext*
-OvpnFindPeer(_In_ POVPN_DEVICE device, INT32 PeerId);
+OvpnFindPeer(_In_ POVPN_DEVICE device, INT32 PeerId, BOOLEAN dpc);
 
 _Must_inspect_result_
 OvpnPeerContext*
-OvpnFindPeerVPN4(_In_ POVPN_DEVICE device, _In_ IN_ADDR addr);
+OvpnFindPeerVPN4(_In_ POVPN_DEVICE device, _In_ IN_ADDR addr, BOOLEAN dpc);
 
 _Must_inspect_result_
 OvpnPeerContext*
-OvpnFindPeerVPN6(_In_ POVPN_DEVICE device, _In_ IN6_ADDR addr);
+OvpnFindPeerVPN6(_In_ POVPN_DEVICE device, _In_ IN6_ADDR addr, BOOLEAN dpc);
+
 
 VOID
 OvpnDeletePeerFromTable(POVPN_DEVICE device, RTL_GENERIC_TABLE* table, OvpnPeerContext* peer, char* tableName);

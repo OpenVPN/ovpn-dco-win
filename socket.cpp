@@ -187,11 +187,11 @@ OvpnSocketControlPacketReceived(_In_ POVPN_DEVICE device, _In_reads_(len) PUCHAR
 }
 
 static
-VOID OvpnSocketDataPacketReceived(_In_ POVPN_DEVICE device, UCHAR op, UINT32 peerId, _In_reads_(len) PUCHAR cipherTextBuf, SIZE_T len, BOOLEAN irqlDispatch)
+VOID OvpnSocketDataPacketReceived(_In_ POVPN_DEVICE device, UCHAR op, UINT32 peerId, _In_reads_(len) PUCHAR cipherTextBuf, SIZE_T len, BOOLEAN dpc)
 {
     InterlockedExchangeAddNoFence64(&device->Stats.TransportBytesReceived, len);
 
-    OvpnPeerContext* peer = OvpnFindPeer(device, peerId);
+    OvpnPeerContext* peer = OvpnFindPeer(device, peerId, dpc);
     if (peer == nullptr) {
         LOG_WARN("Peer not found", TraceLoggingValue(peerId, "peerId"));
         InterlockedIncrementNoFence(&device->Stats.LostInDataPackets);
@@ -212,7 +212,7 @@ VOID OvpnSocketDataPacketReceived(_In_ POVPN_DEVICE device, UCHAR op, UINT32 pee
     // If we're at dispatch level, we can use a small optimization and use function
     // which is not calling KeRaiseIRQL to raise the IRQL to DISPATCH_LEVEL before attempting to acquire the lock
     KIRQL kirql = 0;
-    if (irqlDispatch) {
+    if (dpc) {
         ExAcquireSpinLockSharedAtDpcLevel(&peer->SpinLock);
     }
     else {
@@ -264,7 +264,7 @@ VOID OvpnSocketDataPacketReceived(_In_ POVPN_DEVICE device, UCHAR op, UINT32 pee
     auto mss = peer->MSS;
 
     // don't forget to release spinlock
-    if (irqlDispatch) {
+    if (dpc) {
         ExReleaseSpinLockSharedFromDpcLevel(&peer->SpinLock);
     }
     else {
@@ -291,7 +291,7 @@ VOID OvpnSocketDataPacketReceived(_In_ POVPN_DEVICE device, UCHAR op, UINT32 pee
         if (OvpnMssIsIPv4(buffer->Data, buffer->Len)) {
             // perform Reverse Path Filtering
             auto addr = ((IPV4_HEADER*)(buffer->Data))->SourceAddress;
-            lookup_peer = OvpnFindPeerVPN4(device, addr);
+            lookup_peer = OvpnFindPeerVPN4(device, addr, dpc);
             if (lookup_peer == nullptr) {
                 lookup_peer = device->IRoutesIPV4.Find(reinterpret_cast<UCHAR*>(&addr));
             }
@@ -303,7 +303,7 @@ VOID OvpnSocketDataPacketReceived(_In_ POVPN_DEVICE device, UCHAR op, UINT32 pee
         else if (OvpnMssIsIPv6(buffer->Data, buffer->Len)) {
             // perform Reverse Path Filtering
             auto addr = ((IPV6_HEADER*)(buffer->Data))->SourceAddress;
-            lookup_peer = OvpnFindPeerVPN6(device, addr);
+            lookup_peer = OvpnFindPeerVPN6(device, addr, dpc);
             if (lookup_peer == nullptr) {
                 lookup_peer = device->IRoutesIPV6.Find(reinterpret_cast<UCHAR*>(&addr));
             }
