@@ -195,12 +195,18 @@ OvpnGetFirstPeer(POVPN_DEVICE device)
 
 _Use_decl_annotations_
 OvpnPeerContext*
-OvpnFindPeer(POVPN_DEVICE device, INT32 PeerId)
+OvpnFindPeer(POVPN_DEVICE device, INT32 PeerId, BOOLEAN dpc)
 {
     OvpnPeerContext* peer = nullptr;
     OvpnPeerContext** ptr = nullptr;
 
-    auto kirql = ExAcquireSpinLockShared(&device->SpinLock);
+    KIRQL kirql = 0;
+    if (dpc) {
+        ExAcquireSpinLockSharedAtDpcLevel(&device->SpinLock);
+    }
+    else {
+        kirql = ExAcquireSpinLockShared(&device->SpinLock);
+    }
 
     if (device->Mode == OVPN_MODE_P2P) {
         ptr = (OvpnPeerContext**)RtlGetElementGenericTable(&device->Peers, 0);
@@ -219,19 +225,30 @@ OvpnFindPeer(POVPN_DEVICE device, INT32 PeerId)
         InterlockedIncrement(&peer->RefCounter);
     }
 
-    ExReleaseSpinLockShared(&device->SpinLock, kirql);
+    if (dpc) {
+        ExReleaseSpinLockSharedFromDpcLevel(&device->SpinLock);
+    }
+    else {
+        ExReleaseSpinLockShared(&device->SpinLock, kirql);
+    }
 
     return peer;
 }
 
 _Use_decl_annotations_
 OvpnPeerContext*
-OvpnFindPeerVPN4(POVPN_DEVICE device, IN_ADDR addr)
+OvpnFindPeerVPN4(POVPN_DEVICE device, IN_ADDR addr, BOOLEAN dpc)
 {
     OvpnPeerContext* peer = nullptr;
     OvpnPeerContext** ptr = nullptr;
 
-    auto kirql = ExAcquireSpinLockShared(&device->SpinLock);
+    KIRQL kirql = 0;
+    if (dpc) {
+        ExAcquireSpinLockSharedAtDpcLevel(&device->SpinLock);
+    }
+    else {
+        kirql = ExAcquireSpinLockShared(&device->SpinLock);
+    }
 
     if (device->Mode == OVPN_MODE_P2P) {
         ptr = (OvpnPeerContext**)RtlGetElementGenericTable(&device->Peers, 0);
@@ -249,19 +266,30 @@ OvpnFindPeerVPN4(POVPN_DEVICE device, IN_ADDR addr)
         InterlockedIncrement(&peer->RefCounter);
     }
 
-    ExReleaseSpinLockShared(&device->SpinLock, kirql);
+    if (dpc) {
+        ExReleaseSpinLockSharedFromDpcLevel(&device->SpinLock);
+    }
+    else {
+        ExReleaseSpinLockShared(&device->SpinLock, kirql);
+    }
 
     return peer;
 }
 
 _Use_decl_annotations_
 OvpnPeerContext*
-OvpnFindPeerVPN6(POVPN_DEVICE device, IN6_ADDR addr)
+OvpnFindPeerVPN6(POVPN_DEVICE device, IN6_ADDR addr, BOOLEAN dpc)
 {
     OvpnPeerContext* peer = nullptr;
     OvpnPeerContext** ptr = nullptr;
 
-    auto kirql = ExAcquireSpinLockShared(&device->SpinLock);
+    KIRQL kirql = 0;
+    if (dpc) {
+        ExAcquireSpinLockSharedAtDpcLevel(&device->SpinLock);
+    }
+    else {
+        kirql = ExAcquireSpinLockShared(&device->SpinLock);
+    }
 
     if (device->Mode == OVPN_MODE_P2P) {
         ptr = (OvpnPeerContext**)RtlGetElementGenericTable(&device->Peers, 0);
@@ -279,7 +307,12 @@ OvpnFindPeerVPN6(POVPN_DEVICE device, IN6_ADDR addr)
         InterlockedIncrement(&peer->RefCounter);
     }
 
-    ExReleaseSpinLockShared(&device->SpinLock, kirql);
+    if (dpc) {
+        ExReleaseSpinLockSharedFromDpcLevel(&device->SpinLock);
+    }
+    else {
+        ExReleaseSpinLockShared(&device->SpinLock, kirql);
+    }
 
     return peer;
 }
@@ -434,7 +467,7 @@ OvpnMPPeerNew(POVPN_DEVICE device, WDFREQUEST request)
     GOTO_IF_NOT_NT_SUCCESS(done, status, WdfRequestRetrieveInputBuffer(request, sizeof(OVPN_MP_NEW_PEER), (PVOID*)&peer, nullptr));
 
     // check if we already have a peer with the same peer-id
-    peerCtx = OvpnFindPeer(device, peer->PeerId);
+    peerCtx = OvpnFindPeer(device, peer->PeerId, FALSE);
     if (peerCtx != nullptr) {
         status = STATUS_OBJECTID_EXISTS;
         goto done;
@@ -585,7 +618,7 @@ NTSTATUS OvpnMPPeerSet(POVPN_DEVICE device, WDFREQUEST request)
         TraceLoggingValue(set_peer->KeepaliveTimeout, "timeout"),
         TraceLoggingValue(set_peer->MSS, "MSS"));
 
-    peer = OvpnFindPeer(device, set_peer->PeerId);
+    peer = OvpnFindPeer(device, set_peer->PeerId, FALSE);
     if (peer == nullptr) {
         LOG_ERROR("Peer not found", TraceLoggingValue(set_peer->PeerId, "peer-id"));
         status = STATUS_INVALID_DEVICE_REQUEST;
@@ -700,7 +733,7 @@ OvpnPeerNewKey(POVPN_DEVICE device, WDFREQUEST request)
     BCRYPT_ALG_HANDLE algHandle = NULL;
     GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnPeerGetAlgHandle(device, cryptoData->CipherAlg, algHandle));
 
-    peer = OvpnFindPeer(device, cryptoData->PeerId);
+    peer = OvpnFindPeer(device, cryptoData->PeerId, FALSE);
     if (peer == nullptr) {
         status = STATUS_OBJECTID_NOT_FOUND;
         goto done;
@@ -734,7 +767,7 @@ OvpnPeerNewKeyV2(POVPN_DEVICE device, WDFREQUEST request)
     BCRYPT_ALG_HANDLE algHandle = NULL;
     GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnPeerGetAlgHandle(device, cryptoDataV2->V1.CipherAlg, algHandle));
 
-    peer = OvpnFindPeer(device, cryptoDataV2->V1.PeerId);
+    peer = OvpnFindPeer(device, cryptoDataV2->V1.PeerId, FALSE);
 
     if (peer == nullptr) {
         status = STATUS_OBJECTID_NOT_FOUND;
@@ -761,7 +794,7 @@ OvpnPeerDoSwapKeys(POVPN_DEVICE device, INT32 peerId)
     LOG_INFO("Swap Keys", TraceLoggingValue(peerId, "peer-id"));
 
     // in client mode this returns the only peer
-    OvpnPeerContext* peer = OvpnFindPeer(device, peerId);
+    OvpnPeerContext* peer = OvpnFindPeer(device, peerId, FALSE);
     if (peer != nullptr) {
         KIRQL irql = ExAcquireSpinLockExclusive(&peer->SpinLock);
         OvpnCryptoSwapKeys(&peer->CryptoContext);
@@ -812,7 +845,7 @@ OvpnPeerDelete(POVPN_DEVICE device, INT32 peerId, OVPN_DEL_PEER_REASON reason, B
     LOG_INFO("Deleting peer", TraceLoggingValue(peerId, "peer-id"), TraceLoggingValue(OvpnPeerGetDelReasonString(reason), "reason"));
 
     // get peer from main table
-    OvpnPeerContext* peer = OvpnFindPeer(device, peerId);
+    OvpnPeerContext* peer = OvpnFindPeer(device, peerId, FALSE);
     if (peer != nullptr) {
         OvpnDeletePeerFromTable(device, &device->PeersByVpn4, peer, "vpn4");
         OvpnDeletePeerFromTable(device, &device->PeersByVpn6, peer, "vpn6");

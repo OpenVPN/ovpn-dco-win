@@ -194,7 +194,7 @@ OvpnTxProcessPacket(_In_ POVPN_DEVICE device, _In_ POVPN_TXQUEUE queue, _In_ NET
     if (OvpnMssIsIPv4(buffer->Data, buffer->Len)) {
         auto addr = ((IPV4_HEADER*)buffer->Data)->DestinationAddress;
 
-        peer = OvpnFindPeerVPN4(device, addr);
+        peer = OvpnFindPeerVPN4(device, addr, FALSE);
         if (peer == nullptr) {
             peer = device->IRoutesIPV4.Find(reinterpret_cast<UCHAR*>(&addr));
         }
@@ -210,7 +210,7 @@ OvpnTxProcessPacket(_In_ POVPN_DEVICE device, _In_ POVPN_TXQUEUE queue, _In_ NET
     } else if (OvpnMssIsIPv6(buffer->Data, buffer->Len)) {
         auto addr = ((IPV6_HEADER*)buffer->Data)->DestinationAddress;
 
-        peer = OvpnFindPeerVPN6(device, addr);
+        peer = OvpnFindPeerVPN6(device, addr, FALSE);
         if (peer == nullptr) {
             peer = device->IRoutesIPV6.Find(reinterpret_cast<UCHAR*>(&addr));
         }

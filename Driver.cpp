@@ -491,7 +491,7 @@ OvpnMPAddIRoute(POVPN_DEVICE device, WDFREQUEST request) {
     POVPN_MP_IROUTE iroute = NULL;
     GOTO_IF_NOT_NT_SUCCESS(done, status, WdfRequestRetrieveInputBuffer(request, sizeof(OVPN_MP_IROUTE), (PVOID*)&iroute, NULL));
 
-    auto peer = OvpnFindPeer(device, iroute->PeerId);
+    auto peer = OvpnFindPeer(device, iroute->PeerId, FALSE);
     if (peer == nullptr) {
         LOG_ERROR("Peer not found", TraceLoggingValue(iroute->PeerId, "peer-id"));
         status = STATUS_INVALID_DEVICE_REQUEST;
