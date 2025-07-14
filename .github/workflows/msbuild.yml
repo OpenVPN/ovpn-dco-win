@@ -7,11 +7,11 @@ env:
 
 jobs:
   build:
-    runs-on: windows-2019
+    runs-on: windows-2022
 
     strategy:
       matrix:
-        arch: [x64, x86, ARM64]
+        arch: [x64, ARM64]
         build_conf: [Debug, Release, Debug-Win11, Release-Win11]
 
     steps:
@@ -20,7 +20,9 @@ jobs:
         submodules: true
 
     - name: Add MSBuild to PATH
-      uses: microsoft/setup-msbuild@v1
+      uses: microsoft/setup-msbuild@v2
+      with:
+        msbuild-architecture: x64
 
     - name: Restore artifacts, or run vcpkg, build and cache artifacts
       uses: lukka/run-vcpkg@v7.4
