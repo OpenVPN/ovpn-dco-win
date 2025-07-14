@@ -271,9 +271,9 @@ VOID OvpnSocketDataPacketReceived(_In_ POVPN_DEVICE device, UCHAR op, UINT32 pee
         ExReleaseSpinLockShared(&peer->SpinLock, kirql);
     }
 
-    OvpnPeerCtxRelease(peer);
-
+    // decrypt failed - don't proceed
     if (!NT_SUCCESS(status)) {
+        OvpnPeerCtxRelease(peer);
         return;
     }
 
@@ -327,6 +327,8 @@ VOID OvpnSocketDataPacketReceived(_In_ POVPN_DEVICE device, UCHAR op, UINT32 pee
             OvpnRxBufferPoolPut(buffer);
         }
     }
+
+    OvpnPeerCtxRelease(peer);
 }
 
 VOID
