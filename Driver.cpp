@@ -202,6 +202,9 @@ OvpnEvtIoWrite(WDFQUEUE queue, WDFREQUEST request, size_t length)
 
     PSOCKADDR sa = NULL;
 
+    // contains peer's remote address
+    SOCKADDR_STORAGE sa_st;
+
     if (device->Mode == OVPN_MODE_MP) {
         // buffer is prepended with SOCKADDR
 
@@ -233,6 +236,15 @@ OvpnEvtIoWrite(WDFQUEUE queue, WDFREQUEST request, size_t length)
             LOG_ERROR("Invalid address family", TraceLoggingValue(sa->sa_family, "AF"));
             status = STATUS_INVALID_ADDRESS;
             goto error;
+        }
+    }
+    else {
+        OvpnPeerContext* peer = OvpnGetFirstPeer(device);
+        if (peer != nullptr) {
+            OvpnSocketCopyRemoteToSockaddr(peer->TransportAddrs.Remote, &sa_st);
+            OvpnPeerCtxRelease(peer);
+
+            sa = (PSOCKADDR)&sa_st;
         }
     }
 
