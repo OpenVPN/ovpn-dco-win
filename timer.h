@@ -43,9 +43,6 @@ OvpnTimerSetXmitInterval(WDFTIMER timer, LONG xmitInterval);
 VOID
 OvpnTimerSetRecvTimeout(WDFTIMER timer, LONG recvTimeout);
 
-VOID
-OvpnTimerDestroy(_Inout_ WDFTIMER* timer);
-
 _Must_inspect_result_
 BOOLEAN
 OvpnTimerIsKeepaliveMessage(_In_reads_(len) const PUCHAR buf, SIZE_T len);

@@ -140,17 +140,6 @@ static BOOLEAN OvpnTimerRecv(WDFTIMER timer)
     return NT_SUCCESS(status);
 }
 
-_Use_decl_annotations_
-VOID OvpnTimerDestroy(WDFTIMER* timer)
-{
-    if (*timer != WDF_NO_HANDLE) {
-        WdfTimerStop(*timer, FALSE);
-        WdfObjectDelete(*timer);
-
-        *timer = WDF_NO_HANDLE;
-    }
-}
-
 _Function_class_(EVT_WDF_TIMER)
 static VOID OvpnTimerTick(WDFTIMER timer)
 {
@@ -158,6 +147,12 @@ static VOID OvpnTimerTick(WDFTIMER timer)
     KeQuerySystemTime(&now);
 
     POVPN_PEER_TIMER_CONTEXT timerCtx = OvpnGetPeerTimerContext(timer);
+
+    // If the peer's timer handle changed, the peer is being destroyed
+    // and we should exit without performing keepalive actions
+    if (timerCtx->Peer->Timer != timer) {
+        return;
+    }
 
     if ((timerCtx->xmitInterval > 0) && (((now.QuadPart - timerCtx->lastXmit.QuadPart) / WDF_TIMEOUT_TO_SEC) > timerCtx->xmitInterval))
     {
@@ -181,7 +176,7 @@ NTSTATUS OvpnTimerCreate(WDFOBJECT parent, OvpnPeerContext* peer, _Inout_ WDFTIM
     LOG_ENTER();
 
     if (*timer != WDF_NO_HANDLE) {
-        WdfTimerStop(*timer, FALSE);
+        WdfTimerStop(*timer, TRUE);
         WdfObjectDelete(*timer);
 
         *timer = WDF_NO_HANDLE;
