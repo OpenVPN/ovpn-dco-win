@@ -55,12 +55,18 @@ _Use_decl_annotations_
 VOID
 OvpnPeerCtxFree(OvpnPeerContext* peer)
 {
+    // Detach the timer while holding the lock to prevent new callbacks
     auto irql = ExAcquireSpinLockExclusive(&peer->SpinLock);
-
-    OvpnCryptoUninit(&peer->CryptoContext);
-    OvpnTimerDestroy(&peer->Timer);
-
+    WDFTIMER timer = peer->Timer;
+    peer->Timer = WDF_NO_HANDLE;
     ExReleaseSpinLockExclusive(&peer->SpinLock, irql);
+
+    // Stop the timer outside the lock. Wait only if we're at PASSIVE_LEVEL
+    WdfTimerStop(timer, KeGetCurrentIrql() == PASSIVE_LEVEL);
+    WdfObjectDelete(timer);
+
+    // Crypto context can be safely cleaned up after the timer is gone
+    OvpnCryptoUninit(&peer->CryptoContext);
 
     ExFreePoolWithTag(peer, 'ovpn');
 }
