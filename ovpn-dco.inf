@@ -41,6 +41,8 @@ Characteristics     = 1  ; NCF_VIRTUAL
 *AccessType         = 2 ; NET_IF_ACCESS_POINT_TO_POINT
 *HardwareLoopback   = 0
 
+EnableDhcp = 0 ; Disable DHCP
+
 [ovpn-dco_AddReg]
 HKR, Ndi\Interfaces,    UpperRange, 0, "ndis5"
 HKR, Ndi\Interfaces,    LowerRange, 0, "nolower"
