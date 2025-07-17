@@ -371,63 +371,77 @@ OvpnSocketUdpReceiveFromEvent(_In_ PVOID socketContext, ULONG flags, _In_opt_ PW
 {
     POVPN_DEVICE device = (POVPN_DEVICE)socketContext;
 
-    // could happen on uninit
     if (device->Socket.Socket == NULL) {
         LOG_ERROR("TransportSocket is not initialized");
         return STATUS_SUCCESS;
     }
 
-    // buffer where we assemble fragmented datagram
     PUCHAR packetBuf = device->Socket.UdpState.PacketBuf;
 
-    // one DataIndication is one UDP datagram
     while (dataIndication != NULL) {
         PMDL mdl = dataIndication->Buffer.Mdl;
         ULONG offset = dataIndication->Buffer.Offset;
-        PUCHAR buf = (PUCHAR)MmGetSystemAddressForMdlSafe(mdl, LowPagePriority | MdlMappingNoExecute);
+        SIZE_T length = dataIndication->Buffer.Length;
 
-        SIZE_T bytesCopied = 0;
-        SIZE_T bytesRemained = dataIndication->Buffer.Length;
-        if (bytesRemained > OVPN_SOCKET_RX_PACKET_BUFFER_SIZE) {
-            LOG_ERROR("UDP datagram of size <size> is larged than buffer size <buf>", TraceLoggingValue(bytesRemained, "size"),
+        if (mdl == NULL) {
+            LOG_ERROR("WSK_DATAGRAM_INDICATION has NULL MDL");
+            RtlZeroMemory(&device->Socket.UdpState, sizeof(OvpnSocketUdpState));
+            dataIndication = dataIndication->Next;
+            continue;
+        }
+
+        if (length > OVPN_SOCKET_RX_PACKET_BUFFER_SIZE) {
+            LOG_ERROR("UDP datagram of size <size> is larger than buffer size <buf>",
+                TraceLoggingValue(length, "size"),
                 TraceLoggingValue(OVPN_SOCKET_RX_PACKET_BUFFER_SIZE, "buf"));
             RtlZeroMemory(&device->Socket.UdpState, sizeof(OvpnSocketUdpState));
             return STATUS_SUCCESS;
         }
-        while ((bytesRemained > 0) && (mdl != NULL)) {
+
+        PUCHAR buf = NULL;
+
+        if (mdl->Next == NULL) {
+            // Fast path: datagram is fully contained in a single MDL
             buf = (PUCHAR)MmGetSystemAddressForMdlSafe(mdl, LowPagePriority | MdlMappingNoExecute);
             if (buf == NULL) {
+                LOG_ERROR("MmGetSystemAddressForMdlSafe failed (non-fragmented)");
                 RtlZeroMemory(&device->Socket.UdpState, sizeof(OvpnSocketUdpState));
                 return STATUS_SUCCESS;
             }
             buf += offset;
+        }
+        else {
+            // Slow path: reassemble fragmented datagram
+            SIZE_T bytesRemained = length;
+            SIZE_T bytesCopied = 0;
+            PMDL currentMdl = mdl;
+            ULONG currentOffset = offset;
 
-            // when datagram is split into several MDLs (seems this is only happens when datagram is fragmented)
-            // we first assemble all fragments (MDLs) into temporary buffer
+            while (currentMdl && bytesRemained > 0) {
+                PUCHAR mapped = (PUCHAR)MmGetSystemAddressForMdlSafe(currentMdl, LowPagePriority | MdlMappingNoExecute);
+                if (mapped == NULL) {
+                    LOG_ERROR("MmGetSystemAddressForMdlSafe failed (fragmented)");
+                    RtlZeroMemory(&device->Socket.UdpState, sizeof(OvpnSocketUdpState));
+                    return STATUS_SUCCESS;
+                }
 
-            // usually this is not the case, so we just use MDL buffer
-            if (dataIndication->Buffer.Mdl->Next == NULL) {
-                break;
+                mapped += currentOffset;
+                SIZE_T copyLength = min(bytesRemained, MmGetMdlByteCount(currentMdl) - currentOffset);
+                RtlCopyMemory(packetBuf + bytesCopied, mapped, copyLength);
+
+                bytesCopied += copyLength;
+                bytesRemained -= copyLength;
+
+                currentOffset = 0;
+                currentMdl = currentMdl->Next;
             }
 
-            SIZE_T copyLength = min(bytesRemained, MmGetMdlByteCount(mdl) - offset);
-            RtlCopyMemory(packetBuf + bytesCopied, buf, copyLength);
-
-            bytesCopied += copyLength;
-            bytesRemained -= copyLength;
-
-            // offset is only for the 1st MDL
-            offset = 0;
-
-            mdl = mdl->Next;
-
-        }
-        // shall we use temporary buffer where we have all fragments assembled or MDL buffer?
-        if (dataIndication->Buffer.Mdl->Next != NULL) {
             buf = packetBuf;
         }
 
-        OvpnSocketProcessIncomingPacket(device, buf, dataIndication->Buffer.Length, flags & WSK_FLAG_AT_DISPATCH_LEVEL, dataIndication->RemoteAddress);
+        OvpnSocketProcessIncomingPacket(device, buf, length,
+            flags & WSK_FLAG_AT_DISPATCH_LEVEL,
+            dataIndication->RemoteAddress);
 
         dataIndication = dataIndication->Next;
     }
