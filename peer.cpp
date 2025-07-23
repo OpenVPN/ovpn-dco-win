@@ -85,6 +85,16 @@ OvpnPeerNew(POVPN_DEVICE device, WDFREQUEST request)
     device->Socket.Tcp = proto_tcp;
     RtlZeroMemory(&device->Socket.TcpState, sizeof(OvpnSocketTcpState));
     RtlZeroMemory(&device->Socket.UdpState, sizeof(OvpnSocketUdpState));
+
+    // Copy the appropriate address based on the family
+    RtlZeroMemory(&device->Socket.RemoteSA, sizeof(SOCKADDR_STORAGE));
+    if (peer->Remote.Addr4.sin_family == AF_INET) {
+        RtlCopyMemory(&device->Socket.RemoteSA, &peer->Remote.Addr4, sizeof(SOCKADDR_IN));
+    }
+    else if (peer->Remote.Addr6.sin6_family == AF_INET6) {
+        RtlCopyMemory(&device->Socket.RemoteSA, &peer->Remote.Addr6, sizeof(SOCKADDR_IN6));
+    }
+
     ExReleaseSpinLockExclusive(&device->SpinLock, kirql);
 
     OvpnPeerZeroStats(&device->Stats);
