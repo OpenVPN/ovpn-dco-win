@@ -54,6 +54,8 @@ struct OvpnSocket
 
 	OvpnSocketTcpState TcpState;
 	OvpnSocketUdpState UdpState;
+
+    SOCKADDR_STORAGE RemoteSA;
 };
 
 _Must_inspect_result_
