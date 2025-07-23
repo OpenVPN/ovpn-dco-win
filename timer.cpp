@@ -106,17 +106,6 @@ static BOOLEAN OvpnTimerRecv(WDFTIMER timer)
     }
 }
 
-_Use_decl_annotations_
-VOID OvpnTimerDestroy(WDFTIMER* timer)
-{
-    if (*timer != WDF_NO_HANDLE) {
-        WdfTimerStop(*timer, FALSE);
-        WdfObjectDelete(*timer);
-
-        *timer = WDF_NO_HANDLE;
-    }
-}
-
 _Function_class_(EVT_WDF_TIMER)
 static VOID OvpnTimerTick(WDFTIMER timer)
 {
@@ -124,6 +113,13 @@ static VOID OvpnTimerTick(WDFTIMER timer)
     KeQuerySystemTime(&now);
 
     POVPN_TIMER_CONTEXT timerCtx = OvpnGetTimerContext(timer);
+
+    POVPN_DEVICE device = OvpnGetDeviceContext(WdfTimerGetParentObject(timer));
+    if (device == NULL) {
+        // we shouldn't end up here since we destroy the timer synchronously, but let's be on the safe side
+        return;
+    }
+
     if ((timerCtx->xmitInterval > 0) && (((now.QuadPart - timerCtx->lastXmit.QuadPart) / WDF_TIMEOUT_TO_SEC) > timerCtx->xmitInterval))
     {
         OvpnTimerXmit(timer);
@@ -144,7 +140,7 @@ _Use_decl_annotations_
 NTSTATUS OvpnTimerCreate(WDFOBJECT parent, WDFTIMER* timer)
 {
     if (*timer != WDF_NO_HANDLE) {
-        WdfTimerStop(*timer, FALSE);
+        WdfTimerStop(*timer, TRUE);
         WdfObjectDelete(*timer);
 
         *timer = WDF_NO_HANDLE;

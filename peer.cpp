@@ -127,8 +127,8 @@ OvpnPeerDel(POVPN_DEVICE device)
     BCRYPT_ALG_HANDLE aesAlgHandle = NULL, chachaAlgHandle = NULL;
 
     KIRQL kirql = ExAcquireSpinLockExclusive(&device->SpinLock);
-
-    OvpnTimerDestroy(&device->Timer);
+    WDFTIMER timer = device->Timer;
+    device->Timer = WDF_NO_HANDLE;
 
     aesAlgHandle = device->CryptoContext.AesAlgHandle;
     chachaAlgHandle = device->CryptoContext.ChachaAlgHandle;
@@ -145,6 +145,12 @@ OvpnPeerDel(POVPN_DEVICE device)
 
     // OvpnCryptoUninitAlgHandles and OvpnSocketClose require PASSIVE_LEVEL, so must release lock
     ExReleaseSpinLockExclusive(&device->SpinLock, kirql);
+
+    // Stop the timer outside the lock and wait for completion
+    if (timer != WDF_NO_HANDLE) {
+        WdfTimerStop(timer, TRUE);
+        WdfObjectDelete(timer);
+    }
 
     OvpnCryptoUninitAlgHandles(aesAlgHandle, chachaAlgHandle);
 
