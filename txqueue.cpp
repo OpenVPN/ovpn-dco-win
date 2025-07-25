@@ -237,7 +237,6 @@ OvpnTxProcessPacket(_In_ POVPN_DEVICE device, _In_ POVPN_TXQUEUE queue, _In_ NET
 
     OvpnCryptoContext* cryptoContext = &peer->CryptoContext;
     auto remoteAddr = peer->TransportAddrs.Remote;
-    auto timer = peer->Timer;
 
     if (cryptoContext->Encrypt) {
         auto aeadTagEnd = cryptoContext->CryptoOptions & CRYPTO_OPTIONS_AEAD_TAG_END;
@@ -258,10 +257,6 @@ OvpnTxProcessPacket(_In_ POVPN_DEVICE device, _In_ POVPN_TXQUEUE queue, _In_ NET
         // LOG_WARN("CryptoContext not initialized");
     }
     ExReleaseSpinLockShared(&peer->SpinLock, irql);
-
-    if (peer != nullptr) {
-        OvpnPeerCtxRelease(peer);
-    }
 
     if (NT_SUCCESS(status)) {
         // start async send, this will return ciphertext buffer to the pool
@@ -298,10 +293,14 @@ OvpnTxProcessPacket(_In_ POVPN_DEVICE device, _In_ POVPN_TXQUEUE queue, _In_ NET
             }
         }
 
-        OvpnTimerResetXmit(timer);
+        OvpnTimerResetXmit(peer->Timer);
     }
     else {
         OvpnTxBufferPoolPut(buffer);
+    }
+
+    if (peer != nullptr) {
+        OvpnPeerCtxRelease(peer);
     }
 
 out:
