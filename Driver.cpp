@@ -391,6 +391,18 @@ OvpnStopVPN(_In_ POVPN_DEVICE device)
         WdfRequestCompleteWithInformation(request, STATUS_CANCELLED, bytesCopied);
     }
 
+    while (NT_SUCCESS(WdfIoQueueRetrieveNextRequest(device->PendingWritesQueue, &request))) {
+        ULONG_PTR bytesCopied = 0;
+        LOG_INFO("Cancel pending write requests");
+        WdfRequestCompleteWithInformation(request, STATUS_CANCELLED, bytesCopied);
+    }
+
+    while (NT_SUCCESS(WdfIoQueueRetrieveNextRequest(device->PendingNewPeerQueue, &request))) {
+        ULONG_PTR bytesCopied = 0;
+        LOG_INFO("Cancel pending new peer requests");
+        WdfRequestCompleteWithInformation(request, STATUS_CANCELLED, bytesCopied);
+    }
+
     device->PendingNotificationsQueue.FlushEvents();
 
     device->IRoutesIPV4.Cleanup();
