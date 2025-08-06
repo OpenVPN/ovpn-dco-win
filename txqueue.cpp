@@ -34,6 +34,91 @@
 #include "txqueue.h"
 #include "socket.h"
 
+BOOLEAN
+OvpnCheckRecursiveRoutingIPv4(SOCKADDR_IN* transportAdds, UCHAR* buffer, SIZE_T bufferLength, BOOLEAN tcp)
+{
+    if (transportAdds->sin_family != AF_INET || bufferLength < sizeof(IPV4_HEADER))
+        return FALSE;  // Not an IPv4 peer or packet too short
+
+    // Extract pointers to avoid repeated FIELD_OFFSET calculations
+    IN_ADDR* srcAddr = (IN_ADDR*)(buffer + FIELD_OFFSET(IPV4_HEADER, SourceAddress));
+    IN_ADDR* dstAddr = (IN_ADDR*)(buffer + FIELD_OFFSET(IPV4_HEADER, DestinationAddress));
+    UINT8 packetProtocol = buffer[FIELD_OFFSET(IPV4_HEADER, Protocol)];
+
+    // Validate the transport protocol
+    if ((tcp && packetProtocol != IPPROTO_TCP) || (!tcp && packetProtocol != IPPROTO_UDP))
+        return FALSE;
+
+    // Extract IP header length
+    UINT8 ipHeaderLength = (buffer[0] & 0x0F) << 2;
+
+    // Ensure transport header is accessible
+    if (bufferLength < ipHeaderLength + sizeof(UINT16) * 2)
+        return FALSE;
+
+    // Read transport header efficiently
+    UCHAR* transportHeader = buffer + ipHeaderLength;
+    UINT16 packetSrcPort = RtlUshortByteSwap(*(UINT16*)(transportHeader));
+    UINT16 packetDstPort = RtlUshortByteSwap(*(UINT16*)(transportHeader + 2));
+    UINT16 peerPort = RtlUshortByteSwap(transportAdds->sin_port);
+
+    // Check for recursive routing
+    if (packetDstPort == peerPort &&
+        RtlCompareMemory(dstAddr, &transportAdds->sin_addr, sizeof(IN_ADDR)) == sizeof(IN_ADDR))
+    {
+        LOG_WARN("Recursive routing detected (IPv4), packet dropped",
+            TraceLoggingIPv4Address(srcAddr->S_un.S_addr, "saddr"),
+            TraceLoggingIPv4Address(dstAddr->S_un.S_addr, "daddr"),
+            TraceLoggingUInt16(packetSrcPort, "sport"),
+            TraceLoggingUInt16(packetDstPort, "dport"),
+            TraceLoggingUInt8(packetProtocol, "protocol"));
+        return TRUE;
+    }
+
+    return FALSE;
+}
+
+BOOLEAN
+OvpnCheckRecursiveRoutingIPv6(SOCKADDR_IN6* transportAddr, UCHAR* buffer, SIZE_T bufferLength, BOOLEAN tcp)
+{
+    if (transportAddr->sin6_family != AF_INET6 || bufferLength < sizeof(IPV6_HEADER))
+        return FALSE;  // Not an IPv6 peer or packet too short
+
+    // Extract pointers to avoid repeated FIELD_OFFSET calculations
+    IN6_ADDR* srcAddr = (IN6_ADDR*)(buffer + FIELD_OFFSET(IPV6_HEADER, SourceAddress));
+    IN6_ADDR* dstAddr = (IN6_ADDR*)(buffer + FIELD_OFFSET(IPV6_HEADER, DestinationAddress));
+    UINT8 packetProtocol = buffer[FIELD_OFFSET(IPV6_HEADER, NextHeader)];
+
+    // Validate the transport protocol
+    if ((tcp && packetProtocol != IPPROTO_TCP) || (!tcp && packetProtocol != IPPROTO_UDP))
+        return FALSE;
+
+    // Ensure transport header is accessible
+    if (bufferLength < sizeof(IPV6_HEADER) + sizeof(UINT16) * 2)
+        return FALSE;
+
+    // Read transport header efficiently
+    UCHAR* transportHeader = buffer + sizeof(IPV6_HEADER);
+    UINT16 packetSrcPort = RtlUshortByteSwap(*(UINT16*)(transportHeader));
+    UINT16 packetDstPort = RtlUshortByteSwap(*(UINT16*)(transportHeader + 2));
+    UINT16 peerPort = RtlUshortByteSwap(transportAddr->sin6_port);
+
+    // Check for recursive routing
+    if (packetDstPort == peerPort &&
+        RtlCompareMemory(dstAddr, &transportAddr->sin6_addr, sizeof(IN6_ADDR)) == sizeof(IN6_ADDR))
+    {
+        LOG_WARN("Recursive routing detected (IPv6), packet dropped",
+            TraceLoggingIPv6Address(srcAddr->u.Byte, "saddr"),
+            TraceLoggingIPv6Address(dstAddr->u.Byte, "daddr"),
+            TraceLoggingUInt16(packetSrcPort, "sport"),
+            TraceLoggingUInt16(packetDstPort, "dport"),
+            TraceLoggingUInt8(packetProtocol, "protocol"));
+        return TRUE;
+    }
+
+    return FALSE;
+}
+
 _Must_inspect_result_
 _Requires_shared_lock_held_(device->SpinLock)
 static
@@ -73,6 +158,19 @@ OvpnTxProcessPacket(_In_ POVPN_DEVICE device, _In_ POVPN_TXQUEUE queue, _In_ NET
             (UCHAR const*)virtualAddr->VirtualAddress + fragment->Offset, fragment->ValidLength);
 
         NetFragmentIteratorAdvance(&fi);
+    }
+
+    if (OvpnCheckRecursiveRoutingIPv4((SOCKADDR_IN*)&device->Socket.RemoteSA, buffer->Data, buffer->Len, device->Socket.Tcp)) {
+        status = STATUS_ADDRESS_NOT_ASSOCIATED;
+        OvpnTxBufferPoolPut(buffer);
+        goto out;
+    }
+
+
+    if (OvpnCheckRecursiveRoutingIPv6((SOCKADDR_IN6*)&device->Socket.RemoteSA, buffer->Data, buffer->Len, device->Socket.Tcp)) {
+        status = STATUS_ADDRESS_NOT_ASSOCIATED;
+        OvpnTxBufferPoolPut(buffer);
+        goto out;
     }
 
     if (OvpnMssIsIPv4(buffer->Data, buffer->Len)) {
