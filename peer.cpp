@@ -765,6 +765,97 @@ done:
 
 _Use_decl_annotations_
 NTSTATUS
+OvpnPeerGetStatsV2(POVPN_DEVICE device, WDFREQUEST request, ULONG_PTR* bytesReturned)
+{
+    *bytesReturned = 0;
+
+    NTSTATUS status = STATUS_SUCCESS;
+
+    POVPN_GET_PEER_STATS getPeerStats = NULL;
+    GOTO_IF_NOT_NT_SUCCESS(done, status, WdfRequestRetrieveInputBuffer(request, sizeof(OVPN_GET_PEER_STATS), (PVOID*)&getPeerStats, nullptr));
+
+    POVPN_PEER_STATS outBuf = NULL;
+
+    // requested stats for all peers?
+    if (getPeerStats->PeerId == -1) {
+        // Ensure the output buffer is at least large enough to hold the required size
+        size_t bufferSize;
+        LOG_IF_NOT_NT_SUCCESS(status = WdfRequestRetrieveOutputBuffer(request, sizeof(ULONG), (PVOID*)&outBuf, &bufferSize));
+        if (!NT_SUCCESS(status)) {
+            goto done;
+        }
+
+        auto irql = ExAcquireSpinLockExclusive(&device->SpinLock);
+        ULONG peerNum = RtlNumberGenericTableElements(&device->Peers);
+
+        // no peers?
+        if (peerNum == 0) {
+            ExReleaseSpinLockExclusive(&device->SpinLock, irql);
+            goto done;
+        }
+
+        size_t requiredSize = peerNum * sizeof(OVPN_PEER_STATS);
+
+        // if buffer is too small for the whole data, return the required size
+        if (bufferSize < requiredSize) {
+            *(ULONG*)outBuf = (ULONG)requiredSize;
+
+            // this is the only working way to return required buffer size to the userspace
+            // https://community.osr.com/t/returning-data-when-completing-with-wdfrequestcompletewithinformation-fails/58284/3
+            status = STATUS_BUFFER_OVERFLOW;
+            *bytesReturned = sizeof(ULONG);
+            ExReleaseSpinLockExclusive(&device->SpinLock, irql);
+            goto done;
+        }
+
+        PVOID restartKey = NULL;
+        PVOID ptr;
+        int i = 0;
+        while ((ptr = RtlEnumerateGenericTableWithoutSplaying(&device->Peers, &restartKey)) != NULL) {
+            OvpnPeerContext* peer = *(OvpnPeerContext**)ptr;
+            outBuf[i].PeerId = peer->PeerId;
+            outBuf[i].LinkRxBytes = peer->LinkRxBytes;
+            outBuf[i].LinkTxBytes = peer->LinkTxBytes;
+            outBuf[i].VpnRxBytes = peer->VpnRxBytes;
+            outBuf[i].VpnTxBytes = peer->VpnTxBytes;
+            ++i;
+        }
+
+        ExReleaseSpinLockExclusive(&device->SpinLock, irql);
+
+        *bytesReturned = requiredSize;
+    }
+    else {
+        // return stats for the single peer
+
+        LOG_IF_NOT_NT_SUCCESS(status = WdfRequestRetrieveOutputBuffer(request, sizeof(OVPN_PEER_STATS), (PVOID*)&outBuf, nullptr));
+        if (!NT_SUCCESS(status)) {
+            goto done;
+        }
+
+        OvpnPeerContext *peer = OvpnFindPeer(device, getPeerStats->PeerId, FALSE);
+        if (peer == nullptr) {
+            status = STATUS_OBJECTID_NOT_FOUND;
+            goto done;
+        }
+
+        outBuf->PeerId = peer->PeerId;
+        outBuf->LinkRxBytes = peer->LinkRxBytes;
+        outBuf->LinkTxBytes = peer->LinkTxBytes;
+        outBuf->VpnRxBytes = peer->VpnRxBytes;
+        outBuf->VpnTxBytes = peer->VpnTxBytes;
+
+        OvpnPeerCtxRelease(peer);
+
+        *bytesReturned = sizeof(OVPN_PEER_STATS);
+    }
+
+done:
+    return status;
+}
+
+_Use_decl_annotations_
+NTSTATUS
 OvpnPeerStartVPN(POVPN_DEVICE device)
 {
     LOG_ENTER();

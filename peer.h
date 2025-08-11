@@ -62,6 +62,11 @@ struct OvpnPeerContext
     } TransportAddrs;
 
     LONG RefCounter;
+
+    LONG64 LinkRxBytes;
+    LONG64 LinkTxBytes;
+    LONG64 VpnRxBytes;
+    LONG64 VpnTxBytes;
 };
 
 _Must_inspect_result_
@@ -135,6 +140,10 @@ _Must_inspect_result_
 NTSTATUS
 _Requires_shared_lock_held_(device->SpinLock)
 OvpnPeerGetStats(_In_ POVPN_DEVICE device, WDFREQUEST request, _Out_ ULONG_PTR* bytesReturned);
+
+_Must_inspect_result_
+NTSTATUS
+OvpnPeerGetStatsV2(_In_ POVPN_DEVICE device, WDFREQUEST request, _Out_ ULONG_PTR* bytesReturned);
 
 _Must_inspect_result_
 _IRQL_requires_(PASSIVE_LEVEL)

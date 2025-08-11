@@ -232,6 +232,7 @@ OvpnTxProcessPacket(_In_ POVPN_DEVICE device, _In_ POVPN_TXQUEUE queue, _In_ NET
     }
 
     InterlockedExchangeAddNoFence64(&device->Stats.TunBytesSent, buffer->Len);
+    InterlockedExchangeAddNoFence64(&peer->VpnTxBytes, buffer->Len);
 
     auto irql = ExAcquireSpinLockShared(&peer->SpinLock);
 
@@ -259,6 +260,8 @@ OvpnTxProcessPacket(_In_ POVPN_DEVICE device, _In_ POVPN_TXQUEUE queue, _In_ NET
     ExReleaseSpinLockShared(&peer->SpinLock, irql);
 
     if (NT_SUCCESS(status)) {
+        InterlockedExchangeAddNoFence64(&peer->LinkTxBytes, buffer->Len);
+
         // start async send, this will return ciphertext buffer to the pool
         if (device->Socket.Tcp) {
             status = OvpnSocketSend(&device->Socket, buffer, NULL);
