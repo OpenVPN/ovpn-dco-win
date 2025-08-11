@@ -10,6 +10,7 @@
 #include <utility>
 #include <sstream>
 #include <stdio.h>
+#include <span>
 
 #define DEV_NAME L"\\\\.\\ovpn-dco"
 #define VER_DEV_NAME L"\\\\.\\ovpn-dco-ver"
@@ -27,7 +28,8 @@ HWND hMPListenAddress, hMPListenPort,
     hNewKeyPeerId, hNewKeyKeySlot, hNewKeyKeyId,
     hSetPeerPeerId, hSetPeerInterval, hSetPeerTimeout, hSetPeerMSS,
     hDelPeerPeerId,
-    hSwapKeysPeerId;
+    hSwapKeysPeerId,
+    hGetStatsPeerId;
 
 HWND hLogArea;
 std::unordered_map<DWORD, std::wstring> buttons = {
@@ -44,7 +46,8 @@ std::unordered_map<DWORD, std::wstring> buttons = {
     {OVPN_IOCTL_MP_START_VPN, L"MP Start VPN"},
     {OVPN_IOCTL_MP_NEW_PEER, L"MP New Peer"},
     {OVPN_IOCTL_NEW_KEY, L"New Key"},
-    {OVPN_IOCTL_MP_DEL_PEER, L"MP Del Peer"}
+    {OVPN_IOCTL_MP_DEL_PEER, L"MP Del Peer"},
+    {OVPN_IOCTL_GET_PEER_STATS, L"Get Stats"},
 };
 
 #define MIN_FUNCTION_CODE 1
@@ -581,6 +584,49 @@ SwapKeys()
 }
 
 void
+GetStats()
+{
+    wchar_t peerId[6];
+
+    GetWindowText(hGetStatsPeerId, peerId, 16);
+
+    OVPN_GET_PEER_STATS get_stats = {};
+    get_stats.PeerId = _wtoi(peerId);
+
+    DWORD bytesReturned;
+
+    size_t bufferSize = 0;
+    if (get_stats.PeerId == -1) {
+        // get buffer size
+        if (!DeviceIoControl(hDev, OVPN_IOCTL_GET_PEER_STATS, &get_stats, sizeof(get_stats), &bufferSize, sizeof(bufferSize), &bytesReturned, NULL)) {
+            if (GetLastError() != ERROR_MORE_DATA) {
+                Log("DeviceIoControl(OVPN_IOCTL_GET_PEER_STATS) failed to get buffer size with code ", GetLastError());
+                return;
+            }
+        }
+
+        if (bufferSize == 0) {
+            Log("No peers");
+            return;
+        }
+
+        auto buffer = std::make_unique<char[]>(bufferSize);
+
+        DWORD bytesReturned;
+        if (!DeviceIoControl(hDev, OVPN_IOCTL_GET_PEER_STATS, &get_stats, sizeof(get_stats), buffer.get(), bufferSize, &bytesReturned, NULL)) {
+            Log("DeviceIoControl(OVPN_IOCTL_GET_PEER_STATS) failed with code ", GetLastError());
+        } else {
+            auto *statsPtr = reinterpret_cast<const OVPN_PEER_STATS*>(buffer.get());
+            const auto count = bytesReturned / sizeof(OVPN_PEER_STATS);
+            std::span<const OVPN_PEER_STATS> stats(statsPtr, count);
+            for (const auto& s : stats) {
+                Log("PeerId ", s.PeerId, ", VpnTx ", s.VpnTxBytes, ", VpnRx ", s.VpnRxBytes, ", LinkTx ", s.LinkTxBytes, ", LinkRx ", s.LinkRxBytes);
+            }
+        }
+    }
+}
+
+void
 CreatePushButton(HWND hWnd, DWORD ioctl, int x, int y)
 {
     CreateWindowW(L"Button", buttons[ioctl].c_str(), WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON, x, y, 100, 30,
@@ -588,18 +634,18 @@ CreatePushButton(HWND hWnd, DWORD ioctl, int x, int y)
 }
 
 void
-CreatePushButton(HWND hWnd, wchar_t* title, HMENU hMenu, int x, int y)
+CreatePushButton(HWND hWnd, LPCWSTR title, HMENU hMenu, int x, int y)
 {
     CreateWindowW(L"Button", title, WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON, x, y, 100, 30, hWnd, hMenu, NULL, NULL);
 }
 
 HWND
-CreateEditBox(HWND hWnd, WCHAR* text, int x, int y, int width)
+CreateEditBox(HWND hWnd, LPCWSTR text, int x, int y, int width)
 {
     return CreateWindowW(L"Edit", text, WS_VISIBLE | WS_CHILD | WS_BORDER | ES_LEFT | ES_AUTOHSCROLL, x, y, width, 20, hWnd, NULL, NULL, NULL);
 }
 
-HWND CreateTextLabel(HWND hWnd, WCHAR* text, int x, int y, int width)
+HWND CreateTextLabel(HWND hWnd, LPCWSTR text, int x, int y, int width)
 {
     return CreateWindowW(L"Static", text, WS_VISIBLE | WS_CHILD, x, y, width, 20, hWnd, NULL, NULL, NULL);
 }
@@ -715,8 +761,11 @@ LRESULT CALLBACK WindowProcedure(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         CreatePushButton(hwnd, OVPN_IOCTL_MP_DEL_PEER, 10, 360);
         hDelPeerPeerId = CreateEditBox(hwnd, L"1", 150, 360, 60);
 
-        CreatePushButton(hwnd, OVPN_IOCTL_SWAP_KEYS, 10, 410);
-        hSwapKeysPeerId = CreateEditBox(hwnd, L"1", 150, 410, 60);
+        CreatePushButton(hwnd, OVPN_IOCTL_SWAP_KEYS, 310, 360);
+        hSwapKeysPeerId = CreateEditBox(hwnd, L"1", 450, 360, 60);
+
+        CreatePushButton(hwnd, OVPN_IOCTL_GET_PEER_STATS, 610, 360);
+        hGetStatsPeerId = CreateEditBox(hwnd, L"-1", 750, 360, 60);
 
         SendMessage(hModes[0], BM_SETCHECK, BST_CHECKED, 0);
 
@@ -775,6 +824,10 @@ LRESULT CALLBACK WindowProcedure(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 
             case OVPN_IOCTL_SWAP_KEYS:
                 SwapKeys();
+                break;
+
+            case OVPN_IOCTL_GET_PEER_STATS:
+                GetStats();
                 break;
             }
         }
