@@ -676,6 +676,10 @@ OvpnEvtIoDeviceControl(WDFQUEUE queue, WDFREQUEST request, size_t outputBufferLe
         status = OvpnMPDelIRoute(device, request);
         break;
 
+    case OVPN_IOCTL_GET_PEER_STATS:
+        status = OvpnPeerGetStatsV2(device, request, &bytesReturned);
+        break;
+
     default:
         LOG_WARN("Unknown <ioControlCode>", TraceLoggingValue(ioControlCode, "ioControlCode"));
         status = STATUS_INVALID_DEVICE_REQUEST;

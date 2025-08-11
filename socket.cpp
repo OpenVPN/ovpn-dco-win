@@ -198,6 +198,8 @@ VOID OvpnSocketDataPacketReceived(_In_ POVPN_DEVICE device, UCHAR op, UINT32 pee
         return;
     }
 
+    InterlockedExchangeAddNoFence64(&peer->LinkRxBytes, len);
+
     OVPN_RX_BUFFER* buffer;
 
     // fetch buffer for plaintext
@@ -336,9 +338,11 @@ VOID OvpnSocketDataPacketReceived(_In_ POVPN_DEVICE device, UCHAR op, UINT32 pee
             // enqueue plaintext buffer, it will be dequeued by NetAdapter RX datapath
             OvpnBufferQueueEnqueue(device->DataRxBufferQueue, &buffer->QueueListEntry);
 
+            InterlockedExchangeAddNoFence64(&peer->VpnRxBytes, buffer->Len);
+
             OvpnAdapterNotifyRx(device->Adapter);
         } else {
-            // packet is dropped dur to RPF, return buffer to the pool
+            // packet is dropped due to RPF, return buffer to the pool
             OvpnRxBufferPoolPut(buffer);
         }
     }
