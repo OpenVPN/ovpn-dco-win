@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.10)
 
 project(gui)
 
-set(CMAKE_CXX_STANDARD 17)            # Enable C++17
+set(CMAKE_CXX_STANDARD 20)            # Enable C++20
 set(CMAKE_CXX_STANDARD_REQUIRED YES)   # Ensure the compiler strictly requires C++17
 
 add_executable (gui WIN32 "gui.cpp")
