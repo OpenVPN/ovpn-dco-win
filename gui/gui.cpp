@@ -25,7 +25,7 @@ HWND hMPListenAddress, hMPListenPort,
     hP2PRemoteAddress, hP2PRemotePort,
     hCCMessage, hCCRemoteAddress, hCCRemotePort,
     hMPNewPeerLocalIP, hMPNewPeerLocalPort, hMPNewPeerRemoteIP, hMPNewPeerRemotePort, hMPNewPeerVPNIP, hMPNewPeerPeerId,
-    hNewKeyPeerId, hNewKeyKeySlot, hNewKeyKeyId,
+    hNewKeyPeerId, hNewKeyKeySlot, hNewKeyKeyId, hNewKeyKeyDir,
     hSetPeerPeerId, hSetPeerInterval, hSetPeerTimeout, hSetPeerMSS,
     hDelPeerPeerId,
     hSwapKeysPeerId,
@@ -460,9 +460,8 @@ NewKey()
     OVPN_CRYPTO_DATA crypto_data = {};
     constexpr int keyLen = sizeof(crypto_data.Encrypt.Key);
 
-    bool mp = SendMessage(hModes[1], BM_GETCHECK, 0, 0) == BST_CHECKED;
-    bool keyDir = mp ? 1 : 0;
-    if (keyDir) {
+    auto keyDir = SendMessageW(hNewKeyKeyDir, LB_GETCURSEL, 0, 0);
+    if (keyDir == 1) {
         CopyMemory(crypto_data.Encrypt.Key, buf.data() + keyLen, keyLen);
         CopyMemory(crypto_data.Decrypt.Key, buf.data(), keyLen);
     }
@@ -489,7 +488,7 @@ NewKey()
         Log("DeviceIoControl(OVPN_IOCTL_NEW_KEY) failed with code ", GetLastError());
     }
     else {
-        Log("New key added, peer-id: ", peerId, ", slot: ", (keySlot == 0) ? "primary" : "secondary", ", key-id: ", keyId);
+        Log("New key added, peer-id: ", peerId, ", slot: ", (keySlot == 0) ? "primary" : "secondary", ", key-id: ", keyId, ", key-dir: ", (keyDir == 1) ? "Reversed" : "Normal");
     }
 }
 
@@ -751,6 +750,8 @@ LRESULT CALLBACK WindowProcedure(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         hNewKeyKeySlot = CreateListBox(hwnd, 300, 250, 100, {L"Primary", L"Secondary"});
         CreateTextLabel(hwnd, L"key-id", 420, 260, 60);
         hNewKeyKeyId = CreateEditBox(hwnd, L"0", 480, 260, 60);
+        CreateTextLabel(hwnd, L"key-dir", 560, 260, 60);
+        hNewKeyKeyDir = CreateListBox(hwnd, 620, 250, 100, { L"Normal", L"Reversed" });
 
         CreatePushButton(hwnd, OVPN_IOCTL_SET_PEER, 10, 310);
         hSetPeerPeerId = CreateEditBox(hwnd, L"1", 150, 310, 60);
