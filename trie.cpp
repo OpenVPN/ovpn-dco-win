@@ -138,6 +138,8 @@ IPTrie::Insert(const UCHAR* ip, int prefixLength, OvpnPeerContext* peer) {
     }
 
     // update the node with the peer info
+    // keep track of any existing peer so we can release it outside the lock
+    OvpnPeerContext* oldPeer = current->peer;
     current->peer = peer;
     current->isRoute = true;
 
@@ -147,6 +149,12 @@ IPTrie::Insert(const UCHAR* ip, int prefixLength, OvpnPeerContext* peer) {
     LOG_INFO("Peer node", TraceLoggingValue(peer->PeerId, "peerId"));
 
     ExReleaseSpinLockExclusive(&Lock, kirql);
+
+    // release the previous peer outside the lock if it existed
+    if (oldPeer) {
+        LOG_INFO("Release previous peer", TraceLoggingValue(oldPeer->PeerId, "peerId"));
+        OvpnPeerCtxRelease(oldPeer);
+    }
 
 done:
     LOG_EXIT();
