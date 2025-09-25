@@ -27,11 +27,126 @@
 #include "trace.h"
 #include "pktid.h"
 #include "socket.h"
+#include "peer.h"
 
 UINT
 OvpnCryptoOpCompose(UINT opcode, UINT keyId)
 {
     return (opcode << OVPN_OPCODE_SHIFT) | keyId;
+}
+
+static
+VOID
+OvpnCryptoUpgradeLock(_In_ OvpnPeerContext* peer, _In_ BOOLEAN atDpcLevel, _Inout_opt_ PKIRQL kirql)
+{
+    if (atDpcLevel) {
+        ExReleaseSpinLockSharedFromDpcLevel(&peer->SpinLock);
+        ExAcquireSpinLockExclusiveAtDpcLevel(&peer->SpinLock);
+    }
+    else {
+        NT_ASSERT(kirql != nullptr);
+
+        KIRQL previousIrql = *kirql;
+
+        ExReleaseSpinLockShared(&peer->SpinLock, previousIrql);
+
+        KIRQL acquiredIrql = ExAcquireSpinLockExclusive(&peer->SpinLock);
+        NT_ASSERT(acquiredIrql == previousIrql);
+        *kirql = acquiredIrql;
+    }
+}
+
+_Use_decl_annotations_
+NTSTATUS
+OvpnCryptoCallWithRetry(
+    OvpnPeerContext* peer,
+    BOOLEAN atDpcLevel,
+    PBOOLEAN exclusive,
+    PKIRQL kirql,
+    POVPN_CRYPTO_RETRY_ROUTINE routine,
+    PVOID context)
+{
+    NT_ASSERT(peer != nullptr);
+    NT_ASSERT(routine != nullptr);
+
+    BOOLEAN allowRekey = (exclusive != nullptr) && *exclusive;
+
+    for (;;) {
+        OvpnCryptoContext* cryptoContext = &peer->CryptoContext;
+        NTSTATUS status = routine(cryptoContext, allowRekey, context);
+
+        if (status != STATUS_OVPN_CRYPTO_RETRY) {
+            return status;
+        }
+
+        if (!allowRekey) {
+            // Drop the shared lock before upgrading. The caller owns a peer
+            // reference, so the context remains valid while we temporarily
+            // release the lock and the loop below re-reads the crypto state
+            // under exclusive ownership.
+            OvpnCryptoUpgradeLock(peer, atDpcLevel, kirql);
+            allowRekey = TRUE;
+
+            if (exclusive != nullptr) {
+                *exclusive = TRUE;
+            }
+
+            continue;
+        }
+
+        LOG_ERROR("Crypto helper requested retry under exclusive lock");
+        return STATUS_UNSUCCESSFUL;
+    }
+}
+
+_Use_decl_annotations_
+NTSTATUS
+OvpnCryptoInvokeEncrypt(
+    OvpnCryptoContext* cryptoContext,
+    BOOLEAN allowRekey,
+    PVOID context)
+{
+    auto params = reinterpret_cast<OvpnCryptoEncryptParams*>(context);
+
+    if ((cryptoContext == nullptr) || (cryptoContext->Encrypt == nullptr)) {
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+
+    NT_ASSERT(params != nullptr);
+
+    return cryptoContext->Encrypt(&cryptoContext->Primary, params->Buffer, params->Length, &cryptoContext->Options, allowRekey);
+}
+
+_Use_decl_annotations_
+NTSTATUS
+OvpnCryptoInvokeDecrypt(
+    OvpnCryptoContext* cryptoContext,
+    BOOLEAN allowRekey,
+    PVOID context)
+{
+    auto params = reinterpret_cast<OvpnCryptoDecryptParams*>(context);
+
+    if ((cryptoContext == nullptr) || (cryptoContext->Decrypt == nullptr)) {
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+
+    NT_ASSERT(params != nullptr);
+
+    OvpnCryptoKeySlot* keySlot = OvpnCryptoKeySlotFromKeyId(cryptoContext, params->KeyId);
+    if (keySlot == nullptr) {
+        LOG_ERROR("keyId <keyId> not found", TraceLoggingValue(params->KeyId, "keyId"));
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+
+    NTSTATUS status = cryptoContext->Decrypt(
+        keySlot,
+        params->CipherText,
+        params->Length,
+        params->PlainText,
+        &cryptoContext->Options,
+        allowRekey);
+
+    return status;
 }
 
 static
@@ -49,9 +164,10 @@ OvpnProtoOp32Compose(UINT opcode, UINT keyId, UINT opPeerId)
 OVPN_CRYPTO_DECRYPT OvpnCryptoDecryptNone;
 
 _Use_decl_annotations_
-NTSTATUS OvpnCryptoDecryptNone(OvpnCryptoKeySlot* keySlot, UCHAR* bufIn, SIZE_T len, UCHAR* bufOut, OvpnCryptoOptions* opts)
+NTSTATUS OvpnCryptoDecryptNone(OvpnCryptoKeySlot* keySlot, UCHAR* bufIn, SIZE_T len, UCHAR* bufOut, OvpnCryptoOptions* opts, BOOLEAN allowRekey)
 {
     UNREFERENCED_PARAMETER(keySlot);
+    UNREFERENCED_PARAMETER(allowRekey);
 
     BOOLEAN useEpoch = (opts != NULL) && opts->UseEpoch;
     SIZE_T pktIdLen = useEpoch ? 8 : 4;
@@ -72,11 +188,12 @@ OVPN_CRYPTO_ENCRYPT OvpnCryptoEncryptNone;
 
 _Use_decl_annotations_
 NTSTATUS
-OvpnCryptoEncryptNone(OvpnCryptoKeySlot* keySlot, UCHAR* buf, SIZE_T len, OvpnCryptoOptions* opts)
+OvpnCryptoEncryptNone(OvpnCryptoKeySlot* keySlot, UCHAR* buf, SIZE_T len, OvpnCryptoOptions* opts, BOOLEAN allowRekey)
 {
     UNREFERENCED_PARAMETER(keySlot);
     UNREFERENCED_PARAMETER(len);
     UNREFERENCED_PARAMETER(opts);
+    UNREFERENCED_PARAMETER(allowRekey);
 
     // prepend with opcode, key-id and peer-id
     UINT32 op = OvpnProtoOp32Compose(OVPN_OP_DATA_V2, 0, 0);
@@ -431,7 +548,7 @@ OvpnCryptoEpochReplaceUpdateRecvKey(OvpnCryptoKeySlot* keySlot, UINT16 new_epoch
 }
 
 NTSTATUS
-OvpnCryptoCheckReplay(OvpnCryptoKeySlot* keySlot, ULONG64 packet_id_net, UINT16 epoch, OvpnCryptoOptions *opts)
+OvpnCryptoCheckReplay(OvpnCryptoKeySlot* keySlot, ULONG64 packet_id_net, UINT16 epoch, OvpnCryptoOptions *opts, BOOLEAN allowRekey)
 {
     OvpnPktidRecv* recv = NULL;
 
@@ -442,6 +559,10 @@ OvpnCryptoCheckReplay(OvpnCryptoKeySlot* keySlot, ULONG64 packet_id_net, UINT16 
         recv = &keySlot->PktidRecvRetiring;
     }
     else {
+        if (!allowRekey) {
+            return STATUS_OVPN_CRYPTO_RETRY;
+        }
+
         /* We have an epoch that is neither current or old recv key but
          * is authenticated, ie we need to move to a new current recv key */
         LOG_INFO("Received data packet with new epoch. Updating receive key", TraceLoggingValue(epoch, "epoch"));
@@ -454,7 +575,7 @@ OvpnCryptoCheckReplay(OvpnCryptoKeySlot* keySlot, ULONG64 packet_id_net, UINT16 
 
 static
 NTSTATUS
-OvpnCryptoAEADDoWork(BOOLEAN encrypt, OvpnCryptoKeySlot* keySlot, UCHAR *bufIn, SIZE_T len, UCHAR* bufOut, OvpnCryptoOptions* opts)
+OvpnCryptoAEADDoWork(BOOLEAN encrypt, OvpnCryptoKeySlot* keySlot, UCHAR *bufIn, SIZE_T len, UCHAR* bufOut, OvpnCryptoOptions* opts, BOOLEAN allowRekey)
 {
     /*
     AEAD Nonce :
@@ -520,6 +641,10 @@ OvpnCryptoAEADDoWork(BOOLEAN encrypt, OvpnCryptoKeySlot* keySlot, UCHAR *bufIn, 
             }
 
             if (OvpnCryptoAeadUsageLimitReached(opts->AeadUsageLimit, keySlot->Encrypt.PlaintextBlocks, keySlot->PktidXmit.SeqNum) || (keySlot->PktidXmit.SeqNum == PACKET_ID_EPOCH_MAX)) {
+                if (!allowRekey) {
+                    return STATUS_OVPN_CRYPTO_RETRY;
+                }
+
                 OvpnCryptoEpochIterateSendKey(keySlot, opts);
             }
 
@@ -603,7 +728,10 @@ OvpnCryptoAEADDoWork(BOOLEAN encrypt, OvpnCryptoKeySlot* keySlot, UCHAR *bufIn, 
     );
 
     if (!encrypt) {
-        status = OvpnCryptoCheckReplay(keySlot, packet_id, rx_epoch, opts);
+        status = OvpnCryptoCheckReplay(keySlot, packet_id, rx_epoch, opts, allowRekey);
+        if (status == STATUS_OVPN_CRYPTO_RETRY) {
+            return status;
+        }
 
         if (!NT_SUCCESS(status)) {
             LOG_ERROR("Invalid packet_id", TraceLoggingUInt64(packet_id, "packet_id"));
@@ -619,20 +747,21 @@ OVPN_CRYPTO_DECRYPT OvpnCryptoDecryptAEAD;
 
 _Use_decl_annotations_
 NTSTATUS
-OvpnCryptoDecryptAEAD(OvpnCryptoKeySlot* keySlot, UCHAR* bufIn, SIZE_T len, UCHAR* bufOut, OvpnCryptoOptions* opts)
+OvpnCryptoDecryptAEAD(OvpnCryptoKeySlot* keySlot, UCHAR* bufIn, SIZE_T len, UCHAR* bufOut, OvpnCryptoOptions* opts, BOOLEAN allowRekey)
 {
-    return OvpnCryptoAEADDoWork(FALSE, keySlot, bufIn, len, bufOut, opts);
+    return OvpnCryptoAEADDoWork(FALSE, keySlot, bufIn, len, bufOut, opts, allowRekey);
 }
 
 OVPN_CRYPTO_ENCRYPT OvpnCryptoEncryptAEAD;
 
 _Use_decl_annotations_
 NTSTATUS
-OvpnCryptoEncryptAEAD(OvpnCryptoKeySlot* keySlot, UCHAR* buf, SIZE_T len, OvpnCryptoOptions* opts)
+OvpnCryptoEncryptAEAD(OvpnCryptoKeySlot* keySlot, UCHAR* buf, SIZE_T len, OvpnCryptoOptions* opts, BOOLEAN allowRekey)
 {
-    return OvpnCryptoAEADDoWork(TRUE, keySlot, buf, len, buf, opts);
+    return OvpnCryptoAEADDoWork(TRUE, keySlot, buf, len, buf, opts, allowRekey);
 }
 
+static VOID OvpnCryptoEpochUninitSlot(OvpnCryptoKeySlot* slot);
 _Use_decl_annotations_
 NTSTATUS
 OvpnCryptoNewKey(OvpnCryptoContext* cryptoContext, POVPN_CRYPTO_DATA_V2 cryptoDataV2, BCRYPT_ALG_HANDLE algHandle, BCRYPT_ALG_HANDLE hkdfAlgHandle)
@@ -724,6 +853,7 @@ OvpnCryptoNewKey(OvpnCryptoContext* cryptoContext, POVPN_CRYPTO_DATA_V2 cryptoDa
         goto done;
     }
 
+    OvpnCryptoDescribePacketLayout(cryptoContext, &cryptoContext->Layout);
     // reset pktid for a new key
     RtlZeroMemory(&keySlot->PktidXmit, sizeof(keySlot->PktidXmit));
     RtlZeroMemory(&keySlot->PktidRecv, sizeof(keySlot->PktidRecv));
@@ -731,6 +861,32 @@ OvpnCryptoNewKey(OvpnCryptoContext* cryptoContext, POVPN_CRYPTO_DATA_V2 cryptoDa
 done:
     return status;
 }
+
+_Use_decl_annotations_
+VOID
+OvpnCryptoDescribePacketLayout(const OvpnCryptoContext* cryptoContext, OvpnCryptoPacketLayout* layout)
+{
+    NT_ASSERT(layout != NULL);
+
+    layout->FrontLen = OVPN_DATA_V2_LEN + 4;
+    layout->TailLen = 0;
+
+    if ((cryptoContext == NULL) || (cryptoContext->Encrypt == NULL)) {
+        return;
+    }
+
+    if (cryptoContext->Encrypt == OvpnCryptoEncryptAEAD) {
+        BOOLEAN useEpoch = cryptoContext->Options.UseEpoch;
+
+        layout->FrontLen = OVPN_DATA_V2_LEN + (useEpoch ? 8 : 4);
+        if (!useEpoch) {
+            layout->FrontLen += AEAD_AUTH_TAG_LEN;
+        }
+
+        layout->TailLen = useEpoch ? AEAD_AUTH_TAG_LEN : 0;
+    }
+}
+
 
 _Use_decl_annotations_
 OvpnCryptoKeySlot*
@@ -760,7 +916,7 @@ OvpnCryptoSwapKeys(OvpnCryptoContext* cryptoContext)
     LOG_INFO("Key swapped", TraceLoggingValue(cryptoContext->Primary.KeyId, "key1"), TraceLoggingValue(cryptoContext->Secondary.KeyId, "key2"));
 }
 
-VOID
+static VOID
 OvpnCryptoEpochUninitSlot(OvpnCryptoKeySlot* slot)
 {
     if (slot->Encrypt.Key) {
