@@ -214,32 +214,31 @@ VOID OvpnSocketDataPacketReceived(_In_ POVPN_DEVICE device, UCHAR op, UINT32 pee
     KIRQL kirql = OvpnAcquireSpinLock(dpc, &peer->SpinLock, FALSE);
 
     OvpnCryptoContext* cryptoContext = &peer->CryptoContext;
+    BOOLEAN aeadTagEnd = cryptoContext->Options.UseEpoch;
+    ULONG pktIdLen = cryptoContext->Options.UseEpoch ? 8 : 4;
 
     if (cryptoContext->Decrypt) {
         UCHAR keyId = OvpnCryptoKeyIdExtract(op);
+
         OvpnCryptoKeySlot* keySlot = OvpnCryptoKeySlotFromKeyId(cryptoContext, keyId);
         if (!keySlot) {
             status = STATUS_INVALID_DEVICE_STATE;
-
             LOG_ERROR("keyId <keyId> not found", TraceLoggingValue(keyId, "keyId"));
         }
         else {
             // extend data area in the buffer for plaintext and crypto overhead
             OvpnBufferPut(buffer, len);
 
-            // decrypt into plaintext buffer
-            status = cryptoContext->Decrypt(keySlot, cipherTextBuf, len, buffer->Data, cryptoContext->CryptoOptions);
+            status = cryptoContext->Decrypt(keySlot, cipherTextBuf, len, buffer->Data, &cryptoContext->Options);
 
-            // trim AEAD tag an the end
-            auto aeadTagEnd = cryptoContext->CryptoOptions & CRYPTO_OPTIONS_AEAD_TAG_END;
-            if (aeadTagEnd) {
-                OvpnBufferTrim(buffer, len - AEAD_AUTH_TAG_LEN);
+            if (NT_SUCCESS(status)) {
+                if (aeadTagEnd) {
+                    OvpnBufferTrim(buffer, len - AEAD_AUTH_TAG_LEN);
+                }
+
+                auto cryptoOverheadFront = OVPN_DATA_V2_LEN + pktIdLen + (aeadTagEnd ? 0 : AEAD_AUTH_TAG_LEN);
+                OvpnBufferPull(buffer, cryptoOverheadFront);
             }
-
-            // remove crypto overhead in front
-            auto pktId64bit = cryptoContext->CryptoOptions & CRYPTO_OPTIONS_64BIT_PKTID;
-            auto cryptoOverheadFront = OVPN_DATA_V2_LEN + (pktId64bit ? 8 : 4) + (aeadTagEnd ? 0 : AEAD_AUTH_TAG_LEN);
-            OvpnBufferPull(buffer, cryptoOverheadFront);
         }
     }
     else {

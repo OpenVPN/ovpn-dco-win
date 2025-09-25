@@ -240,23 +240,22 @@ OvpnTxProcessPacket(_In_ POVPN_DEVICE device, _In_ POVPN_TXQUEUE queue, _In_ NET
     auto remoteAddr = peer->TransportAddrs.Remote;
 
     if (cryptoContext->Encrypt) {
-        auto aeadTagEnd = cryptoContext->CryptoOptions & CRYPTO_OPTIONS_AEAD_TAG_END;
-        auto pktId64bit = cryptoContext->CryptoOptions & CRYPTO_OPTIONS_64BIT_PKTID;
+        BOOLEAN aeadTagEnd = cryptoContext->Options.UseEpoch;
+        ULONG pktidLen = cryptoContext->Options.UseEpoch ? 8 : 4;
 
         // make space to crypto overhead
-        OvpnTxBufferPush(buffer, OVPN_DATA_V2_LEN + (pktId64bit ? 8 : 4) + (aeadTagEnd ? 0 : AEAD_AUTH_TAG_LEN));
-        if (aeadTagEnd)
-        {
+        OvpnTxBufferPush(buffer, OVPN_DATA_V2_LEN + pktidLen + (aeadTagEnd ? 0 : AEAD_AUTH_TAG_LEN));
+        if (aeadTagEnd) {
             OvpnBufferPut(buffer, AEAD_AUTH_TAG_LEN);
         }
 
-        // in-place encrypt, always with primary key
-        status = cryptoContext->Encrypt(&cryptoContext->Primary, buffer->Data, buffer->Len, cryptoContext->CryptoOptions);
+        status = cryptoContext->Encrypt(&cryptoContext->Primary, buffer->Data, buffer->Len, &cryptoContext->Options);
     }
     else {
         status = STATUS_INVALID_DEVICE_STATE;
         // LOG_WARN("CryptoContext not initialized");
     }
+
     ExReleaseSpinLockShared(&peer->SpinLock, irql);
 
     if (NT_SUCCESS(status)) {

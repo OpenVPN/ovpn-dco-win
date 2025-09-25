@@ -98,7 +98,6 @@
     <ClInclude Include="timer.h" />
     <ClInclude Include="trace.h" />
     <ClInclude Include="txqueue.h" />
-    <ClInclude Include="ovpn-dco.h" />
     <ClInclude Include="socket.h" />
     <ClInclude Include="uapi\ovpn-dco.h" />
   </ItemGroup>

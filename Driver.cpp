@@ -727,7 +727,7 @@ VOID OvpnEvtDeviceCleanup(WDFOBJECT obj) {
 
     // OvpnCryptoUninitAlgHandles called outside of lock because
     // it requires PASSIVE_LEVEL.
-    OvpnCryptoUninitAlgHandles(device->AesAlgHandle, device->ChachaAlgHandle);
+    OvpnCryptoUninitAlgHandles(device->AesAlgHandle, device->ChachaAlgHandle, device->HkdfAlgHandle);
 
     // delete control device if there are no devices left
     POVPN_DRIVER driverCtx = OvpnGetDriverContext(WdfGetDriver());
@@ -892,7 +892,7 @@ OvpnEvtDeviceAdd(WDFDRIVER wdfDriver, PWDFDEVICE_INIT deviceInit) {
     device->IRoutesIPV4.Init(FALSE);
     device->IRoutesIPV6.Init(TRUE);
 
-    GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnCryptoInitAlgHandles(&device->AesAlgHandle, &device->ChachaAlgHandle));
+    GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnCryptoInitAlgHandles(&device->AesAlgHandle, &device->ChachaAlgHandle, &device->HkdfAlgHandle));
 
     // Initialize peers tables
     RtlInitializeGenericTable(&device->Peers, OvpnPeerCompareByPeerIdRoutine, OvpnPeerAllocateRoutine, OvpnPeerFreeRoutine, NULL);
@@ -901,7 +901,6 @@ OvpnEvtDeviceAdd(WDFDRIVER wdfDriver, PWDFDEVICE_INIT deviceInit) {
     RtlInitializeGenericTable(&device->PeersByTransport, OvpnPeerCompareByTransportRoutine, OvpnPeerAllocateRoutine, OvpnPeerFreeRoutine, NULL);
 
     LOG_IF_NOT_NT_SUCCESS(status = OvpnAdapterCreate(device));
-
 done:
     LOG_EXIT();
 

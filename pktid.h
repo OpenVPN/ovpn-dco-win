@@ -57,7 +57,7 @@ struct OvpnPktidRecv
 };
 
 /* Get the next packet ID for xmit */
-NTSTATUS OvpnPktidXmitNext(_In_ OvpnPktidXmit* px, _Out_ VOID* pktId, BOOLEAN pktId64bit);
+NTSTATUS OvpnPktidXmitNext(_In_ OvpnPktidXmit* px, _Out_ VOID* pktId);
 
 
 /* Packet replay detection.

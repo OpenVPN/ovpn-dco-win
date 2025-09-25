@@ -28,23 +28,17 @@
 #define PKTID_WRAP_WARN 0xf0000000ULL
 
 _Use_decl_annotations_
-NTSTATUS OvpnPktidXmitNext(OvpnPktidXmit* px, VOID* pktId, BOOLEAN pktId64bit)
+NTSTATUS OvpnPktidXmitNext(OvpnPktidXmit* px, VOID* pktId)
 {
 	ULONG64 seqNum = InterlockedIncrementNoFence64(&px->SeqNum);
 
-    if (pktId64bit) {
-        *static_cast<UINT64*>(pktId) = seqNum;
+    *static_cast<UINT32*>(pktId) = static_cast<UINT32>(seqNum);
+    if (seqNum >= PKTID_WRAP_WARN) {
+        LOG_ERROR("Pktid wrapped");
+        return STATUS_INTEGER_OVERFLOW;
+    } else {
+        return STATUS_SUCCESS;
     }
-    else
-    {
-        *static_cast<UINT32*>(pktId) = static_cast<UINT32>(seqNum);
-        if (seqNum >= PKTID_WRAP_WARN) {
-            LOG_ERROR("Pktid wrapped");
-            return STATUS_INTEGER_OVERFLOW;
-        }
-    }
-
-    return STATUS_SUCCESS;
 }
 
 #define PKTID_RECV_EXPIRE ((30 * WDF_TIMEOUT_TO_SEC) / KeQueryTimeIncrement())

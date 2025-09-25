@@ -886,7 +886,7 @@ OvpnPeerNewKey(POVPN_DEVICE device, WDFREQUEST request)
     }
 
     RtlCopyMemory(&cryptoDataV2.V1, cryptoData, sizeof(OVPN_CRYPTO_DATA));
-    GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnCryptoNewKey(&peer->CryptoContext, &cryptoDataV2, algHandle));
+    GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnCryptoNewKey(&peer->CryptoContext, &cryptoDataV2, algHandle, NULL));
 
 done:
     if (peer != nullptr) {
@@ -921,7 +921,7 @@ OvpnPeerNewKeyV2(POVPN_DEVICE device, WDFREQUEST request)
     }
 
     KIRQL irql = ExAcquireSpinLockExclusive(&peer->SpinLock);
-    LOG_IF_NOT_NT_SUCCESS(status = OvpnCryptoNewKey(&peer->CryptoContext, cryptoDataV2, algHandle));
+    LOG_IF_NOT_NT_SUCCESS(status = OvpnCryptoNewKey(&peer->CryptoContext, cryptoDataV2, algHandle, device->HkdfAlgHandle));
     ExReleaseSpinLockExclusive(&peer->SpinLock, irql);
 
 done:

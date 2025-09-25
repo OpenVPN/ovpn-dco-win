@@ -52,9 +52,6 @@
     <ClInclude Include="socket.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="ovpn-dco.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
     <ClInclude Include="uapi\ovpn-dco.h">
       <Filter>Header Files\uapi</Filter>
     </ClInclude>
