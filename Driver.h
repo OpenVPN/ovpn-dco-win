@@ -86,6 +86,7 @@ struct OVPN_DEVICE {
 
     BCRYPT_ALG_HANDLE AesAlgHandle;
     BCRYPT_ALG_HANDLE ChachaAlgHandle;
+    BCRYPT_ALG_HANDLE HkdfAlgHandle;
 
     _Guarded_by_(SpinLock)
     OvpnSocket Socket;

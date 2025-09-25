@@ -56,5 +56,3 @@ OvpnAdapterNotifyRx(NETADAPTER netAdapter);
 
 VOID
 OvpnAdapterSetLinkState(_In_ POVPN_ADAPTER adapter, NET_IF_MEDIA_CONNECT_STATE state);
-
-#define OVPN_PAYLOAD_BACKFILL 26 // 2 + 4 + 4 + 16 -> tcp packet size + data_v2 + pktid + auth-tag;
