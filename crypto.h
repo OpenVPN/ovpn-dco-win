@@ -29,6 +29,8 @@
 #include "uapi\ovpn-dco.h"
 #include "socket.h"
 
+struct OvpnPeerContext;
+
 #define OVPN_DATA_V2_LEN 4
 #define AEAD_AUTH_TAG_LEN 16
 
@@ -105,7 +107,7 @@ _IRQL_requires_max_(DISPATCH_LEVEL)
 _Must_inspect_result_
 typedef
 NTSTATUS
-OVPN_CRYPTO_ENCRYPT(_In_ OvpnCryptoKeySlot* keySlot, _In_ UCHAR* buf, _In_ SIZE_T len, _In_ OvpnCryptoOptions* opts);
+OVPN_CRYPTO_ENCRYPT(_In_ OvpnCryptoKeySlot* keySlot, _In_ UCHAR* buf, _In_ SIZE_T len, _In_ OvpnCryptoOptions* opts, BOOLEAN allowRekey);
 typedef OVPN_CRYPTO_ENCRYPT* POVPN_CRYPTO_ENCRYPT;
 
 _Function_class_(OVPN_CRYPTO_DECRYPT)
@@ -113,8 +115,14 @@ _IRQL_requires_max_(DISPATCH_LEVEL)
 _Must_inspect_result_
 typedef
 NTSTATUS
-OVPN_CRYPTO_DECRYPT(_In_ OvpnCryptoKeySlot* keySlot, _In_ UCHAR* bufIn, _In_ SIZE_T len, _In_ UCHAR* bufOut, _In_ OvpnCryptoOptions* opts);
+OVPN_CRYPTO_DECRYPT(_In_ OvpnCryptoKeySlot* keySlot, _In_ UCHAR* bufIn, _In_ SIZE_T len, _In_ UCHAR* bufOut, _In_ OvpnCryptoOptions* opts, BOOLEAN allowRekey);
 typedef OVPN_CRYPTO_DECRYPT* POVPN_CRYPTO_DECRYPT;
+
+struct OvpnCryptoPacketLayout
+{
+    ULONG FrontLen;
+    ULONG TailLen;
+};
 
 struct OvpnCryptoContext
 {
@@ -125,7 +133,58 @@ struct OvpnCryptoContext
     POVPN_CRYPTO_DECRYPT Decrypt;
 
     OvpnCryptoOptions Options;
+    OvpnCryptoPacketLayout Layout;
 };
+
+
+VOID
+OvpnCryptoDescribePacketLayout(_In_ const OvpnCryptoContext* cryptoContext, _Out_ OvpnCryptoPacketLayout* layout);
+
+typedef
+NTSTATUS
+OVPN_CRYPTO_RETRY_ROUTINE(_In_ OvpnCryptoContext* cryptoContext, _In_ BOOLEAN allowRekey, _Inout_opt_ PVOID context);
+typedef OVPN_CRYPTO_RETRY_ROUTINE* POVPN_CRYPTO_RETRY_ROUTINE;
+
+struct OvpnCryptoEncryptParams
+{
+    PUCHAR Buffer;
+    SIZE_T Length;
+};
+
+struct OvpnCryptoDecryptParams
+{
+    UCHAR KeyId;
+    PUCHAR CipherText;
+    SIZE_T Length;
+    PUCHAR PlainText;
+};
+
+_Must_inspect_result_
+_IRQL_requires_max_(DISPATCH_LEVEL)
+NTSTATUS
+OvpnCryptoCallWithRetry(
+    _In_ OvpnPeerContext* peer,
+    _In_ BOOLEAN atDpcLevel,
+    _Inout_opt_ PBOOLEAN exclusive,
+    _Inout_opt_ PKIRQL kirql,
+    _In_ POVPN_CRYPTO_RETRY_ROUTINE routine,
+    _Inout_opt_ PVOID context);
+
+_Must_inspect_result_
+_IRQL_requires_max_(DISPATCH_LEVEL)
+NTSTATUS
+OvpnCryptoInvokeEncrypt(
+    _In_ OvpnCryptoContext* cryptoContext,
+    _In_ BOOLEAN allowRekey,
+    _Inout_opt_ PVOID context);
+
+_Must_inspect_result_
+_IRQL_requires_max_(DISPATCH_LEVEL)
+NTSTATUS
+OvpnCryptoInvokeDecrypt(
+    _In_ OvpnCryptoContext* cryptoContext,
+    _In_ BOOLEAN allowRekey,
+    _Inout_opt_ PVOID context);
 
 _Must_inspect_result_
 _IRQL_requires_(PASSIVE_LEVEL)

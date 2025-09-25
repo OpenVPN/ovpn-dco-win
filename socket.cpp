@@ -213,32 +213,24 @@ VOID OvpnSocketDataPacketReceived(_In_ POVPN_DEVICE device, UCHAR op, UINT32 pee
 
     KIRQL kirql = OvpnAcquireSpinLock(dpc, &peer->SpinLock, FALSE);
 
+    BOOLEAN exclusive = FALSE;
+
     OvpnCryptoContext* cryptoContext = &peer->CryptoContext;
-    BOOLEAN aeadTagEnd = cryptoContext->Options.UseEpoch;
-    ULONG pktIdLen = cryptoContext->Options.UseEpoch ? 8 : 4;
 
     if (cryptoContext->Decrypt) {
         UCHAR keyId = OvpnCryptoKeyIdExtract(op);
 
-        OvpnCryptoKeySlot* keySlot = OvpnCryptoKeySlotFromKeyId(cryptoContext, keyId);
-        if (!keySlot) {
-            status = STATUS_INVALID_DEVICE_STATE;
-            LOG_ERROR("keyId <keyId> not found", TraceLoggingValue(keyId, "keyId"));
-        }
-        else {
-            // extend data area in the buffer for plaintext and crypto overhead
-            OvpnBufferPut(buffer, len);
+        // extend data area in the buffer for plaintext and crypto overhead
+        OvpnBufferPut(buffer, len);
 
-            status = cryptoContext->Decrypt(keySlot, cipherTextBuf, len, buffer->Data, &cryptoContext->Options);
+        OvpnCryptoDecryptParams decryptParams = { keyId, cipherTextBuf, len, buffer->Data };
+        status = OvpnCryptoCallWithRetry(peer, dpc, &exclusive, dpc ? nullptr : &kirql, OvpnCryptoInvokeDecrypt, &decryptParams);
 
-            if (NT_SUCCESS(status)) {
-                if (aeadTagEnd) {
-                    OvpnBufferTrim(buffer, len - AEAD_AUTH_TAG_LEN);
-                }
+        if (NT_SUCCESS(status)) {
+            const OvpnCryptoPacketLayout layout = cryptoContext->Layout;
 
-                auto cryptoOverheadFront = OVPN_DATA_V2_LEN + pktIdLen + (aeadTagEnd ? 0 : AEAD_AUTH_TAG_LEN);
-                OvpnBufferPull(buffer, cryptoOverheadFront);
-            }
+            OvpnBufferTrim(buffer, len - layout.TailLen);
+            OvpnBufferPull(buffer, layout.FrontLen);
         }
     }
     else {
@@ -256,7 +248,7 @@ VOID OvpnSocketDataPacketReceived(_In_ POVPN_DEVICE device, UCHAR op, UINT32 pee
 
     auto mss = peer->MSS;
 
-    OvpnReleaseSpinLock(dpc, kirql, &peer->SpinLock, FALSE);
+    OvpnReleaseSpinLock(dpc, kirql, &peer->SpinLock, exclusive);
 
     // decrypt failed - don't proceed
     if (!NT_SUCCESS(status)) {

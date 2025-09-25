@@ -81,19 +81,17 @@ static VOID OvpnTimerXmit(WDFTIMER timer)
 
     auto peerId = peer->PeerId;
     SOCKADDR_STORAGE sa = {0};
+    BOOLEAN exclusive = FALSE;
 
     OvpnCryptoContext* cryptoContext = &peer->CryptoContext;
     if (cryptoContext->Encrypt) {
-        // make space to crypto overhead
-        BOOLEAN aeadTagEnd = cryptoContext->Options.UseEpoch;
-        ULONG pktidLen = cryptoContext->Options.UseEpoch ? 8 : 4;
+        const OvpnCryptoPacketLayout layout = cryptoContext->Layout;
 
-        OvpnTxBufferPush(buffer, OVPN_DATA_V2_LEN + pktidLen + (aeadTagEnd ? 0 : AEAD_AUTH_TAG_LEN));
-        if (aeadTagEnd) {
-            OvpnBufferPut(buffer, AEAD_AUTH_TAG_LEN);
-        }
+        OvpnTxBufferPush(buffer, layout.FrontLen);
+        OvpnBufferPut(buffer, layout.TailLen);
 
-        status = cryptoContext->Encrypt(&cryptoContext->Primary, buffer->Data, buffer->Len, &cryptoContext->Options);
+        OvpnCryptoEncryptParams encryptParams = { buffer->Data, buffer->Len };
+        status = OvpnCryptoCallWithRetry(peer, TRUE, &exclusive, nullptr, OvpnCryptoInvokeEncrypt, &encryptParams);
 
         if (NT_SUCCESS(status)) {
             OvpnSocketCopyRemoteToSockaddr(peer->TransportAddrs.Remote, &sa);
@@ -104,7 +102,7 @@ static VOID OvpnTimerXmit(WDFTIMER timer)
         // LOG_WARN("CryptoContext not initialized");
     }
 
-    ExReleaseSpinLockSharedFromDpcLevel(&peer->SpinLock);
+    OvpnReleaseSpinLock(TRUE, 0, &peer->SpinLock, exclusive);
 
     if (NT_SUCCESS(status)) {
         // start async send, completion handler will return ciphertext buffer to the pool
