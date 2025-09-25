@@ -211,15 +211,7 @@ VOID OvpnSocketDataPacketReceived(_In_ POVPN_DEVICE device, UCHAR op, UINT32 pee
         return;
     }
 
-    // If we're at dispatch level, we can use a small optimization and use function
-    // which is not calling KeRaiseIRQL to raise the IRQL to DISPATCH_LEVEL before attempting to acquire the lock
-    KIRQL kirql = 0;
-    if (dpc) {
-        ExAcquireSpinLockSharedAtDpcLevel(&peer->SpinLock);
-    }
-    else {
-        kirql = ExAcquireSpinLockShared(&peer->SpinLock);
-    }
+    KIRQL kirql = OvpnAcquireSpinLock(dpc, &peer->SpinLock, FALSE);
 
     OvpnCryptoContext* cryptoContext = &peer->CryptoContext;
 
@@ -265,13 +257,7 @@ VOID OvpnSocketDataPacketReceived(_In_ POVPN_DEVICE device, UCHAR op, UINT32 pee
 
     auto mss = peer->MSS;
 
-    // don't forget to release spinlock
-    if (dpc) {
-        ExReleaseSpinLockSharedFromDpcLevel(&peer->SpinLock);
-    }
-    else {
-        ExReleaseSpinLockShared(&peer->SpinLock, kirql);
-    }
+    OvpnReleaseSpinLock(dpc, kirql, &peer->SpinLock, FALSE);
 
     // decrypt failed - don't proceed
     if (!NT_SUCCESS(status)) {

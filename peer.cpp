@@ -250,13 +250,7 @@ OvpnFindPeer(POVPN_DEVICE device, INT32 PeerId, BOOLEAN dpc)
     OvpnPeerContext* peer = nullptr;
     OvpnPeerContext** ptr = nullptr;
 
-    KIRQL kirql = 0;
-    if (dpc) {
-        ExAcquireSpinLockSharedAtDpcLevel(&device->SpinLock);
-    }
-    else {
-        kirql = ExAcquireSpinLockShared(&device->SpinLock);
-    }
+    KIRQL kirql = OvpnAcquireSpinLock(dpc, &device->SpinLock, FALSE);
 
     if (device->Mode == OVPN_MODE_P2P) {
         ptr = (OvpnPeerContext**)RtlGetElementGenericTable(&device->Peers, 0);
@@ -275,12 +269,7 @@ OvpnFindPeer(POVPN_DEVICE device, INT32 PeerId, BOOLEAN dpc)
         InterlockedIncrement(&peer->RefCounter);
     }
 
-    if (dpc) {
-        ExReleaseSpinLockSharedFromDpcLevel(&device->SpinLock);
-    }
-    else {
-        ExReleaseSpinLockShared(&device->SpinLock, kirql);
-    }
+    OvpnReleaseSpinLock(dpc, kirql, &device->SpinLock, FALSE);
 
     return peer;
 }
@@ -292,13 +281,7 @@ OvpnFindPeerVPN4(POVPN_DEVICE device, IN_ADDR addr, BOOLEAN dpc)
     OvpnPeerContext* peer = nullptr;
     OvpnPeerContext** ptr = nullptr;
 
-    KIRQL kirql = 0;
-    if (dpc) {
-        ExAcquireSpinLockSharedAtDpcLevel(&device->SpinLock);
-    }
-    else {
-        kirql = ExAcquireSpinLockShared(&device->SpinLock);
-    }
+    KIRQL kirql = OvpnAcquireSpinLock(dpc, &device->SpinLock, FALSE);
 
     if (device->Mode == OVPN_MODE_P2P) {
         ptr = (OvpnPeerContext**)RtlGetElementGenericTable(&device->Peers, 0);
@@ -316,12 +299,7 @@ OvpnFindPeerVPN4(POVPN_DEVICE device, IN_ADDR addr, BOOLEAN dpc)
         InterlockedIncrement(&peer->RefCounter);
     }
 
-    if (dpc) {
-        ExReleaseSpinLockSharedFromDpcLevel(&device->SpinLock);
-    }
-    else {
-        ExReleaseSpinLockShared(&device->SpinLock, kirql);
-    }
+    OvpnReleaseSpinLock(dpc, kirql, &device->SpinLock, FALSE);
 
     return peer;
 }
@@ -333,13 +311,7 @@ OvpnFindPeerVPN6(POVPN_DEVICE device, IN6_ADDR addr, BOOLEAN dpc)
     OvpnPeerContext* peer = nullptr;
     OvpnPeerContext** ptr = nullptr;
 
-    KIRQL kirql = 0;
-    if (dpc) {
-        ExAcquireSpinLockSharedAtDpcLevel(&device->SpinLock);
-    }
-    else {
-        kirql = ExAcquireSpinLockShared(&device->SpinLock);
-    }
+    KIRQL kirql = OvpnAcquireSpinLock(dpc, &device->SpinLock, FALSE);
 
     if (device->Mode == OVPN_MODE_P2P) {
         ptr = (OvpnPeerContext**)RtlGetElementGenericTable(&device->Peers, 0);
@@ -357,12 +329,7 @@ OvpnFindPeerVPN6(POVPN_DEVICE device, IN6_ADDR addr, BOOLEAN dpc)
         InterlockedIncrement(&peer->RefCounter);
     }
 
-    if (dpc) {
-        ExReleaseSpinLockSharedFromDpcLevel(&device->SpinLock);
-    }
-    else {
-        ExReleaseSpinLockShared(&device->SpinLock, kirql);
-    }
+    OvpnReleaseSpinLock(dpc, kirql, &device->SpinLock, FALSE);
 
     return peer;
 }
@@ -377,13 +344,7 @@ OvpnFindPeerTransport(POVPN_DEVICE device, PSOCKADDR sa, BOOLEAN dpc)
     OvpnPeerContext* peer = nullptr;
     OvpnPeerContext** ptr = nullptr;
 
-    KIRQL kirql = 0;
-    if (dpc) {
-        ExAcquireSpinLockSharedAtDpcLevel(&device->SpinLock);
-    }
-    else {
-        kirql = ExAcquireSpinLockShared(&device->SpinLock);
-    }
+    KIRQL kirql = OvpnAcquireSpinLock(dpc, &device->SpinLock, FALSE);
 
     if (device->Mode == OVPN_MODE_P2P) {
         ptr = (OvpnPeerContext**)RtlGetElementGenericTable(&device->Peers, 0);
@@ -404,12 +365,7 @@ OvpnFindPeerTransport(POVPN_DEVICE device, PSOCKADDR sa, BOOLEAN dpc)
         InterlockedIncrement(&peer->RefCounter);
     }
 
-    if (dpc) {
-        ExReleaseSpinLockSharedFromDpcLevel(&device->SpinLock);
-    }
-    else {
-        ExReleaseSpinLockShared(&device->SpinLock, kirql);
-    }
+    OvpnReleaseSpinLock(dpc, kirql, &device->SpinLock, FALSE);
 
     return peer;
 }
@@ -1133,20 +1089,12 @@ OvpnPeerHandleFloat(OVPN_DEVICE* device, OvpnPeerContext *peer, PSOCKADDR sa, BO
             TraceLoggingIPv6Address(&peer->TransportAddrs.Remote.IPv6.sin6_addr, "src"),
             TraceLoggingIPv6Address(&((SOCKADDR_IN6*)sa)->sin6_addr, "dst"));
 
-    KIRQL kirql = 0;
-
     // remove peer from by-transport-address hashtable
     OvpnDeletePeerFromTable(device, &device->PeersByTransport, peer, "transport");
 
     // modify peer's transport address
     {
-        // exclusive-lock peer
-        if (dpc) {
-            ExAcquireSpinLockExclusiveAtDpcLevel(&peer->SpinLock);
-        }
-        else {
-            kirql = ExAcquireSpinLockExclusive(&peer->SpinLock);
-        }
+        KIRQL kirql = OvpnAcquireSpinLock(dpc, &peer->SpinLock, TRUE);
 
         // update peer's transport address
         if (sa->sa_family == AF_INET)
@@ -1154,13 +1102,7 @@ OvpnPeerHandleFloat(OVPN_DEVICE* device, OvpnPeerContext *peer, PSOCKADDR sa, BO
         else
             RtlCopyMemory(&peer->TransportAddrs.Remote.IPv6, sa, sizeof(SOCKADDR_IN6));
 
-        // exclusive-unlock peer
-        if (dpc) {
-            ExReleaseSpinLockExclusiveFromDpcLevel(&peer->SpinLock);
-        }
-        else {
-            ExReleaseSpinLockExclusive(&peer->SpinLock, kirql);
-        }
+        OvpnReleaseSpinLock(dpc, kirql, &peer->SpinLock, TRUE);
     }
 
     // add peer back to by-transport-address hashtable
