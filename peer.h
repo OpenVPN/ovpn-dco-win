@@ -182,3 +182,48 @@ OvpnPeerGetDelReasonString(OVPN_DEL_PEER_REASON reason);
 
 NTSTATUS
 OvpnPeerHandleFloat(OVPN_DEVICE* device, OvpnPeerContext* peer, PSOCKADDR sa, BOOLEAN dpc);
+
+static inline KIRQL
+OvpnAcquireSpinLock(BOOLEAN dpc, PEX_SPIN_LOCK spinLock, BOOLEAN exclusive)
+{
+    KIRQL kirql = 0;
+    if (dpc) {
+        if (exclusive) {
+            ExAcquireSpinLockExclusiveAtDpcLevel(spinLock);
+        }
+        else {
+            ExAcquireSpinLockSharedAtDpcLevel(spinLock);
+        }
+    }
+    else {
+        if (exclusive) {
+            kirql = ExAcquireSpinLockExclusive(spinLock);
+        }
+        else {
+            kirql = ExAcquireSpinLockShared(spinLock);
+        }
+    }
+
+    return kirql;
+}
+
+static inline VOID
+OvpnReleaseSpinLock(BOOLEAN dpc, KIRQL kirql, PEX_SPIN_LOCK spinLock, BOOLEAN exclusive)
+{
+    if (dpc) {
+        if (exclusive) {
+            ExReleaseSpinLockExclusiveFromDpcLevel(spinLock);
+        }
+        else {
+            ExReleaseSpinLockSharedFromDpcLevel(spinLock);
+        }
+    }
+    else {
+        if (exclusive) {
+            ExReleaseSpinLockExclusive(spinLock, kirql);
+        }
+        else {
+            ExReleaseSpinLockShared(spinLock, kirql);
+        }
+    }
+}
