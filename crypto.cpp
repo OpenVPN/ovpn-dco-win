@@ -842,6 +842,13 @@ OvpnCryptoNewKey(OvpnCryptoContext* cryptoContext, POVPN_CRYPTO_DATA_V2 cryptoDa
             TraceLoggingValue(cryptoData->KeyId, "KeyId"), TraceLoggingValue(cryptoData->PeerId, "PeerId"));
     }
     else if (cryptoData->CipherAlg == OVPN_CIPHER_ALG_NONE) {
+        OvpnCryptoEpochUninitSlot(keySlot);
+
+        keySlot->KeyId = cryptoData->KeyId;
+        keySlot->PeerId = cryptoData->PeerId;
+
+        RtlZeroMemory(&cryptoContext->Options, sizeof(cryptoContext->Options));
+
         cryptoContext->Encrypt = OvpnCryptoEncryptNone;
         cryptoContext->Decrypt = OvpnCryptoDecryptNone;
 
