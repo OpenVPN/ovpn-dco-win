@@ -254,13 +254,13 @@ static
 VOID
 OvpnCryptoMakeEpochNonce(UCHAR *epochIv, UINT64 packet_id_net, UCHAR *nonce)
 {
-    // first 8 bytes of IV (aka nonce) is pktid_net XOR 8 bytes of epoch IV
+    // first 8 bytes of IV (aka nonce) is pktid_net XOR 8 bytes of epoch's implicit IV
     UINT64 iv0;
     RtlCopyMemory(&iv0, epochIv, sizeof(iv0));
     iv0 ^= packet_id_net;
     RtlCopyMemory(nonce, &iv0, sizeof(iv0));
 
-    // last 4 bytes of IV are from epoch IV
+    // last 4 bytes of IV are from epoch's implicit IV
     RtlCopyMemory(nonce + 8, epochIv + 8, 4);
 }
 
@@ -377,7 +377,7 @@ NTSTATUS OvpnCryptoExpandLabel(
     ULONG got = 0;
     GOTO_IF_NOT_NT_SUCCESS(done, status, BCryptKeyDerivation(hKey, &desc, outBytes, outLen, &got, 0));
     if (got != outLen) {
-        status = STATUS_BUFFER_TOO_SMALL;
+        status = STATUS_INTERNAL_ERROR;
     }
 
 done:
@@ -573,43 +573,45 @@ OvpnCryptoCheckReplay(OvpnCryptoKeySlot* keySlot, ULONG64 packet_id_net, UINT16 
     return OvpnPktidRecvVerify(recv, packet_id_net);
 }
 
-static
+/*
+AEAD Nonce :
+
+    [Packet ID] [HMAC keying material]
+    [4 bytes  ] [4 bytes             ]
+    [AEAD nonce total : 12 bytes     ]
+
+TLS wire protocol :
+
+    [DATA_V2 opcode] [Packet ID] [AEAD Auth tag] [ciphertext]
+    [4 bytes       ] [4 bytes  ] [16 bytes     ]
+    [AEAD additional data(AD)  ]
+
+New data format, with epoch keys and 64bit packet id:
+
+    struct aead_packet {
+    int opcode:5;
+    int key_id:3;
+    int peer_id:24;
+    uint64_t packet_id;
+    uint8_t* encrypted_payload;
+    uint8_t[16] authentication_tag;
+    }
+
+    struct packet_id {
+    uint epoch:16;
+    uint epoch_counter:48;
+    }
+
+    authenticated_data = opcode| key_id | peer_id | packet_id
+*/
+
+
+OVPN_CRYPTO_DECRYPT OvpnCryptoDecryptAEAD;
+
+_Use_decl_annotations_
 NTSTATUS
-OvpnCryptoAEADDoWork(BOOLEAN encrypt, OvpnCryptoKeySlot* keySlot, UCHAR *bufIn, SIZE_T len, UCHAR* bufOut, OvpnCryptoOptions* opts, BOOLEAN allowRekey)
+OvpnCryptoDecryptAEAD(OvpnCryptoKeySlot* keySlot, UCHAR* bufIn, SIZE_T len, UCHAR* bufOut, OvpnCryptoOptions* opts, BOOLEAN allowRekey)
 {
-    /*
-    AEAD Nonce :
-
-     [Packet ID] [HMAC keying material]
-     [4 bytes  ] [4 bytes             ]
-     [AEAD nonce total : 12 bytes     ]
-
-    TLS wire protocol :
-
-     [DATA_V2 opcode] [Packet ID] [AEAD Auth tag] [ciphertext]
-     [4 bytes       ] [4 bytes  ] [16 bytes     ]
-     [AEAD additional data(AD)  ]
-
-    New data format, with epoch keys and 64bit packet id:
-
-     struct aead_packet {
-        int opcode:5;
-        int key_id:3;
-        int peer_id:24;
-        uint64_t packet_id;
-        uint8_t* encrypted_payload;
-        uint8_t[16] authentication_tag;
-     }
-
-     struct packet_id {
-        uint epoch:16;
-        uint epoch_counter:48;
-     }
-
-     authenticated_data = opcode| key_id | peer_id | packet_id
-
-    */
-
     NTSTATUS status = STATUS_SUCCESS;
 
     BOOLEAN authTagEnd = opts->UseEpoch;
@@ -629,91 +631,42 @@ OvpnCryptoAEADDoWork(BOOLEAN encrypt, OvpnCryptoKeySlot* keySlot, UCHAR *bufIn, 
     UINT16 rx_epoch = 0;
 
     UCHAR nonce[12];
-    if (encrypt) {
-        // prepend with opcode, key-id and peer-id
-        UINT32 op = OvpnProtoOp32Compose(OVPN_OP_DATA_V2, keySlot->KeyId, keySlot->PeerId);
-        op = RtlUlongByteSwap(op);
-        RtlCopyMemory(bufOut, &op, sizeof(op));
 
-        if (opts->UseEpoch) {
-            if (keySlot->EpochKeySend.Epoch == UINT16_MAX) {
-                return STATUS_BUFFER_OVERFLOW;
-            }
+    if (opts->UseEpoch) {
+        // read packet_id
+        UINT64 packet_id_net;
+        RtlCopyMemory(&packet_id_net, bufIn + OVPN_DATA_V2_LEN, sizeof(packet_id_net));
+        packet_id = RtlUlonglongByteSwap(packet_id_net);
 
-            if (OvpnCryptoAeadUsageLimitReached(opts->AeadUsageLimit, keySlot->Encrypt.PlaintextBlocks, keySlot->PktidXmit.SeqNum) || (keySlot->PktidXmit.SeqNum == PACKET_ID_EPOCH_MAX)) {
-                if (!allowRekey) {
-                    return STATUS_OVPN_CRYPTO_RETRY;
-                }
-
-                OvpnCryptoEpochIterateSendKey(keySlot, opts);
-            }
-
-            // calculate 64-bit packet-id = (epoch << 48) | ctr48
-            UINT64 ctr48 = InterlockedIncrementNoFence64(&keySlot->PktidXmit.SeqNum) & 0x0000FFFFFFFFFFFFULL;
-            packet_id = ((UINT64)keySlot->Encrypt.Epoch << 48) | ctr48;
-
-            // prepend with pktid
-            UINT64 packet_id_net = RtlUlonglongByteSwap(packet_id);
-            RtlCopyMemory(bufOut + OVPN_DATA_V2_LEN, &packet_id_net, sizeof(packet_id_net));
-
-            OvpnCryptoMakeEpochNonce(keySlot->Encrypt.ImplicitIV, packet_id_net, nonce);
-        }
-        else {
-            // calculate pktid
-            UINT32 packet_id_32;
-            GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnPktidXmitNext(&keySlot->PktidXmit, &packet_id_32));
-            ULONG packet_id_net = RtlUlongByteSwap(packet_id_32);
-
-            // calculate nonce, which is pktid + nonce_tail
-            RtlCopyMemory(nonce, &packet_id_net, 4);
-            RtlCopyMemory(nonce + 4, keySlot->Encrypt.ImplicitIV + 4, 8);
-
-            // prepend with pktid
-            RtlCopyMemory(bufOut + OVPN_DATA_V2_LEN, &packet_id_net, sizeof(packet_id_net));
+        // get epoch number and counter
+        rx_epoch = (UINT16)(packet_id >> 48);
+        if (rx_epoch == 0) {
+            LOG_ERROR("Invalid epoch 0");
+            return STATUS_DATA_ERROR;
         }
 
-        // update number of plaintext blocks encrypted. Use the (x + (n-1))/n trick to round up the result to the number of blocks used
-        const ULONGLONG blocksize = AEAD_LIMIT_BLOCKSIZE;
-        ULONGLONG inc = ((ULONGLONG)len + (blocksize - 1)) / blocksize;
-        InterlockedAdd64((volatile LONG64*)&keySlot->Encrypt.PlaintextBlocks, (LONG64)inc);
+        decryptKey = OvpnCryptoEpochLookupDecryptKey(keySlot, rx_epoch);
+        if (decryptKey == NULL) {
+            LOG_ERROR("Data packet with unknown epoch", TraceLoggingValue(rx_epoch, "epoch"));
+            return STATUS_DATA_ERROR;
+        }
+
+        OvpnCryptoMakeEpochNonce(decryptKey->ImplicitIV, packet_id_net, nonce);
     }
     else {
-        if (opts->UseEpoch) {
-            // read packet_id
-            UINT64 packet_id_net;
-            RtlCopyMemory(&packet_id_net, bufIn + OVPN_DATA_V2_LEN, sizeof(packet_id_net));
-            packet_id = RtlUlonglongByteSwap(packet_id_net);
+        RtlCopyMemory(nonce, bufIn + OVPN_DATA_V2_LEN, 4);
+        RtlCopyMemory(nonce + 4, decryptKey->ImplicitIV + 4, 8);
 
-            // get epoch number and counter
-            rx_epoch = (UINT16)(packet_id >> 48);
-            if (rx_epoch == 0) {
-                LOG_ERROR("Invalid epoch 0");
-                return STATUS_DATA_ERROR;
-            }
-
-            decryptKey = OvpnCryptoEpochLookupDecryptKey(keySlot, rx_epoch);
-            if (decryptKey == NULL) {
-                LOG_ERROR("Data packet with unknown epoch", TraceLoggingValue(rx_epoch, "epoch"));
-                return STATUS_DATA_ERROR;
-            }
-
-            OvpnCryptoMakeEpochNonce(decryptKey->ImplicitIV, packet_id_net, nonce);
-        }
-        else {
-            RtlCopyMemory(nonce, bufIn + OVPN_DATA_V2_LEN, 4);
-            RtlCopyMemory(nonce + 4, decryptKey->ImplicitIV + 4, 8);
-
-            packet_id = static_cast<ULONG64>(RtlUlongByteSwap(*reinterpret_cast<UINT32*>(nonce)));
-        }
+        packet_id = static_cast<ULONG64>(RtlUlongByteSwap(*reinterpret_cast<UINT32*>(nonce)));
     }
 
     BCRYPT_AUTHENTICATED_CIPHER_MODE_INFO authInfo;
     BCRYPT_INIT_AUTH_MODE_INFO(authInfo);
     authInfo.pbNonce = nonce;
     authInfo.cbNonce = sizeof(nonce);
-    authInfo.pbTag = (encrypt ? bufOut : bufIn) + OVPN_DATA_V2_LEN + pktidLen + (authTagEnd ? len : 0);
+    authInfo.pbTag = bufIn + OVPN_DATA_V2_LEN + pktidLen + (authTagEnd ? len : 0);
     authInfo.cbTag = AEAD_AUTH_TAG_LEN;
-    authInfo.pbAuthData = (encrypt ? bufOut : bufIn);
+    authInfo.pbAuthData = bufIn;
     authInfo.cbAuthData = OVPN_DATA_V2_LEN + pktidLen;
 
     auto payloadOffset = OVPN_DATA_V2_LEN + pktidLen + (authTagEnd ? 0 : AEAD_AUTH_TAG_LEN);
@@ -722,34 +675,20 @@ OvpnCryptoAEADDoWork(BOOLEAN encrypt, OvpnCryptoKeySlot* keySlot, UCHAR *bufIn, 
 
     // non-chaining mode
     ULONG bytesDone = 0;
-    GOTO_IF_NOT_NT_SUCCESS(done, status, encrypt ?
-        BCryptEncrypt(keySlot->Encrypt.Key, bufIn, (ULONG)len, &authInfo, NULL, 0, bufOut, (ULONG)len, &bytesDone, 0) :
-        BCryptDecrypt(decryptKey->Key, bufIn, (ULONG)len, &authInfo, NULL, 0, bufOut, (ULONG)len, &bytesDone, 0)
-    );
+    GOTO_IF_NOT_NT_SUCCESS(done, status, BCryptDecrypt(decryptKey->Key, bufIn, (ULONG)len, &authInfo, NULL, 0, bufOut, (ULONG)len, &bytesDone, 0));
 
-    if (!encrypt) {
-        status = OvpnCryptoCheckReplay(keySlot, packet_id, rx_epoch, opts, allowRekey);
-        if (status == STATUS_OVPN_CRYPTO_RETRY) {
-            return status;
-        }
+    status = OvpnCryptoCheckReplay(keySlot, packet_id, rx_epoch, opts, allowRekey);
+    if (status == STATUS_OVPN_CRYPTO_RETRY) {
+        return status;
+    }
 
-        if (!NT_SUCCESS(status)) {
-            LOG_ERROR("Invalid packet_id", TraceLoggingUInt64(packet_id, "packet_id"));
-            return STATUS_DATA_ERROR;
-        }
+    if (!NT_SUCCESS(status)) {
+        LOG_ERROR("Invalid packet_id", TraceLoggingUInt64(packet_id, "packet_id"));
+        return STATUS_DATA_ERROR;
     }
 
 done:
     return status;
-}
-
-OVPN_CRYPTO_DECRYPT OvpnCryptoDecryptAEAD;
-
-_Use_decl_annotations_
-NTSTATUS
-OvpnCryptoDecryptAEAD(OvpnCryptoKeySlot* keySlot, UCHAR* bufIn, SIZE_T len, UCHAR* bufOut, OvpnCryptoOptions* opts, BOOLEAN allowRekey)
-{
-    return OvpnCryptoAEADDoWork(FALSE, keySlot, bufIn, len, bufOut, opts, allowRekey);
 }
 
 OVPN_CRYPTO_ENCRYPT OvpnCryptoEncryptAEAD;
@@ -758,10 +697,95 @@ _Use_decl_annotations_
 NTSTATUS
 OvpnCryptoEncryptAEAD(OvpnCryptoKeySlot* keySlot, UCHAR* buf, SIZE_T len, OvpnCryptoOptions* opts, BOOLEAN allowRekey)
 {
-    return OvpnCryptoAEADDoWork(TRUE, keySlot, buf, len, buf, opts, allowRekey);
+    NTSTATUS status = STATUS_SUCCESS;
+
+    BOOLEAN authTagEnd = opts->UseEpoch;
+    ULONG pktidLen = opts->UseEpoch ? 8 : 4;
+    ULONG cryptoOverhead = OVPN_DATA_V2_LEN + AEAD_AUTH_TAG_LEN + pktidLen;
+
+    if (len < cryptoOverhead) {
+        LOG_WARN("Packet too short", TraceLoggingValue(len, "len"));
+        return STATUS_DATA_ERROR;
+    }
+
+    // we prepended buf with crypto overhead
+    len -= cryptoOverhead;
+
+    UINT64 packet_id = 0;
+
+    UCHAR nonce[12];
+
+    // prepend with opcode, key-id and peer-id
+    UINT32 op = OvpnProtoOp32Compose(OVPN_OP_DATA_V2, keySlot->KeyId, keySlot->PeerId);
+    op = RtlUlongByteSwap(op);
+    RtlCopyMemory(buf, &op, sizeof(op));
+
+    if (opts->UseEpoch) {
+        if (keySlot->EpochKeySend.Epoch == UINT16_MAX) {
+            return STATUS_BUFFER_OVERFLOW;
+        }
+
+        if (OvpnCryptoAeadUsageLimitReached(opts->AeadUsageLimit, keySlot->Encrypt.PlaintextBlocks, keySlot->PktidXmit.SeqNum) || (keySlot->PktidXmit.SeqNum == PACKET_ID_EPOCH_MAX)) {
+            if (!allowRekey) {
+                return STATUS_OVPN_CRYPTO_RETRY;
+            }
+
+            OvpnCryptoEpochIterateSendKey(keySlot, opts);
+        }
+
+        // calculate 64-bit packet-id = (epoch << 48) | ctr48
+        // the overflow of pktid is checked above
+        UINT64 ctr48 = InterlockedIncrementNoFence64(&keySlot->PktidXmit.SeqNum) & PACKET_ID_EPOCH_MAX;
+        packet_id = ((UINT64)keySlot->Encrypt.Epoch << 48) | ctr48;
+
+        // prepend with pktid
+        UINT64 packet_id_net = RtlUlonglongByteSwap(packet_id);
+        RtlCopyMemory(buf + OVPN_DATA_V2_LEN, &packet_id_net, sizeof(packet_id_net));
+
+        OvpnCryptoMakeEpochNonce(keySlot->Encrypt.ImplicitIV, packet_id_net, nonce);
+    }
+    else {
+        // calculate pktid
+        UINT32 packet_id_32;
+        GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnPktidXmitNext(&keySlot->PktidXmit, &packet_id_32));
+        ULONG packet_id_net = RtlUlongByteSwap(packet_id_32);
+
+        // calculate nonce, which is pktid + nonce_tail
+        RtlCopyMemory(nonce, &packet_id_net, 4);
+        RtlCopyMemory(nonce + 4, keySlot->Encrypt.ImplicitIV + 4, 8);
+
+        // prepend with pktid
+        RtlCopyMemory(buf + OVPN_DATA_V2_LEN, &packet_id_net, sizeof(packet_id_net));
+    }
+
+    // update number of plaintext blocks encrypted. Use the (x + (n-1))/n trick to round up the result to the number of blocks used
+    const ULONGLONG blocksize = AEAD_LIMIT_BLOCKSIZE;
+    ULONGLONG inc = ((ULONGLONG)len + (blocksize - 1)) / blocksize;
+    InterlockedAdd64((volatile LONG64*)&keySlot->Encrypt.PlaintextBlocks, (LONG64)inc);
+
+    BCRYPT_AUTHENTICATED_CIPHER_MODE_INFO authInfo;
+    BCRYPT_INIT_AUTH_MODE_INFO(authInfo);
+    authInfo.pbNonce = nonce;
+    authInfo.cbNonce = sizeof(nonce);
+    authInfo.pbTag = buf + OVPN_DATA_V2_LEN + pktidLen + (authTagEnd ? len : 0);
+    authInfo.cbTag = AEAD_AUTH_TAG_LEN;
+    authInfo.pbAuthData = buf;
+    authInfo.cbAuthData = OVPN_DATA_V2_LEN + pktidLen;
+
+    auto payloadOffset = OVPN_DATA_V2_LEN + pktidLen + (authTagEnd ? 0 : AEAD_AUTH_TAG_LEN);
+    buf += payloadOffset;
+
+    // non-chaining mode
+    ULONG bytesDone = 0;
+    GOTO_IF_NOT_NT_SUCCESS(done, status, BCryptEncrypt(keySlot->Encrypt.Key, buf, (ULONG)len, &authInfo, NULL, 0, buf, (ULONG)len, &bytesDone, 0));
+
+done:
+    return status;
 }
 
-static VOID OvpnCryptoEpochUninitSlot(OvpnCryptoKeySlot* slot);
+static VOID
+OvpnCryptoEpochUninitSlot(OvpnCryptoKeySlot* slot);
+
 _Use_decl_annotations_
 NTSTATUS
 OvpnCryptoNewKey(OvpnCryptoContext* cryptoContext, POVPN_CRYPTO_DATA_V2 cryptoDataV2, BCRYPT_ALG_HANDLE algHandle, BCRYPT_ALG_HANDLE hkdfAlgHandle)

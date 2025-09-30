@@ -56,7 +56,7 @@ struct OvpnPktidRecv
 	UINT64 IdFloor;
 };
 
-/* Get the next packet ID for xmit */
+/* Get the next packet ID for xmit. Used only for non-epoch crypto. */
 NTSTATUS OvpnPktidXmitNext(_In_ OvpnPktidXmit* px, _Out_ VOID* pktId);
 
 

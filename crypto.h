@@ -245,6 +245,6 @@ OvpnCryptoAeadUsageLimit(OVPN_CIPHER_ALG alg)
         return 0;
 
     default:
-        return (1ull << 36) - 1;
+        return (1ull << 36) - 1; // limit for AES-GCM
     }
 }
