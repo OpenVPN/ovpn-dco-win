@@ -73,3 +73,20 @@ jobs:
           msm\*.msi
           msm\*.msm
           gui\build\Release\*.*
+
+  tests:
+    runs-on: windows-2022
+
+    steps:
+    - uses: actions/checkout@v2
+      with:
+        submodules: true
+
+    - name: Configure CMake tests
+      run: cmake -S tests -B tests/build -A x64
+
+    - name: Build CMake tests
+      run: cmake --build tests/build --config Release
+
+    - name: Run CMake tests
+      run: ctest --test-dir tests/build --build-config Release --output-on-failure

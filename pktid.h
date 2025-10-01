@@ -21,7 +21,9 @@
 
 #pragma once
 
+#if defined(_KERNEL_MODE)
 #include <ntddk.h>
+#endif
 
 struct OvpnPktidXmit
 {

@@ -71,6 +71,7 @@
     <ClCompile Include="bufferpool.cpp" />
     <ClCompile Include="control.cpp" />
     <ClCompile Include="crypto.cpp" />
+    <ClCompile Include="crypto_epoch.cpp" />
     <ClCompile Include="driver.cpp" />
     <ClCompile Include="mss.cpp" />
     <ClCompile Include="notifyqueue.cpp" />
@@ -87,6 +88,7 @@
     <ClInclude Include="bufferpool.h" />
     <ClInclude Include="control.h" />
     <ClInclude Include="crypto.h" />
+    <ClInclude Include="crypto_epoch.h" />
     <ClInclude Include="driver.h" />
     <ClInclude Include="trie.h" />
     <ClInclude Include="mss.h" />

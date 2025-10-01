@@ -25,6 +25,7 @@
 #include <ntddk.h>
 #include <bcrypt.h>
 
+#include "crypto_epoch.h"
 #include "pktid.h"
 #include "uapi\ovpn-dco.h"
 #include "socket.h"
@@ -46,61 +47,6 @@ struct OvpnPeerContext;
 #define OVPN_KEY_ID_MASK 0x07
 #define OVPN_OPCODE_SHIFT 3
 #define OVPN_PEER_ID_MASK 0x00FFFFFF
-#define PACKET_ID_EPOCH_MAX 0x0000FFFFFFFFFFFFull
-
-#define FUTURE_EPOCH_KEYS_COUNT 16
-
-struct OvpnCryptoKeyContext
-{
-    BCRYPT_KEY_HANDLE Key;
-    UCHAR ImplicitIV[12];
-
-    // number of plaintext blocks encrypted using this key
-    UINT64 PlaintextBlocks;
-    UINT16 Epoch;
-};
-
-struct OvpnCryptoEpochKey
-{
-    UCHAR EpochKey[32];
-    UINT16 Epoch;
-};
-
-struct OvpnCryptoKeySlot
-{
-    OvpnCryptoKeyContext Encrypt;
-    OvpnCryptoKeyContext Decrypt;
-
-    // last epoch key used for generating current send data keys
-    OvpnCryptoEpochKey EpochKeySend;
-
-    // epoch key used for the highest receive epoch keys
-    OvpnCryptoEpochKey EpochKeyRecv;
-
-    UCHAR KeyId;
-    INT32 PeerId;
-
-    OvpnPktidXmit PktidXmit;
-    OvpnPktidRecv PktidRecv;
-
-    // future epoch data keys for decryption
-    OvpnCryptoKeyContext FutureEpochKeys[FUTURE_EPOCH_KEYS_COUNT];
-
-    OvpnPktidRecv PktidRecvRetiring;
-    OvpnCryptoKeyContext RetiringEpochDataReceiveKey;
-};
-
-struct OvpnCryptoOptions {
-    // Limit for AEAD cipher, sum of packets + blocks. Will switch to the new epoch when reached.
-    UINT64 AeadUsageLimit;
-
-    BOOLEAN UseEpoch;
-
-    UCHAR KeyLen;
-
-    BCRYPT_ALG_HANDLE HkdfAlgHandle;
-    BCRYPT_ALG_HANDLE AeadAlgHangle;
-};
 
 _Function_class_(OVPN_CRYPTO_ENCRYPT)
 _IRQL_requires_max_(DISPATCH_LEVEL)
