@@ -21,6 +21,7 @@
 
 #pragma once
 
+#if defined(_KERNEL_MODE)
 #include <ntddk.h>
 #include <wdf.h>
 #include <ntintsafe.h>
@@ -29,6 +30,12 @@
 #include <TraceLoggingProvider.h>
 
 TRACELOGGING_DECLARE_PROVIDER(g_hOvpnEtwProvider);
+
+#else
+#include <windows.h>
+#endif
+
+#if defined(_KERNEL_MODE)
 
 #define TraceLoggingFunctionName() TraceLoggingWideString(__FUNCTIONW__, "Func")
 
@@ -106,16 +113,35 @@ TRACELOGGING_DECLARE_PROVIDER(g_hOvpnEtwProvider);
     } \
 } while(0,0)
 
-#define GOTO_IF_NOT_NT_SUCCESS(Label, StatusLValue, Expression, ...) do {\
-    StatusLValue = (Expression); \
-    if (!NT_SUCCESS(StatusLValue)) \
-    { \
-        LOG_NTSTATUS(StatusLValue, \
-            TraceLoggingWideString(L#Expression, "Expression"), \
-            __VA_ARGS__); \
-        goto Label; \
-    } \
-} while(0,0)
+#define GOTO_IF_NOT_NT_SUCCESS(Label, StatusLValue, Expression, ...)          \
+      do                                                                        \
+      {                                                                         \
+          StatusLValue = (Expression);                                          \
+          if (!NT_SUCCESS(StatusLValue))                                        \
+          {                                                                     \
+              LOG_NTSTATUS(StatusLValue,                                        \
+                  TraceLoggingString(#Expression, "Expression"),                \
+                  __VA_ARGS__);                                                 \
+              goto Label;                                                       \
+          }                                                                     \
+      } while (0)
+
+#else   /* user-mode / tests */
+
+#define LOG_INFO(Info, ...)
+
+#define GOTO_IF_NOT_NT_SUCCESS(Label, StatusLValue, Expression, ...)          \
+      do                                                                        \
+      {                                                                         \
+          StatusLValue = (Expression);                                          \
+          if (!NT_SUCCESS(StatusLValue))                                        \
+          {                                                                     \
+              goto Label;                                                       \
+          }                                                                     \
+      } while (0)
+
+#endif
+
 
 #ifndef TraceLoggingIPv4Address
 #define TraceLoggingIPv4Address(value, ...) _tlgArgScalarVal(UINT32, value, TlgInUINT32, (TlgOutIPV4),  __VA_ARGS__)
