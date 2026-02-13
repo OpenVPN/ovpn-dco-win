@@ -27,6 +27,8 @@
 #include <wsk.h>
 
 #define OVPN_SOCKET_RX_PACKET_BUFFER_SIZE 2048
+#define OVPN_BUFFER_HEADROOM 30 // prepend TCP size (2 bytes) + max front crypto overhead (28 bytes)
+#define OVPN_BUFFER_TAILROOM 16 // max AEAD auth tag appended at packet tail (epoch mode)
 
 DECLARE_HANDLE(OVPN_BUFFER_POOL);
 DECLARE_HANDLE(OVPN_TX_BUFFER_POOL);

@@ -243,6 +243,23 @@ OvpnTxProcessPacket(_In_ POVPN_DEVICE device, _In_ POVPN_TXQUEUE queue, _In_ NET
     if (cryptoContext->Encrypt) {
         const OvpnCryptoPacketLayout layout = cryptoContext->Layout;
 
+        if (layout.FrontLen > OVPN_BUFFER_HEADROOM) {
+            status = STATUS_INVALID_BUFFER_SIZE;
+            LOG_ERROR("Packet header exceeds tx headroom",
+                      TraceLoggingValue(layout.FrontLen, "front"),
+                      TraceLoggingValue(OVPN_BUFFER_HEADROOM, "headroom"));
+            goto unlock;
+        }
+
+        if ((buffer->Len + layout.FrontLen + layout.TailLen) > (OVPN_DCO_MTU_MAX + OVPN_BUFFER_HEADROOM + OVPN_BUFFER_TAILROOM)) {
+            status = STATUS_INVALID_BUFFER_SIZE;
+            LOG_ERROR("Packet exceeds tx buffer capacity",
+                      TraceLoggingValue(buffer->Len, "len"),
+                      TraceLoggingValue(layout.FrontLen, "front"),
+                      TraceLoggingValue(layout.TailLen, "tail"));
+            goto unlock;
+        }
+
         OvpnTxBufferPush(buffer, layout.FrontLen);
         OvpnBufferPut(buffer, layout.TailLen);
 
@@ -254,6 +271,7 @@ OvpnTxProcessPacket(_In_ POVPN_DEVICE device, _In_ POVPN_TXQUEUE queue, _In_ NET
         // LOG_WARN("CryptoContext not initialized");
     }
 
+unlock:
     OvpnReleaseSpinLock(FALSE, irql, &peer->SpinLock, exclusive);
 
     if (NT_SUCCESS(status)) {

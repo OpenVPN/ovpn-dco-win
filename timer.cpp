@@ -87,11 +87,24 @@ static VOID OvpnTimerXmit(WDFTIMER timer)
     if (cryptoContext->Encrypt) {
         const OvpnCryptoPacketLayout layout = cryptoContext->Layout;
 
-        OvpnTxBufferPush(buffer, layout.FrontLen);
-        OvpnBufferPut(buffer, layout.TailLen);
+        if (layout.FrontLen > OVPN_BUFFER_HEADROOM) {
+            status = STATUS_INVALID_BUFFER_SIZE;
+            LOG_ERROR("Keepalive header exceeds tx headroom",
+                      TraceLoggingValue(layout.FrontLen, "front"),
+                      TraceLoggingValue(OVPN_BUFFER_HEADROOM, "headroom"));
+        } else if ((buffer->Len + layout.FrontLen + layout.TailLen) > (OVPN_DCO_MTU_MAX + OVPN_BUFFER_HEADROOM + OVPN_BUFFER_TAILROOM)) {
+            status = STATUS_INVALID_BUFFER_SIZE;
+            LOG_ERROR("Keepalive exceeds tx buffer capacity",
+                      TraceLoggingValue(buffer->Len, "len"),
+                      TraceLoggingValue(layout.FrontLen, "front"),
+                      TraceLoggingValue(layout.TailLen, "tail"));
+        } else {
+            OvpnTxBufferPush(buffer, layout.FrontLen);
+            OvpnBufferPut(buffer, layout.TailLen);
 
-        OvpnCryptoEncryptParams encryptParams = { buffer->Data, buffer->Len };
-        status = OvpnCryptoCallWithRetry(peer, TRUE, &exclusive, nullptr, OvpnCryptoInvokeEncrypt, &encryptParams);
+            OvpnCryptoEncryptParams encryptParams = { buffer->Data, buffer->Len };
+            status = OvpnCryptoCallWithRetry(peer, TRUE, &exclusive, nullptr, OvpnCryptoInvokeEncrypt, &encryptParams);
+        }
 
         if (NT_SUCCESS(status)) {
             OvpnSocketCopyRemoteToSockaddr(peer->TransportAddrs.Remote, &sa);
