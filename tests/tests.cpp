@@ -201,6 +201,52 @@ TEST_F(CryptoTest, EpochKeyOverflow)
     ASSERT_EQ(OvpnCryptoEpochLookupDecryptKey(&keySlot, UINT16_MAX), nullptr);
 }
 
+TEST_F(CryptoTest, EpochKeyRotationCarriesReplayWindow)
+{
+    /* Seed PktidRecv with non-trivial state, simulating that some packets
+     * have already been accepted under the current decrypt epoch. After
+     * OvpnCryptoEpochReplaceUpdateRecvKey rotates, this state MUST move to
+     * PktidRecvRetiring -- otherwise captured retiring-epoch packets become
+     * replayable through the empty (zero-initialised) retiring window.
+     *
+     * Mirrors userspace OpenVPN packet_id_move_recv() at
+     * src/openvpn/crypto_epoch.c:325 which is invoked from
+     * epoch_replace_update_recv_key right between the key promotion lines.
+     */
+    OvpnPktidRecv before = {};
+    before.Id       = 0x0000000000000042ULL;
+    before.IdFloor  = 0x0000000000000040ULL;
+    before.Base     = 7;
+    before.Extent   = 100;
+    before.History[0] = 0xFF;
+    before.History[7] = 0x55;
+    before.Expire.QuadPart = 1234567;
+
+    keySlot.PktidRecv = before;
+
+    /* Sanity: retiring window starts at zero (set up by SetUp). */
+    OvpnPktidRecv zero = {};
+    ASSERT_EQ(0, std::memcmp(&keySlot.PktidRecvRetiring, &zero, sizeof(zero)));
+
+    /* Rotate from epoch 1 -> epoch 2. */
+    OvpnCryptoEpochReplaceUpdateRecvKey(&keySlot, 2, &opts);
+
+    /* Security-critical: PktidRecvRetiring MUST inherit the previous current
+     * window. Without this, any captured packet from epoch 1 will be
+     * accepted at least once under the retiring key because PktidRecvRetiring
+     * is still all-zero (Id=0, IdFloor=0, empty History). */
+    ASSERT_EQ(0, std::memcmp(&keySlot.PktidRecvRetiring, &before, sizeof(before)))
+        << "PktidRecvRetiring did not inherit PktidRecv state after rotation; "
+           "captured retiring-epoch packets are replayable.";
+
+    /* Functionally redundant given the wire format embeds the epoch in the
+     * high bits of the 64-bit pktid (the auto-rebase in OvpnPktidRecvVerify
+     * handles the transition), but matches userspace and prevents stale state
+     * from leaking forward if the wire format ever changes. */
+    ASSERT_EQ(0, std::memcmp(&keySlot.PktidRecv, &zero, sizeof(zero)))
+        << "PktidRecv was not reset on rotation.";
+}
+
 TEST_F(CryptoTest, EpochDeriveDataKey)
 {
     OvpnCryptoKeyParameters kp;

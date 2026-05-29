@@ -241,6 +241,13 @@ OvpnCryptoEpochReplaceUpdateRecvKey(OvpnCryptoKeySlot* keySlot, UINT16 new_epoch
 
     keySlot->RetiringEpochDataReceiveKey = keySlot->Decrypt;
 
+    // Carry the replay window forward with the key it polices: the current
+    // PktidRecv becomes the retiring window so already-seen packet IDs under
+    // the old key cannot be replayed during the grace period. Mirrors
+    // packet_id_move_recv() in userspace OpenVPN (src/openvpn/crypto_epoch.c).
+    keySlot->PktidRecvRetiring = keySlot->PktidRecv;
+    RtlZeroMemory(&keySlot->PktidRecv, sizeof(keySlot->PktidRecv));
+
     keySlot->Decrypt = *ctx;
 
     RtlZeroMemory(ctx, sizeof(*ctx));
