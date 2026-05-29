@@ -13,6 +13,11 @@ jobs:
       matrix:
         arch: [x64, ARM64]
         build_conf: [Debug, Release, Debug-Win11, Release-Win11]
+        include:
+          - arch: x64
+            triplet: x64-windows
+          - arch: ARM64
+            triplet: arm64-windows
 
     steps:
     - uses: actions/checkout@v2
@@ -29,7 +34,7 @@ jobs:
       with:
         vcpkgGitCommitId: 'd015e31e90838a4c9dfa3eed45979bc70d9357fc'
         vcpkgArguments: 'asio'
-        vcpkgTriplet: '${{ matrix.arch }}-windows'
+        vcpkgTriplet: '${{ matrix.triplet }}'
 
     - name: Install Wix 3.14
       run: |
