@@ -27,7 +27,7 @@ jobs:
     - name: Restore artifacts, or run vcpkg, build and cache artifacts
       uses: lukka/run-vcpkg@v7.4
       with:
-        vcpkgGitCommitId: 'cafd398be781144787573ca78390e951673c7055'
+        vcpkgGitCommitId: 'd015e31e90838a4c9dfa3eed45979bc70d9357fc'
         vcpkgArguments: 'asio'
         vcpkgTriplet: '${{ matrix.arch }}-windows'
 
