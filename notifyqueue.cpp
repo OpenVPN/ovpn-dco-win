@@ -42,11 +42,7 @@ NotifyQueue::AddDelPeerEvent(int peerId, OVPN_DEL_PEER_REASON delPeerReason)
         return STATUS_MEMORY_NOT_ALLOCATED;
     }
 
-    RtlZeroMemory(event, sizeof(NotifyEvent));
-
-    event->Cmd = OVPN_CMD_DEL_PEER;
-    event->PeerId = peerId;
-    event->DelPeerReason = delPeerReason;
+    FillDelPeerEvent(event, peerId, delPeerReason);
 
     ExInterlockedInsertTailList(&Head, &event->ListEntry, &Lock);
 

@@ -21,9 +21,21 @@
 
 #pragma once
 
+#if defined(_KERNEL_MODE)
 #include <ntddk.h>
-
 #include "uapi/ovpn-dco.h"
+#else
+/* uapi/ovpn-dco.h pulls <winsock2.h> first so it must precede <windows.h>,
+ * otherwise windows.h brings in the legacy <winsock.h> and the two collide
+ * with redefinition errors. */
+#include "uapi/ovpn-dco.h"
+#define WIN32_NO_STATUS     // keep windows.h from redefining STATUS_*
+#include <windows.h>
+#undef WIN32_NO_STATUS
+#include <winternl.h>
+#include <ntstatus.h>       // exposes STATUS_SUCCESS, NT_SUCCESS, etc.
+typedef ULONG_PTR KSPIN_LOCK;
+#endif
 
 struct NotifyEvent {
     LIST_ENTRY ListEntry;
@@ -75,5 +87,17 @@ public:
             break;
         }
         RtlCopyMemory(&evt->FloatAddress, floatAddr, addr_len);
+    }
+
+    template<class T>
+    static VOID FillDelPeerEvent(T* evt, INT32 peerId, OVPN_DEL_PEER_REASON reason)
+    {
+        // Zero first: when *evt aliases an IRP system buffer (METHOD_BUFFERED),
+        // unwritten bytes would otherwise be copied to user mode as kernel pool.
+        RtlZeroMemory(evt, sizeof(T));
+
+        evt->Cmd = OVPN_CMD_DEL_PEER;
+        evt->PeerId = peerId;
+        evt->DelPeerReason = reason;
     }
 };

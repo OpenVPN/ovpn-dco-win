@@ -1,6 +1,10 @@
 ﻿#include <gtest/gtest.h>
 #include <memory>
 
+/* notifyqueue.h must precede crypto_epoch.h: the former pulls <winsock2.h>
+ * (via uapi/ovpn-dco.h) which must be included before <windows.h> brings in
+ * the legacy <winsock.h>. crypto_epoch.h includes <windows.h> first. */
+#include "../notifyqueue.h"
 #include "../crypto_epoch.h"
 
 class CryptoTest : public testing::Test
@@ -262,4 +266,82 @@ TEST_F(CryptoTest, EpochDeriveDataKey)
 
     ASSERT_EQ(0, std::memcmp(kp.Cipher, exp_cipherkey, sizeof(exp_cipherkey)));
     ASSERT_EQ(0, std::memcmp(kp.IV, exp_impl_iv, sizeof(exp_impl_iv)));
+}
+
+/* Regression coverage for the FillDelPeerEvent / FillFloatPeerEvent helpers
+ * used to populate the IRP system buffer for OVPN_IOCTL_NOTIFY_EVENT.
+ *
+ * The buffer returned by WdfRequestRetrieveOutputBuffer aliases a
+ * METHOD_BUFFERED system buffer that the I/O Manager does NOT zero. Any
+ * byte the helper fails to overwrite is copied to user mode as raw
+ * non-paged pool. Poison the buffer first; the helper must leave only
+ * field-controlled bytes and zeros. */
+
+static OVPN_NOTIFY_EVENT MakePoisonedEvent()
+{
+    OVPN_NOTIFY_EVENT evt;
+    std::memset(&evt, 0xAB, sizeof(evt));
+    return evt;
+}
+
+TEST(NotifyEventFill, DelPeerLeavesNoPoolResidue)
+{
+    OVPN_NOTIFY_EVENT evt = MakePoisonedEvent();
+
+    NotifyQueue::FillDelPeerEvent(&evt, 42, OVPN_DEL_PEER_REASON_EXPIRED);
+
+    ASSERT_EQ(evt.Cmd, OVPN_CMD_DEL_PEER);
+    ASSERT_EQ(evt.PeerId, 42);
+    ASSERT_EQ(evt.DelPeerReason, OVPN_DEL_PEER_REASON_EXPIRED);
+
+    /* FloatAddress is not meaningful for OVPN_CMD_DEL_PEER and must be
+     * zero -- otherwise userspace gets ~128 bytes of pool residue plus
+     * the 4-byte alignment hole between DelPeerReason and FloatAddress. */
+    OVPN_NOTIFY_EVENT zero;
+    std::memset(&zero, 0, sizeof(zero));
+    ASSERT_EQ(0, std::memcmp(&evt.FloatAddress, &zero.FloatAddress, sizeof(evt.FloatAddress)))
+        << "FillDelPeerEvent left poisoned bytes in FloatAddress -- this is "
+           "kernel pool leaked to user mode in OvpnDeviceNotifyPeerDel.";
+
+    /* Catch padding-byte leaks (the 4-byte hole at offset 12 on x64). Compare
+     * the full struct against an authoritative zero+fields buffer. */
+    OVPN_NOTIFY_EVENT expected;
+    std::memset(&expected, 0, sizeof(expected));
+    expected.Cmd = OVPN_CMD_DEL_PEER;
+    expected.PeerId = 42;
+    expected.DelPeerReason = OVPN_DEL_PEER_REASON_EXPIRED;
+    ASSERT_EQ(0, std::memcmp(&evt, &expected, sizeof(evt)))
+        << "FillDelPeerEvent left uninitialised padding bytes in the struct.";
+}
+
+TEST(NotifyEventFill, FloatPeerLeavesNoPoolResidue)
+{
+    OVPN_NOTIFY_EVENT evt = MakePoisonedEvent();
+
+    struct sockaddr_in addr;
+    std::memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(1194);
+    addr.sin_addr.s_addr = htonl(0x01020304);
+
+    NotifyQueue::FillFloatPeerEvent(&evt, 7, reinterpret_cast<PSOCKADDR>(&addr));
+
+    ASSERT_EQ(evt.Cmd, OVPN_CMD_FLOAT_PEER);
+    ASSERT_EQ(evt.PeerId, 7);
+
+    /* sockaddr_in occupies the first 16 bytes of sockaddr_storage; the
+     * remaining 112 bytes must be zero, not pool residue. */
+    auto* bytes = reinterpret_cast<const uint8_t*>(&evt.FloatAddress);
+    for (size_t i = sizeof(struct sockaddr_in); i < sizeof(evt.FloatAddress); ++i) {
+        ASSERT_EQ(bytes[i], 0u)
+            << "FillFloatPeerEvent left poison byte 0x" << std::hex << (int)bytes[i]
+            << " at FloatAddress[" << std::dec << i << "] -- pool leak.";
+    }
+
+    /* DelPeerReason is irrelevant for FLOAT_PEER and must be zero (not the
+     * 0xABABABAB poison pattern), to match the explicit RtlZeroMemory in the
+     * helper. */
+    OVPN_DEL_PEER_REASON zeroReason;
+    std::memset(&zeroReason, 0, sizeof(zeroReason));
+    ASSERT_EQ(0, std::memcmp(&evt.DelPeerReason, &zeroReason, sizeof(zeroReason)));
 }

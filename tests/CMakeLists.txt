@@ -22,6 +22,7 @@ target_link_libraries(
     tests
     GTest::gtest_main
     bcrypt
+    ws2_32
 )
 
 include(GoogleTest)
