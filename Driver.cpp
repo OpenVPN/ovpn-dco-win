@@ -492,6 +492,10 @@ OvpnNotifyEvent(POVPN_DEVICE device, WDFREQUEST request, _Out_ ULONG_PTR* bytesR
         OVPN_NOTIFY_EVENT* evt;
         LOG_IF_NOT_NT_SUCCESS(status = WdfRequestRetrieveOutputBuffer(request, sizeof(OVPN_NOTIFY_EVENT), (PVOID*)&evt, nullptr));
         if (NT_SUCCESS(status)) {
+            // METHOD_BUFFERED system buffers are not zero-initialised; field-by-field
+            // copy leaves the 4-byte alignment hole between DelPeerReason and
+            // FloatAddress as raw pool. Zero the whole struct first.
+            RtlZeroMemory(evt, sizeof(*evt));
             evt->Cmd = event->Cmd;
             evt->PeerId = event->PeerId;
             evt->DelPeerReason = event->DelPeerReason;
@@ -923,9 +927,10 @@ OvpnDeviceNotifyPeerDel(POVPN_DEVICE device, INT32 peerId, OVPN_DEL_PEER_REASON 
         ULONG_PTR bytesSent = 0;
         LOG_IF_NOT_NT_SUCCESS(status = WdfRequestRetrieveOutputBuffer(request, sizeof(OVPN_NOTIFY_EVENT), (PVOID*)&evt, nullptr));
         if (NT_SUCCESS(status)) {
-            evt->Cmd = OVPN_CMD_DEL_PEER;
-            evt->PeerId = peerId;
-            evt->DelPeerReason = reason;
+            // FillDelPeerEvent zeroes the METHOD_BUFFERED system buffer before
+            // writing the three meaningful fields, so the unused FloatAddress
+            // and alignment padding don't leak non-paged pool to user mode.
+            NotifyQueue::FillDelPeerEvent(evt, peerId, reason);
             bytesSent = sizeof(OVPN_NOTIFY_EVENT);
         }
         WdfRequestCompleteWithInformation(request, status, bytesSent);
