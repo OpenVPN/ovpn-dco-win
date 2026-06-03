@@ -198,7 +198,10 @@ OvpnEvtIoWrite(WDFQUEUE queue, WDFREQUEST request, size_t length)
     // get request buffer
     PVOID buf;
     size_t bufLen;
-    GOTO_IF_NOT_NT_SUCCESS(error, status, WdfRequestRetrieveInputBuffer(request, 0, &buf, &bufLen));
+    // in MP mode the buffer is prepended with SOCKADDR; require at least
+    // sa_family to be present so the sa_family read below is in-bounds.
+    GOTO_IF_NOT_NT_SUCCESS(error, status, WdfRequestRetrieveInputBuffer(request,
+        device->Mode == OVPN_MODE_MP ? sizeof(USHORT) : 0, &buf, &bufLen));
 
     PSOCKADDR sa = NULL;
 
