@@ -182,12 +182,17 @@ IPTrie::Find(const UCHAR* ip) {
         peer = current->peer;
     }
 
-    ExReleaseSpinLockShared(&Lock, kirql);
-
-    // before returning the peer, increment refcnt
+    // Increment refcnt while still holding the lock. The trie node holds a
+    // reference that is only dropped under the exclusive lock (RemoveByPeerId,
+    // Remove, Cleanup), so the peer cannot be freed out from under us here.
+    // Releasing the lock first would open a window for a concurrent peer
+    // delete to drop the last reference and free the peer before the
+    // increment lands.
     if (peer) {
         InterlockedIncrement(&peer->RefCounter);
     }
+
+    ExReleaseSpinLockShared(&Lock, kirql);
 
     return peer;
 }
