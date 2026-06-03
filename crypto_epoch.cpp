@@ -221,6 +221,17 @@ OvpnCryptoEpochReplaceUpdateRecvKey(OvpnCryptoKeySlot* keySlot, UINT16 new_epoch
         }
     }
 
+    // Callers only reach this with an AEAD-authenticated future epoch, so the
+    // key is always present. Guard the not-found case anyway: without it fki
+    // would be FUTURE_EPOCH_KEYS_COUNT and the ctx below would point one past
+    // the array, type-confusing PktidRecvRetiring as a key context on the
+    // *ctx read and the RtlZeroMemory write. Userspace ASSERTs here; we can't
+    // (release builds compile it out), so bail explicitly.
+    if (fki == FUTURE_EPOCH_KEYS_COUNT) {
+        LOG_ERROR("New epoch not found in future keys", TraceLoggingValue(new_epoch, "epoch"));
+        return;
+    }
+
     OvpnCryptoKeyContext* ctx = &keySlot->FutureEpochKeys[fki];
 
     // Check if the new recv key epoch is higher than the send key epoch. If yes we will replace the send key as well

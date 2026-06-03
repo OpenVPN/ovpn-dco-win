@@ -129,6 +129,9 @@ TRACELOGGING_DECLARE_PROVIDER(g_hOvpnEtwProvider);
 #else   /* user-mode / tests */
 
 #define LOG_INFO(Info, ...)
+#define LOG_WARN(Info, ...)
+#define LOG_ERROR(Error, ...)
+#define LOG_NTSTATUS(Status, ...)
 
 #define GOTO_IF_NOT_NT_SUCCESS(Label, StatusLValue, Expression, ...)          \
       do                                                                        \
