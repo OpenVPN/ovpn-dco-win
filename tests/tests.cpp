@@ -70,6 +70,24 @@ TEST_F(CryptoTest, EpochKeyGeneration) {
     ASSERT_EQ(keySlot.FutureEpochKeys[15].Epoch, 24);
 }
 
+TEST_F(CryptoTest, EpochKeyRotateToHighestFutureKey) {
+    /* Fixture: Decrypt.Epoch == 1, future keys span 2..17 (slot 15 == 17).
+     * Rotating to the highest future epoch (Decrypt + FUTURE_EPOCH_KEYS_COUNT)
+     * is a legitimate protocol fast-forward, but it consumes and zeroes the
+     * last future key. GenerateFutureRecvKeys then read a zeroed
+     * highestFutureKey, collapsed currentHighestKey to 1, and computed
+     * numKeysGenerate = 32 -- turning the RtlMoveMemory into a multi-gigabyte
+     * out-of-bounds copy and the regen loop into negative-index writes.
+     * Pre-fix this crashes; post-fix the whole window regenerates to 18..33. */
+    ASSERT_EQ(keySlot.FutureEpochKeys[15].Epoch, 17);
+
+    OvpnCryptoEpochReplaceUpdateRecvKey(&keySlot, 17, &opts);
+
+    ASSERT_EQ(keySlot.Decrypt.Epoch, 17);
+    ASSERT_EQ(keySlot.FutureEpochKeys[0].Epoch, 18);
+    ASSERT_EQ(keySlot.FutureEpochKeys[15].Epoch, 33);
+}
+
 TEST_F(CryptoTest, EpochKeyRotation) {
     /* should replace send + key recv */
     OvpnCryptoEpochReplaceUpdateRecvKey(&keySlot, 9, &opts);

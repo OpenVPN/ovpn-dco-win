@@ -193,9 +193,10 @@ OvpnCryptoEpochGenerateFutureRecvKeys(OvpnCryptoKeySlot* keySlot, OvpnCryptoOpti
         }
     }
 
-    auto highestFutureKey = &keySlot->FutureEpochKeys[FUTURE_EPOCH_KEYS_COUNT - 1];
-
-    UINT16 currentHighestKey = highestFutureKey->Epoch ? highestFutureKey->Epoch : 1;
+    // Highest generated epoch comes from EpochKeyRecv, like userspace
+    // (crypto_epoch.c:235). Reading the last future-key slot instead breaks
+    // when that slot is consumed/zeroed, overshooting numKeysGenerate.
+    UINT16 currentHighestKey = keySlot->EpochKeyRecv.Epoch;
     UINT16 desiredHighestKey = currentDecryptEpoch + FUTURE_EPOCH_KEYS_COUNT;
     UINT16 numKeysGenerate = desiredHighestKey - currentHighestKey;
 
