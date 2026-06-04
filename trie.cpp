@@ -99,7 +99,10 @@ VOID IPTrie::CleanupNode(TrieNode* node, PLIST_ENTRY cleanupList) {
     CleanupNode(node->children[1], cleanupList);
 
     if (node->peer) {
-        InsertTailList(cleanupList, &node->peer->ListEntry);
+        // if we're last to hold a reference, defer the cleanup by adding the peer to the cleanup list
+        if (InterlockedDecrement(&node->peer->RefCounter) == 0) {
+            InsertTailList(cleanupList, &node->peer->ListEntry);
+        }
         node->peer = nullptr;
     }
 
