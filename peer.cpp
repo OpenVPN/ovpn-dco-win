@@ -479,10 +479,24 @@ OvpnPeerNew(POVPN_DEVICE device, WDFREQUEST request)
 
     GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnAddPeerToTable(device, &device->Peers, peerCtx));
 
-    device->Socket.Socket = socket;
-    device->Socket.Tcp = proto_tcp;
-    RtlZeroMemory(&device->Socket.TcpState, sizeof(OvpnSocketTcpState));
-    RtlZeroMemory(&device->Socket.UdpState, sizeof(OvpnSocketUdpState));
+    // Adopt the new transport socket under the device lock, closing any
+    // previous one. On the P2P re-add path the old peer is deleted above but
+    // its socket is not torn down, so without this the old socket would leak
+    // here with its WSK receive callback still pointing at the device. Mirrors
+    // OvpnStopVPN's lock-protected swap.
+    {
+        KIRQL kirql = ExAcquireSpinLockExclusive(&device->SpinLock);
+        PWSK_SOCKET oldSocket = device->Socket.Socket;
+        device->Socket.Socket = socket;
+        device->Socket.Tcp = proto_tcp;
+        RtlZeroMemory(&device->Socket.TcpState, sizeof(OvpnSocketTcpState));
+        RtlZeroMemory(&device->Socket.UdpState, sizeof(OvpnSocketUdpState));
+        ExReleaseSpinLockExclusive(&device->SpinLock, kirql);
+
+        if (oldSocket != NULL) {
+            LOG_IF_NOT_NT_SUCCESS(OvpnSocketClose(oldSocket));
+        }
+    }
 
     OvpnPeerZeroStats(&device->Stats);
 
