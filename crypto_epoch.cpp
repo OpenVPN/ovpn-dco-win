@@ -148,7 +148,19 @@ OvpnCryptoEpochInitKey(OvpnCryptoKeyContext* ctx, OvpnCryptoEpochKey* epochKey, 
     LOG_INFO("Epoch Data Key", TraceLoggingValue(epochKey->Epoch, "epoch"));
 
     OvpnCryptoKeyParameters key{0};
-    OvpnCryptoEpochDataKeyDerive(&key, epochKey, opts->HkdfAlgHandle, opts->AeadAlgHangle, opts->KeyLen);
+    NTSTATUS status = OvpnCryptoEpochDataKeyDerive(&key, epochKey, opts->HkdfAlgHandle, opts->AeadAlgHangle, opts->KeyLen);
+    if (!NT_SUCCESS(status)) {
+        // A partial failure (e.g. "data_iv" expand fails after the key handle
+        // was created) must not install a usable key with an all-zero IV,
+        // which would make AEAD nonces predictable. Leave ctx without a key.
+        LOG_ERROR("Epoch data key derivation failed", TraceLoggingValue(epochKey->Epoch, "epoch"));
+        if (key.KeyHandle != NULL) {
+            BCryptDestroyKey(key.KeyHandle);
+        }
+        RtlSecureZeroMemory(&key, sizeof(OvpnCryptoKeyParameters));
+        RtlZeroMemory(ctx, sizeof(*ctx));
+        return;
+    }
     ctx->Epoch = key.Epoch;
     ctx->Key = key.KeyHandle;
     RtlCopyMemory(ctx->ImplicitIV, key.IV, sizeof(ctx->ImplicitIV));
