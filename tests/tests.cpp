@@ -5,6 +5,7 @@
  * (via uapi/ovpn-dco.h) which must be included before <windows.h> brings in
  * the legacy <winsock.h>. crypto_epoch.h includes <windows.h> first. */
 #include "../notifyqueue.h"
+#include "../peerstats.h"
 #include "../crypto_epoch.h"
 
 class CryptoTest : public testing::Test
@@ -362,4 +363,37 @@ TEST(NotifyEventFill, FloatPeerLeavesNoPoolResidue)
     OVPN_DEL_PEER_REASON zeroReason;
     std::memset(&zeroReason, 0, sizeof(zeroReason));
     ASSERT_EQ(0, std::memcmp(&evt.DelPeerReason, &zeroReason, sizeof(zeroReason)));
+}
+
+/* OVPN_PEER_STATS has a 4-byte alignment hole between PeerId (offset 0) and
+ * LinkRxBytes (offset 8). OvpnFillPeerStats writes into an un-zeroed
+ * METHOD_BUFFERED system buffer, so that hole must be zeroed or it leaks
+ * non-paged pool to user mode. Poison first; only field-controlled bytes and
+ * zeros may survive. */
+TEST(PeerStatsFill, LeavesNoPoolResidue)
+{
+    OVPN_PEER_STATS s;
+    std::memset(&s, 0xAB, sizeof(s));
+
+    OvpnFillPeerStats(&s, 5, 100, 200, 300, 400);
+
+    ASSERT_EQ(s.PeerId, 5);
+    ASSERT_EQ(s.LinkRxBytes, 100);
+    ASSERT_EQ(s.LinkTxBytes, 200);
+    ASSERT_EQ(s.VpnRxBytes, 300);
+    ASSERT_EQ(s.VpnTxBytes, 400);
+
+    /* Compare the whole struct against an authoritative zero+fields buffer to
+     * catch the alignment-hole leak (and any other uninitialised padding). */
+    OVPN_PEER_STATS expected;
+    std::memset(&expected, 0, sizeof(expected));
+    expected.PeerId = 5;
+    expected.LinkRxBytes = 100;
+    expected.LinkTxBytes = 200;
+    expected.VpnRxBytes = 300;
+    expected.VpnTxBytes = 400;
+    ASSERT_EQ(0, std::memcmp(&s, &expected, sizeof(s)))
+        << "OvpnFillPeerStats left uninitialised padding (the 4-byte hole "
+           "between PeerId and LinkRxBytes) -- kernel pool leaked to user mode "
+           "in OvpnPeerGetStats.";
 }
