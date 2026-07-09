@@ -24,6 +24,7 @@
 
 #include "trace.h"
 #include "peer.h"
+#include "peerstats.h"
 #include "timer.h"
 #include "socket.h"
 
@@ -783,11 +784,8 @@ OvpnPeerGetStatsV2(POVPN_DEVICE device, WDFREQUEST request, ULONG_PTR* bytesRetu
         int i = 0;
         while ((ptr = RtlEnumerateGenericTableWithoutSplaying(&device->Peers, &restartKey)) != NULL) {
             OvpnPeerContext* peer = *(OvpnPeerContext**)ptr;
-            outBuf[i].PeerId = peer->PeerId;
-            outBuf[i].LinkRxBytes = peer->LinkRxBytes;
-            outBuf[i].LinkTxBytes = peer->LinkTxBytes;
-            outBuf[i].VpnRxBytes = peer->VpnRxBytes;
-            outBuf[i].VpnTxBytes = peer->VpnTxBytes;
+            OvpnFillPeerStats(&outBuf[i], peer->PeerId, peer->LinkRxBytes,
+                peer->LinkTxBytes, peer->VpnRxBytes, peer->VpnTxBytes);
             ++i;
         }
 
@@ -809,11 +807,8 @@ OvpnPeerGetStatsV2(POVPN_DEVICE device, WDFREQUEST request, ULONG_PTR* bytesRetu
             goto done;
         }
 
-        outBuf->PeerId = peer->PeerId;
-        outBuf->LinkRxBytes = peer->LinkRxBytes;
-        outBuf->LinkTxBytes = peer->LinkTxBytes;
-        outBuf->VpnRxBytes = peer->VpnRxBytes;
-        outBuf->VpnTxBytes = peer->VpnTxBytes;
+        OvpnFillPeerStats(outBuf, peer->PeerId, peer->LinkRxBytes,
+            peer->LinkTxBytes, peer->VpnRxBytes, peer->VpnTxBytes);
 
         OvpnPeerCtxRelease(peer);
 
