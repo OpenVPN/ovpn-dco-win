@@ -132,13 +132,29 @@ OvpnEvtIoRead(WDFQUEUE queue, WDFREQUEST request, size_t length)
 
     POVPN_DEVICE device = OvpnGetDeviceContext(WdfIoQueueGetDevice(queue));
 
+    // the dequeue and the parking of the request must be atomic with respect
+    // to OvpnSocketControlPacketReceived(), otherwise a packet enqueued in
+    // between is never handed to userspace: the packet sits in
+    // ControlRxBufferQueue while the request sits in PendingReadsQueue and
+    // neither side re-checks the other
+    KIRQL irql = ExAcquireSpinLockExclusive(&device->ControlRxLock);
+
     // do we have pending control packets?
     LIST_ENTRY* entry = OvpnBufferQueueDequeue(device->ControlRxBufferQueue);
     if (entry == NULL) {
         // no pending control packets, move request to manual queue
-        LOG_IF_NOT_NT_SUCCESS(WdfRequestForwardToIoQueue(request, device->PendingReadsQueue));
+        NTSTATUS forwardStatus = WdfRequestForwardToIoQueue(request, device->PendingReadsQueue);
+        ExReleaseSpinLockExclusive(&device->ControlRxLock, irql);
+        if (!NT_SUCCESS(forwardStatus)) {
+            // the request is owned by neither queue now, so complete it here;
+            // leaving it behind would stall the sequential default queue
+            LOG_ERROR("Failed to forward read request", TraceLoggingNTStatus(forwardStatus, "status"));
+            WdfRequestCompleteWithInformation(request, forwardStatus, 0);
+        }
         return;
     }
+
+    ExReleaseSpinLockExclusive(&device->ControlRxLock, irql);
 
     OVPN_RX_BUFFER* buffer = CONTAINING_RECORD(entry, OVPN_RX_BUFFER, QueueListEntry);
 

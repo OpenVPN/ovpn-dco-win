@@ -73,6 +73,11 @@ struct OVPN_DEVICE {
     // buffer queue for received control channel packets
     OVPN_BUFFER_QUEUE ControlRxBufferQueue;
 
+    // serializes the (ControlRxBufferQueue, PendingReadsQueue) pair so that a
+    // packet can never be queued while a read request is being parked, and
+    // vice versa
+    EX_SPIN_LOCK ControlRxLock;
+
     // pool for OVPN_RX_BUFFER entries
     OVPN_RX_BUFFER_POOL RxBufferPool;
 

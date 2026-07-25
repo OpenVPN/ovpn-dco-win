@@ -119,7 +119,11 @@ OvpnSocketControlPacketReceived(_In_ POVPN_DEVICE device, _In_reads_(len) PUCHAR
         totalLen += hdrLen;
     }
 
+    // paired with OvpnEvtIoRead(): retrieving a pending read and queueing the
+    // packet must not interleave, or the packet ends up queued behind a
+    // request that has already given up looking for it
     WDFREQUEST request;
+    KIRQL irql = ExAcquireSpinLockExclusive(&device->ControlRxLock);
     NTSTATUS status = WdfIoQueueRetrieveNextRequest(device->PendingReadsQueue, &request);
     if (!NT_SUCCESS(status)) {
         // add control channel packet to queue
@@ -128,6 +132,7 @@ OvpnSocketControlPacketReceived(_In_ POVPN_DEVICE device, _In_reads_(len) PUCHAR
 
         // fetch buffer
         if (!NT_SUCCESS(OvpnRxBufferPoolGet(device->RxBufferPool, &buffer))) {
+            ExReleaseSpinLockExclusive(&device->ControlRxLock, irql);
             LOG_ERROR("RxBufferPool exhausted");
             InterlockedIncrementNoFence(&device->Stats.LostInControlPackets);
             return;
@@ -144,8 +149,10 @@ OvpnSocketControlPacketReceived(_In_ POVPN_DEVICE device, _In_reads_(len) PUCHAR
 
             // enqueue buffer, it will be dequeued when read request arrives
             OvpnBufferQueueEnqueue(device->ControlRxBufferQueue, &buffer->QueueListEntry);
+            ExReleaseSpinLockExclusive(&device->ControlRxLock, irql);
         }
         else {
+            ExReleaseSpinLockExclusive(&device->ControlRxLock, irql);
             LOG_ERROR("Buffer too small, packet len <pktlen>, buf len <buflen>",
                 TraceLoggingValue(totalLen, "pktlen"), TraceLoggingValue(sizeof(buffer->Data), "buflen"));
 
@@ -153,6 +160,8 @@ OvpnSocketControlPacketReceived(_In_ POVPN_DEVICE device, _In_reads_(len) PUCHAR
         }
     }
     else {
+        ExReleaseSpinLockExclusive(&device->ControlRxLock, irql);
+
         // service IO request right away
         PVOID readBuffer;
         size_t readBufferLength;
