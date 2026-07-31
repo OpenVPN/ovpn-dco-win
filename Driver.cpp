@@ -122,31 +122,10 @@ done:
     return status;
 }
 
-EVT_WDF_IO_QUEUE_IO_READ OvpnEvtIoRead;
-
 _Use_decl_annotations_
 VOID
-OvpnEvtIoRead(WDFQUEUE queue, WDFREQUEST request, size_t length)
+OvpnCompleteReadFromRxBuffer(POVPN_DEVICE device, WDFREQUEST request, OVPN_RX_BUFFER* buffer)
 {
-    UNREFERENCED_PARAMETER(length);
-
-    POVPN_DEVICE device = OvpnGetDeviceContext(WdfIoQueueGetDevice(queue));
-
-    // do we have pending control packets?
-    LIST_ENTRY* entry = OvpnBufferQueueDequeue(device->ControlRxBufferQueue);
-    if (entry == NULL) {
-        // no pending control packets, move request to manual queue
-        NTSTATUS forwardStatus = WdfRequestForwardToIoQueue(request, device->PendingReadsQueue);
-        if (!NT_SUCCESS(forwardStatus)) {
-            // belongs to no queue now; leaving it stalls the sequential default queue
-            LOG_ERROR("WdfRequestForwardToIoQueue failed", TraceLoggingNTStatus(forwardStatus, "status"));
-            WdfRequestCompleteWithInformation(request, forwardStatus, 0);
-        }
-        return;
-    }
-
-    OVPN_RX_BUFFER* buffer = CONTAINING_RECORD(entry, OVPN_RX_BUFFER, QueueListEntry);
-
     NTSTATUS status;
 
     // retrieve IO request buffer
@@ -167,14 +146,63 @@ OvpnEvtIoRead(WDFQUEUE queue, WDFREQUEST request, size_t length)
                 TraceLoggingValue(buffer->Len, "pktsize"), TraceLoggingValue(inputBufferLength, "bufsize"));
         }
 
+        // packet is dropped; the inline path in socket.cpp counts the same failure
+        InterlockedIncrementNoFence(&device->Stats.LostInControlPackets);
+
         bytesSent = 0;
     }
 
+    // return the buffer first: completing can let device remove delete the pool
+    OvpnRxBufferPoolPut(buffer);
+
     // complete IO request
     WdfRequestCompleteWithInformation(request, status, bytesSent);
+}
 
-    // return buffer back to pool
-    OvpnRxBufferPoolPut(buffer);
+EVT_WDF_IO_QUEUE_IO_READ OvpnEvtIoRead;
+
+_Use_decl_annotations_
+VOID
+OvpnEvtIoRead(WDFQUEUE queue, WDFREQUEST request, size_t length)
+{
+    UNREFERENCED_PARAMETER(length);
+
+    POVPN_DEVICE device = OvpnGetDeviceContext(WdfIoQueueGetDevice(queue));
+
+    // do we have pending control packets? no lock needed, we don't park the request
+    LIST_ENTRY* entry = OvpnBufferQueueDequeue(device->ControlRxBufferQueue);
+    if (entry == NULL) {
+        // park first so the receive path can see us, then re-check under the lock,
+        // which must not span the forward - that can dispatch a read to us
+        NTSTATUS forwardStatus = WdfRequestForwardToIoQueue(request, device->PendingReadsQueue);
+        if (!NT_SUCCESS(forwardStatus)) {
+            // belongs to no queue now; leaving it stalls the sequential default queue
+            LOG_ERROR("WdfRequestForwardToIoQueue failed", TraceLoggingNTStatus(forwardStatus, "status"));
+            WdfRequestCompleteWithInformation(request, forwardStatus, 0);
+            return;
+        }
+
+        KIRQL irql = ExAcquireSpinLockExclusive(&device->ControlRxLock);
+        entry = OvpnBufferQueueDequeue(device->ControlRxBufferQueue);
+        if (entry != NULL) {
+            // a packet arrived while we parked; serve it with any parked request
+            if (!NT_SUCCESS(WdfIoQueueRetrieveNextRequest(device->PendingReadsQueue, &request))) {
+                // put it back under the same lock, so it never looks transiently empty
+                OvpnBufferQueueEnqueueHead(device->ControlRxBufferQueue, entry);
+                entry = NULL;
+            }
+        }
+        ExReleaseSpinLockExclusive(&device->ControlRxLock, irql);
+
+        if (entry == NULL) {
+            // request is parked, the receive path will serve it
+            return;
+        }
+
+        LOG_INFO("Served a control packet that raced request parking");
+    }
+
+    OvpnCompleteReadFromRxBuffer(device, request, CONTAINING_RECORD(entry, OVPN_RX_BUFFER, QueueListEntry));
 }
 
 EVT_WDF_IO_QUEUE_IO_READ OvpnEvtIoWrite;
@@ -379,13 +407,19 @@ OvpnStopVPN(_In_ POVPN_DEVICE device)
         LOG_IF_NOT_NT_SUCCESS(OvpnSocketClose(socket));
     }
 
-    // flush buffers in control queue so that client won't get control channel messages from previous session
+    // flush buffers in control queue so that client won't get control channel messages from previous session.
+    // under ControlRxLock: else a reader's put-back re-fills the queue after the drain
+    KIRQL controlRxIrql = ExAcquireSpinLockExclusive(&device->ControlRxLock);
+
     while (LIST_ENTRY* entry = OvpnBufferQueueDequeue(device->ControlRxBufferQueue)) {
         OVPN_RX_BUFFER* buffer = CONTAINING_RECORD(entry, OVPN_RX_BUFFER, QueueListEntry);
         // return buffer back to pool
         OvpnRxBufferPoolPut(buffer);
     }
 
+    ExReleaseSpinLockExclusive(&device->ControlRxLock, controlRxIrql);
+
+    // outside the lock: completing a request can dispatch another one to us
     WDFREQUEST request;
     while (NT_SUCCESS(WdfIoQueueRetrieveNextRequest(device->PendingReadsQueue, &request))) {
         ULONG_PTR bytesCopied = 0;

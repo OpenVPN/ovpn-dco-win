@@ -73,6 +73,9 @@ struct OVPN_DEVICE {
     // buffer queue for received control channel packets
     OVPN_BUFFER_QUEUE ControlRxBufferQueue;
 
+    // serializes the control packet handoff with OvpnSocketControlPacketReceived()
+    EX_SPIN_LOCK ControlRxLock;
+
     // pool for OVPN_RX_BUFFER entries
     OVPN_RX_BUFFER_POOL RxBufferPool;
 
@@ -115,6 +118,10 @@ struct OVPN_DEVICE {
 typedef OVPN_DEVICE * POVPN_DEVICE;
 
 WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(OVPN_DEVICE, OvpnGetDeviceContext)
+
+// Completes a read request from a queued control packet. Not with ControlRxLock held.
+VOID
+OvpnCompleteReadFromRxBuffer(_In_ POVPN_DEVICE device, WDFREQUEST request, _In_ OVPN_RX_BUFFER* buffer);
 
 NTSTATUS
 OvpnDeviceNotifyPeerDel(POVPN_DEVICE device, INT32 peerId, OVPN_DEL_PEER_REASON reason);

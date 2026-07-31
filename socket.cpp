@@ -119,40 +119,10 @@ OvpnSocketControlPacketReceived(_In_ POVPN_DEVICE device, _In_reads_(len) PUCHAR
         totalLen += hdrLen;
     }
 
+    // fast path: hand the packet to a parked read; no lock needed, we queue nothing
     WDFREQUEST request;
     NTSTATUS status = WdfIoQueueRetrieveNextRequest(device->PendingReadsQueue, &request);
-    if (!NT_SUCCESS(status)) {
-        // add control channel packet to queue
-
-        OVPN_RX_BUFFER* buffer;
-
-        // fetch buffer
-        if (!NT_SUCCESS(OvpnRxBufferPoolGet(device->RxBufferPool, &buffer))) {
-            LOG_ERROR("RxBufferPool exhausted");
-            InterlockedIncrementNoFence(&device->Stats.LostInControlPackets);
-            return;
-        }
-
-        if (totalLen <= OVPN_SOCKET_RX_PACKET_BUFFER_SIZE) {
-            if (hdrLen > 0) {
-                // prepend with sockaddr
-                RtlCopyMemory(OvpnBufferPut(buffer, hdrLen), remote, hdrLen);
-            }
-
-            // copy control packet payload
-            RtlCopyMemory(OvpnBufferPut(buffer, len), buf, len);
-
-            // enqueue buffer, it will be dequeued when read request arrives
-            OvpnBufferQueueEnqueue(device->ControlRxBufferQueue, &buffer->QueueListEntry);
-        }
-        else {
-            LOG_ERROR("Buffer too small, packet len <pktlen>, buf len <buflen>",
-                TraceLoggingValue(totalLen, "pktlen"), TraceLoggingValue(sizeof(buffer->Data), "buflen"));
-
-            OvpnRxBufferPoolPut(buffer);
-        }
-    }
-    else {
+    if (NT_SUCCESS(status)) {
         // service IO request right away
         PVOID readBuffer;
         size_t readBufferLength;
@@ -183,6 +153,48 @@ OvpnSocketControlPacketReceived(_In_ POVPN_DEVICE device, _In_reads_(len) PUCHAR
         }
 
         WdfRequestCompleteWithInformation(request, status, bytesSent);
+
+        return;
+    }
+
+    OVPN_RX_BUFFER* buffer;
+
+    // fetch buffer
+    if (!NT_SUCCESS(OvpnRxBufferPoolGet(device->RxBufferPool, &buffer))) {
+        LOG_ERROR("RxBufferPool exhausted");
+        InterlockedIncrementNoFence(&device->Stats.LostInControlPackets);
+        return;
+    }
+
+    if (totalLen > OVPN_SOCKET_RX_PACKET_BUFFER_SIZE) {
+        LOG_ERROR("Buffer too small, packet len <pktlen>, buf len <buflen>",
+            TraceLoggingValue(totalLen, "pktlen"), TraceLoggingValue(sizeof(buffer->Data), "buflen"));
+
+        OvpnRxBufferPoolPut(buffer);
+        return;
+    }
+
+    if (hdrLen > 0) {
+        // prepend with sockaddr
+        RtlCopyMemory(OvpnBufferPut(buffer, hdrLen), remote, hdrLen);
+    }
+
+    // copy control packet payload
+    RtlCopyMemory(OvpnBufferPut(buffer, len), buf, len);
+
+    // paired with OvpnEvtIoRead(): the retrieve and enqueue must be atomic against it
+    KIRQL irql = ExAcquireSpinLockExclusive(&device->ControlRxLock);
+    status = WdfIoQueueRetrieveNextRequest(device->PendingReadsQueue, &request);
+    if (!NT_SUCCESS(status)) {
+        // enqueue buffer, it will be dequeued when read request arrives
+        OvpnBufferQueueEnqueue(device->ControlRxBufferQueue, &buffer->QueueListEntry);
+    }
+    ExReleaseSpinLockExclusive(&device->ControlRxLock, irql);
+
+    if (NT_SUCCESS(status)) {
+        LOG_INFO("Serving a read request that raced control packet queueing");
+
+        OvpnCompleteReadFromRxBuffer(device, request, buffer);
     }
 }
 
