@@ -136,7 +136,12 @@ OvpnEvtIoRead(WDFQUEUE queue, WDFREQUEST request, size_t length)
     LIST_ENTRY* entry = OvpnBufferQueueDequeue(device->ControlRxBufferQueue);
     if (entry == NULL) {
         // no pending control packets, move request to manual queue
-        LOG_IF_NOT_NT_SUCCESS(WdfRequestForwardToIoQueue(request, device->PendingReadsQueue));
+        NTSTATUS forwardStatus = WdfRequestForwardToIoQueue(request, device->PendingReadsQueue);
+        if (!NT_SUCCESS(forwardStatus)) {
+            // belongs to no queue now; leaving it stalls the sequential default queue
+            LOG_ERROR("WdfRequestForwardToIoQueue failed", TraceLoggingNTStatus(forwardStatus, "status"));
+            WdfRequestCompleteWithInformation(request, forwardStatus, 0);
+        }
         return;
     }
 
