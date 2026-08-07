@@ -51,6 +51,21 @@ HKR, Ndi,               Service,    0, %ovpn-dco.Name%
 [Drivers_Dir]
 ovpn-dco.sys
 
+; Security descriptor for the device object, written to the device's hardware key.
+; The driver also assigns this descriptor when it creates the device, but a value
+; here is applied by the PnP manager and takes precedence, so it is the only place
+; that overrides a descriptor coming from the device setup class.
+;
+; SYSTEM and Administrators full control, Everyone read/write/execute, restricted
+; code read/execute - the same access the device object gets by default on a system
+; where a non-elevated openvpn.exe can open it.
+[ovpn-dco_Device.NT.HW]
+AddReg=ovpn-dco_Security_AddReg
+
+[ovpn-dco_Security_AddReg]
+HKR,,DeviceCharacteristics,0x10001,0x0100 ; FILE_DEVICE_SECURE_OPEN
+HKR,,Security,,"D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGWGX;;;WD)(A;;GRGX;;;RC)"
+
 [ovpn-dco_Device.NT.Services]
 AddService = ovpn-dco,%SPSVCINST_ASSOCSERVICE%, ovpn-dco_Service_Inst
 
