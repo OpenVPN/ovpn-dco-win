@@ -81,12 +81,13 @@ IPTrie::Cleanup() {
 
     ExReleaseSpinLockExclusive(&Lock, oldIrql);
 
-    // Perform deferred cleanup of peers outside the lock
+    // Perform deferred cleanup of peers outside the lock. CleanupNode() has
+    // already dropped the reference, so this is the free rather than a release.
     PLIST_ENTRY entry;
     while (!IsListEmpty(&cleanupList)) {
         entry = RemoveHeadList(&cleanupList);
         OvpnPeerContext* peer = CONTAINING_RECORD(entry, OvpnPeerContext, ListEntry);
-        OvpnPeerCtxRelease(peer);
+        OvpnPeerCtxFree(peer);
     }
 
     LOG_EXIT();
@@ -210,12 +211,13 @@ IPTrie::RemoveByPeerId(INT32 peerId) {
     root = RemoveByPeerId(root, peerId, &cleanupList);
     ExReleaseSpinLockExclusive(&Lock, oldIrql);
 
-    // perform cleanup outside of the lock
+    // perform cleanup outside of the lock. RemoveByPeerId() has already
+    // dropped the reference, so this is the free rather than a release.
     PLIST_ENTRY entry;
     while (!IsListEmpty(&cleanupList)) {
         entry = RemoveHeadList(&cleanupList);
         OvpnPeerContext* peer = CONTAINING_RECORD(entry, OvpnPeerContext, ListEntry);
-        OvpnPeerCtxRelease(peer);
+        OvpnPeerCtxFree(peer);
     }
 }
 

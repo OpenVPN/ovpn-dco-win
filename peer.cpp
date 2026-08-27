@@ -45,7 +45,11 @@ _Use_decl_annotations_
 VOID
 OvpnPeerCtxRelease(OvpnPeerContext* peer)
 {
-    if (InterlockedDecrement(&peer->RefCounter) <= 0) {
+    // an underflow must leak the peer rather than free it twice
+    auto refCounter = InterlockedDecrement(&peer->RefCounter);
+    NT_ASSERT(refCounter >= 0);
+
+    if (refCounter == 0) {
         auto peerId = peer->PeerId;
         OvpnPeerCtxFree(peer);
         LOG_INFO("Peer freed", TraceLoggingValue(peerId, "peer-id"));
@@ -379,7 +383,11 @@ OvpnDeletePeerFromTable(POVPN_DEVICE device, RTL_GENERIC_TABLE* table, OvpnPeerC
     auto pp = &peer;
 
     auto kirql = ExAcquireSpinLockExclusive(&device->SpinLock);
-    if (RtlDeleteElementGenericTable(table, pp)) {
+
+    // the tables are keyed by address, not by identity - a colliding key
+    // resolves to another peer, whose entry we must not delete
+    auto** ptr = (OvpnPeerContext**)RtlLookupElementGenericTable(table, pp);
+    if ((ptr != nullptr) && (*ptr == peer) && RtlDeleteElementGenericTable(table, pp)) {
         LOG_INFO("Peer deleted from the table", TraceLoggingValue(tableName, "table"), TraceLoggingValue(peerId, "peer-id"));
         cleanupPeer = peer;
     }
@@ -579,17 +587,19 @@ OvpnMPPeerNew(POVPN_DEVICE device, WDFREQUEST request)
     // create peer-specific timer
     GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnTimerCreate(device->WdfDevice, peerCtx, &peerCtx->Timer));
 
+    // a peer indexed by peer-id but missing from a secondary table is still
+    // reachable and unsafe to delete, so insert into all tables or none
     GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnAddPeerToTable(device, &device->Peers, peerCtx));
-    
+
     if (peer->VpnAddr4.S_un.S_addr != INADDR_ANY) {
-        LOG_IF_NOT_NT_SUCCESS(status = OvpnAddPeerToTable(device, &device->PeersByVpn4, peerCtx));
+        GOTO_IF_NOT_NT_SUCCESS(rollback, status, OvpnAddPeerToTable(device, &device->PeersByVpn4, peerCtx));
     }
 
     if (RtlCompareMemory(&peer->VpnAddr6, &ovpn_in6addr_any, sizeof(IN6_ADDR)) != sizeof(IN6_ADDR)) {
-        LOG_IF_NOT_NT_SUCCESS(status = OvpnAddPeerToTable(device, &device->PeersByVpn6, peerCtx));
+        GOTO_IF_NOT_NT_SUCCESS(rollback, status, OvpnAddPeerToTable(device, &device->PeersByVpn6, peerCtx));
     }
 
-    LOG_IF_NOT_NT_SUCCESS(status = OvpnAddPeerToTable(device, &device->PeersByTransport, peerCtx));
+    GOTO_IF_NOT_NT_SUCCESS(rollback, status, OvpnAddPeerToTable(device, &device->PeersByTransport, peerCtx));
 
     if (ipv4) {
         LOG_INFO("Peer added", TraceLoggingValue(peer->PeerId, "peer-id"),
@@ -603,6 +613,15 @@ OvpnMPPeerNew(POVPN_DEVICE device, WDFREQUEST request)
             TraceLoggingIPv4Address(peer->VpnAddr4.S_un.S_addr, "VPN IPv4"),
             TraceLoggingIPv6Address(&peer->VpnAddr6, "VPN IPv6"));
     }
+
+    goto done;
+
+rollback:
+    // tables the peer never entered report it as not found
+    OvpnDeletePeerFromTable(device, &device->PeersByTransport, peerCtx, "transport");
+    OvpnDeletePeerFromTable(device, &device->PeersByVpn6, peerCtx, "vpn6");
+    OvpnDeletePeerFromTable(device, &device->PeersByVpn4, peerCtx, "vpn4");
+    OvpnDeletePeerFromTable(device, &device->Peers, peerCtx, "peers");
 
 done:
     if (peerCtx != nullptr) {
