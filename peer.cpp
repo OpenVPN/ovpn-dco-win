@@ -28,16 +28,43 @@
 #include "timer.h"
 #include "socket.h"
 
+// context for the per-peer cleanup work item (see OvpnPeerCtxFree)
+typedef struct _OVPN_PEER_CLEANUP_CONTEXT {
+    OvpnPeerContext* Peer;
+} OVPN_PEER_CLEANUP_CONTEXT, * POVPN_PEER_CLEANUP_CONTEXT;
+
+WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(OVPN_PEER_CLEANUP_CONTEXT, OvpnGetPeerCleanupContext);
+
+EVT_WDF_WORKITEM OvpnPeerCleanupWorkItem;
+
 _Use_decl_annotations_
 OvpnPeerContext*
-OvpnPeerCtxAlloc()
+OvpnPeerCtxAlloc(WDFDEVICE device)
 {
     OvpnPeerContext* peer = (OvpnPeerContext*)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(OvpnPeerContext), 'ovpn');
-    if (peer != NULL) {
-        RtlZeroMemory(peer, sizeof(OvpnPeerContext));
-        InitializeListHead(&peer->ListEntry);
-        InterlockedIncrement(&peer->RefCounter);
-    }    
+    if (peer == NULL) {
+        return NULL;
+    }
+
+    RtlZeroMemory(peer, sizeof(OvpnPeerContext));
+    InitializeListHead(&peer->ListEntry);
+    InterlockedIncrement(&peer->RefCounter);
+
+    // Pre-create the work item OvpnPeerCtxFree() uses to defer teardown to
+    // PASSIVE_LEVEL: WdfWorkItemCreate() cannot run at DISPATCH, so it must
+    // exist up front. Parented to the device so it outlives the peer it frees.
+    WDF_OBJECT_ATTRIBUTES attributes;
+    WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&attributes, OVPN_PEER_CLEANUP_CONTEXT);
+    attributes.ParentObject = device;
+
+    WDF_WORKITEM_CONFIG workItemConfig;
+    WDF_WORKITEM_CONFIG_INIT(&workItemConfig, OvpnPeerCleanupWorkItem);
+
+    if (!NT_SUCCESS(WdfWorkItemCreate(&workItemConfig, &attributes, &peer->CleanupWorkItem))) {
+        ExFreePoolWithTag(peer, 'ovpn');
+        return NULL;
+    }
+
     return peer;
 }
 
@@ -56,26 +83,67 @@ OvpnPeerCtxRelease(OvpnPeerContext* peer)
     }
 }
 
-_Use_decl_annotations_
-VOID
-OvpnPeerCtxFree(OvpnPeerContext* peer)
+// Actual teardown of a peer. Must run at PASSIVE_LEVEL so the keepalive timer
+// can be stopped synchronously: WdfTimerStop(timer, TRUE) waits for a tick that
+// may be running on another core to finish before we free the peer it derefs.
+_IRQL_requires_(PASSIVE_LEVEL)
+static VOID
+OvpnPeerCtxFreeAtPassive(OvpnPeerContext* peer)
 {
+    NT_ASSERT(KeGetCurrentIrql() == PASSIVE_LEVEL);
+
     // Detach the timer while holding the lock to prevent new callbacks
     auto irql = ExAcquireSpinLockExclusive(&peer->SpinLock);
     WDFTIMER timer = peer->Timer;
     peer->Timer = WDF_NO_HANDLE;
     ExReleaseSpinLockExclusive(&peer->SpinLock, irql);
 
-    // Stop the timer outside the lock. Wait only if we're at PASSIVE_LEVEL
+    // Stop the timer outside the lock and wait: this drains any tick already
+    // running on another core, so no callback can deref the peer after we free it
     if (timer != WDF_NO_HANDLE) {
-        WdfTimerStop(timer, KeGetCurrentIrql() == PASSIVE_LEVEL);
+        WdfTimerStop(timer, TRUE);
         WdfObjectDelete(timer);
     }
 
     // Crypto context can be safely cleaned up after the timer is gone
     OvpnCryptoUninit(&peer->CryptoContext);
 
+    WDFWORKITEM cleanupWorkItem = peer->CleanupWorkItem;
+
     ExFreePoolWithTag(peer, 'ovpn');
+
+    if (cleanupWorkItem != WDF_NO_HANDLE) {
+        WdfObjectDelete(cleanupWorkItem);
+    }
+}
+
+_Use_decl_annotations_
+VOID
+OvpnPeerCleanupWorkItem(WDFWORKITEM workItem)
+{
+    OvpnPeerCtxFreeAtPassive(OvpnGetPeerCleanupContext(workItem)->Peer);
+}
+
+_Use_decl_annotations_
+VOID
+OvpnPeerCtxFree(OvpnPeerContext* peer)
+{
+    // The keepalive timer holds a raw pointer to this peer and its tick runs at
+    // DISPATCH_LEVEL. If we are already at PASSIVE_LEVEL we can stop the timer
+    // synchronously and free right here. At DISPATCH_LEVEL we must not:
+    // WdfTimerStop(timer, TRUE) cannot wait at DISPATCH, and would self-deadlock
+    // when the last reference is dropped from inside the timer's own callback
+    // (the keepalive-timeout self-delete). Defer the free to a PASSIVE work item.
+    if (KeGetCurrentIrql() == PASSIVE_LEVEL) {
+        OvpnPeerCtxFreeAtPassive(peer);
+        return;
+    }
+
+    // Defer to the work item, which frees at PASSIVE_LEVEL. It is created in
+    // OvpnPeerCtxAlloc(), which fails the allocation if it cannot be created, so
+    // a live peer always has one.
+    OvpnGetPeerCleanupContext(peer->CleanupWorkItem)->Peer = peer;
+    WdfWorkItemEnqueue(peer->CleanupWorkItem);
 }
 
 _Use_decl_annotations_
@@ -466,7 +534,7 @@ OvpnPeerNew(POVPN_DEVICE device, WDFREQUEST request)
     BOOLEAN proto_tcp = peer->Proto == OVPN_PROTO_TCP;
     SIZE_T remoteAddrSize = peer->Remote.Addr4.sin_family == AF_INET ? sizeof(peer->Remote.Addr4) : sizeof(peer->Remote.Addr6);
 
-    peerCtx = OvpnPeerCtxAlloc();
+    peerCtx = OvpnPeerCtxAlloc(device->WdfDevice);
     if (peerCtx == NULL) {
         status = STATUS_NO_MEMORY;
         goto done;
@@ -564,7 +632,7 @@ OvpnMPPeerNew(POVPN_DEVICE device, WDFREQUEST request)
     }
 
     // allocate peer
-    peerCtx = OvpnPeerCtxAlloc();
+    peerCtx = OvpnPeerCtxAlloc(device->WdfDevice);
     if (peerCtx == NULL) {
         status = STATUS_NO_MEMORY;
         goto done;
