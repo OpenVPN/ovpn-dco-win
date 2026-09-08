@@ -95,3 +95,55 @@ jobs:
 
     - name: Run CMake tests
       run: ctest --test-dir tests/build --build-config Release --output-on-failure
+
+  analyze:
+    name: CodeQL (Windows driver)
+    runs-on: windows-2022
+    permissions:
+      # required to upload results to GitHub code scanning
+      security-events: write
+      # required to fetch the microsoft/windows-drivers CodeQL pack from GHCR
+      packages: read
+      actions: read
+      contents: read
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: true
+
+    - name: Add MSBuild to PATH
+      uses: microsoft/setup-msbuild@v2
+      with:
+        msbuild-architecture: x64
+
+    # windows-drivers depends on microsoft/cpp-queries, which the CodeQL Action
+    # does not fetch transitively. Pre-download both into the shared package
+    # cache so the driver suite resolves without listing (and running) cpp-queries
+    # as its own pack.
+    - name: Pre-fetch driver query pack and its dependency
+      shell: pwsh
+      run: |
+        $ver = "2.26.4"
+        $zip = "$env:RUNNER_TEMP\codeql.zip"
+        Invoke-WebRequest -Uri "https://github.com/github/codeql-cli-binaries/releases/download/v$ver/codeql-win64.zip" -OutFile $zip
+        Expand-Archive -Path $zip -DestinationPath "$env:RUNNER_TEMP\codeql-cli" -Force
+        & "$env:RUNNER_TEMP\codeql-cli\codeql\codeql.exe" pack download microsoft/windows-drivers@1.10.0 microsoft/cpp-queries@0.0.5
+
+    - name: Initialize CodeQL
+      uses: github/codeql-action/init@v3
+      with:
+        languages: c-cpp
+        # we build the driver ourselves below (autobuild can't drive the WDK project)
+        build-mode: manual
+        config-file: ./.github/codeql/codeql-config.yml
+
+    # only the driver project is needed; it has no vcpkg/asio dependency.
+    # /t:Rebuild guarantees a clean compile so CodeQL traces every file.
+    - name: Build driver (traced by CodeQL)
+      run: msbuild /m /t:Rebuild /p:Configuration=Release /p:Platform=x64 ovpn-dco-win.vcxproj
+
+    - name: Perform CodeQL Analysis
+      uses: github/codeql-action/analyze@v3
+      with:
+        category: "/language:c-cpp"
