@@ -1,0 +1,12 @@
+name: "ovpn-dco-win driver CodeQL config"
+
+# Do not run CodeQL's default cpp queries.
+disable-default-queries: true
+
+# Run only the Microsoft Windows driver pack's default suite
+# (windows-driver-suites/recommended.qls) - the same checks build_all.bat's
+# :runql target runs. Its microsoft/cpp-queries dependency is pre-fetched by the
+# "Pre-fetch driver query pack" workflow step (the action does not fetch it
+# transitively), so it is available for resolution but not run as its own pack.
+packs:
+  - microsoft/windows-drivers@1.10.0
