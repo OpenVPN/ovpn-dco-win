@@ -33,6 +33,9 @@
 #include "socket.h"
 #include "peer.h"
 
+// how often OvpnSocketSyncOp logs while a WSK operation stays pending
+#define OVPN_SOCKET_SYNC_OP_WARN_INTERVAL_SEC 10
+
 IO_COMPLETION_ROUTINE OvpnSocketSyncOpCompletionRoutine;
 
 _Use_decl_annotations_
@@ -77,7 +80,21 @@ OvpnSocketSyncOp(_In_z_ CHAR* opName, OP op, SUCCESS success)
     }
 
     if (status == STATUS_PENDING) {
-        KeWaitForSingleObject(&event, Executive, KernelMode, FALSE, NULL);
+        // Wait in bounded slices and log while the operation stays pending, so a
+        // WSK call that never completes shows up in the trace instead of silently
+        // wedging the calling thread (see issue #142). We never give up on the
+        // wait: the IRP and the event live on this stack and belong to WSK until
+        // it completes them.
+        LARGE_INTEGER slice;
+        slice.QuadPart = -10LL * 1000 * 1000 * OVPN_SOCKET_SYNC_OP_WARN_INTERVAL_SEC; // relative, 100ns units
+        ULONG pendingSec = 0;
+        while (KeWaitForSingleObject(&event, Executive, KernelMode, FALSE, &slice) == STATUS_TIMEOUT) {
+            pendingSec += OVPN_SOCKET_SYNC_OP_WARN_INTERVAL_SEC;
+            LOG_WARN("<op> still pending after <sec> seconds", TraceLoggingValue(opName, "op"), TraceLoggingValue(pendingSec, "sec"));
+        }
+        if (pendingSec != 0) {
+            LOG_WARN("<op> completed after <sec>+ seconds", TraceLoggingValue(opName, "op"), TraceLoggingValue(pendingSec, "sec"));
+        }
         status = irp->IoStatus.Status;
         if (!NT_SUCCESS(status)) {
             LOG_ERROR("<op> error after wait, irp->IoStatus.status = <status>", TraceLoggingValue(opName, "op"), TraceLoggingNTStatus(status, "status"));
