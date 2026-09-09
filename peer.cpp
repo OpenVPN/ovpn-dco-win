@@ -289,6 +289,9 @@ OvpnCleanupPeerTable(POVPN_DEVICE device, RTL_GENERIC_TABLE* peers)
 
     while (!RtlIsGenericTableEmpty(peers)) {
         PVOID ptr = RtlGetElementGenericTable(peers, 0);
+        if (ptr == nullptr) {
+            break;
+        }
         OvpnPeerContext* peer = *(OvpnPeerContext**)ptr;
         RtlDeleteElementGenericTable(peers, ptr);
 
