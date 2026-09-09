@@ -205,7 +205,7 @@ OvpnEvtIoRead(WDFQUEUE queue, WDFREQUEST request, size_t length)
     OvpnCompleteReadFromRxBuffer(device, request, CONTAINING_RECORD(entry, OVPN_RX_BUFFER, QueueListEntry));
 }
 
-EVT_WDF_IO_QUEUE_IO_READ OvpnEvtIoWrite;
+EVT_WDF_IO_QUEUE_IO_WRITE OvpnEvtIoWrite;
 
 _Use_decl_annotations_
 VOID

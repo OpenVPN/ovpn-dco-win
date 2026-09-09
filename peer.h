@@ -46,6 +46,11 @@ struct OvpnPeerContext
     // 1-sec timer which handles ping intervals and keepalive timeouts
     WDFTIMER Timer;
 
+    // pre-created work item used to defer OvpnPeerCtxFree() to PASSIVE_LEVEL
+    // when the last reference is dropped at DISPATCH_LEVEL, so the timer can be
+    // stopped synchronously (draining any running tick) before the peer is freed
+    WDFWORKITEM CleanupWorkItem;
+
     UINT16 MSS;
 
     struct {
@@ -71,7 +76,7 @@ struct OvpnPeerContext
 
 _Must_inspect_result_
 OvpnPeerContext*
-OvpnPeerCtxAlloc();
+OvpnPeerCtxAlloc(_In_ WDFDEVICE device);
 
 VOID
 OvpnPeerCtxFree(_In_ OvpnPeerContext*);
