@@ -35,8 +35,6 @@ struct OvpnPeerContext;
 #define OVPN_DATA_V2_LEN 4
 #define AEAD_AUTH_TAG_LEN 16
 
-#define AEAD_LIMIT_BLOCKSIZE 16
-
 #if DBG
 // Checked-build test hook, set from the driver's Parameters key in
 // DriverEntry. Caps the AEAD usage limit of every new key so epochs rotate
@@ -153,16 +151,6 @@ static inline
 UCHAR OvpnCryptoOpcodeExtract(UCHAR op)
 {
     return op >> OVPN_OPCODE_SHIFT;
-}
-
-static inline
-BOOLEAN
-OvpnCryptoAeadUsageLimitReached(UINT64 limit, UINT64 plaintextBlocks, UINT64 highestPid)
-{
-    /* This is the  q + s <=  p^(1/2) * 2^(129/2) - 1 calculation where
-     * q is the number of protected messages (highest_pid)
-     * s Total plaintext length in all messages (in blocks) */
-    return ((limit > 0) && (plaintextBlocks + highestPid) > limit);
 }
 
 static inline
