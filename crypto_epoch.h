@@ -101,28 +101,41 @@ NTSTATUS OvpnCryptoMakeLabel(
     _In_ USHORT L,
     _In_z_ const char* label);
 
-struct OvpnCryptoKeySlot
+// Send state of one key. In the driver it lives under the peer's TxLock: the
+// TX queue, the keepalive timer and the follow-up after a receive-side epoch
+// change are its only users. Functions that take an OvpnCryptoTxState* cannot
+// even name receive-side state.
+struct OvpnCryptoTxState
 {
-    OvpnCryptoKeyContext Encrypt;
-    OvpnCryptoKeyContext Decrypt;
+    OvpnCryptoKeyContext Key;
 
     // last epoch key used for generating current send data keys
-    OvpnCryptoEpochKey EpochKeySend;
+    OvpnCryptoEpochKey EpochKey;
 
-    // epoch key used for the highest receive epoch keys
-    OvpnCryptoEpochKey EpochKeyRecv;
+    OvpnPktidXmit Pktid;
 
     UCHAR KeyId;
     INT32 PeerId;
+};
 
-    OvpnPktidXmit PktidXmit;
-    OvpnPktidRecv PktidRecv;
+// Receive state of one key, under the peer's RxLock. The receive path is its
+// only user.
+struct OvpnCryptoRxState
+{
+    OvpnCryptoKeyContext Key;
+
+    // epoch key used for the highest receive epoch keys
+    OvpnCryptoEpochKey EpochKey;
+
+    OvpnPktidRecv Pktid;
 
     // future epoch data keys for decryption
-    OvpnCryptoKeyContext FutureEpochKeys[FUTURE_EPOCH_KEYS_COUNT];
+    OvpnCryptoKeyContext FutureKeys[FUTURE_EPOCH_KEYS_COUNT];
 
-    OvpnPktidRecv PktidRecvRetiring;
-    OvpnCryptoKeyContext RetiringEpochDataReceiveKey;
+    OvpnCryptoKeyContext RetiringKey;
+    OvpnPktidRecv PktidRetiring;
+
+    UCHAR KeyId;
 };
 
 // Initialises data channel key/IV using the provided epoch key
@@ -136,26 +149,38 @@ OvpnCryptoEpochDataKeyDerive(OvpnCryptoKeyParameters* key, OvpnCryptoEpochKey* e
 VOID
 OvpnCryptoEpochKeyIterate(OvpnCryptoEpochKey* epochKey, BCRYPT_ALG_HANDLE hkdfAlgHandle);
 /**
- * Generates and fills the FutureEpochKeys with next valid future keys
- * using the epoch of the key in keySlot->EpochKeyRecv as starting point
+ * Generates and fills rx->FutureKeys with the next valid future keys
+ * using the epoch of rx->Key as starting point
  */
 VOID
-OvpnCryptoEpochGenerateFutureRecvKeys(OvpnCryptoKeySlot* keySlot, OvpnCryptoOptions* opts);
+OvpnCryptoEpochGenerateFutureRecvKeys(OvpnCryptoRxState* rx, OvpnCryptoOptions* opts);
 
 // This is called when the peer uses a new send key that is not the default key
 VOID
-OvpnCryptoEpochReplaceUpdateRecvKey(OvpnCryptoKeySlot* keySlot, UINT16 new_epoch, OvpnCryptoOptions* opts);
+OvpnCryptoEpochReplaceUpdateRecvKey(OvpnCryptoRxState* rx, UINT16 new_epoch, OvpnCryptoOptions* opts);
+
+/**
+ * Moves the send key forward to new_epoch if it is behind, after the peer
+ * authenticated a packet under that epoch. In the driver the caller holds the
+ * peer's TxLock.
+ */
+VOID
+OvpnCryptoEpochBumpSendKey(OvpnCryptoTxState* tx, UINT16 new_epoch, OvpnCryptoOptions* opts);
 
 // retrieve decryption key context that matches the epoch
 OvpnCryptoKeyContext*
-OvpnCryptoEpochLookupDecryptKey(OvpnCryptoKeySlot* keySlot, UINT16 epoch);
+OvpnCryptoEpochLookupDecryptKey(OvpnCryptoRxState* rx, UINT16 epoch);
 
 VOID
 OvpnCryptoMakeEpochNonce(UCHAR* epochIv, UINT64 packet_id_net, UCHAR* nonce);
 
-// Updates the send key and keySlot->EpochKeySend to use the next epoch
+// Updates the send key and tx->EpochKey to use the next epoch
 VOID
-OvpnCryptoEpochIterateSendKey(OvpnCryptoKeySlot* keySlot, OvpnCryptoOptions* opts);
+OvpnCryptoEpochIterateSendKey(OvpnCryptoTxState* tx, OvpnCryptoOptions* opts);
+
+// Destroy every key handle a state holds and scrub it.
+VOID
+OvpnCryptoEpochUninitTx(OvpnCryptoTxState* tx);
 
 VOID
-OvpnCryptoEpochUninitSlot(OvpnCryptoKeySlot* slot);
+OvpnCryptoEpochUninitRx(OvpnCryptoRxState* rx);
