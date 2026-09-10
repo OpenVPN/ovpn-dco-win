@@ -341,6 +341,9 @@ OvpnCryptoEpochUninitSlot(OvpnCryptoKeySlot* slot)
     if (slot->Encrypt.Key) {
         BCryptDestroyKey(slot->Encrypt.Key);
     }
+    if (slot->Decrypt.Key) {
+        BCryptDestroyKey(slot->Decrypt.Key);
+    }
     for (int i = 0; i < FUTURE_EPOCH_KEYS_COUNT; ++i) {
         if (slot->FutureEpochKeys[i].Key) {
             BCryptDestroyKey(slot->FutureEpochKeys[i].Key);

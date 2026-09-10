@@ -507,16 +507,8 @@ OvpnCryptoNewKey(OvpnCryptoContext* cryptoContext, POVPN_CRYPTO_DATA_V2 cryptoDa
     }
 
     if ((cryptoData->CipherAlg == OVPN_CIPHER_ALG_AES_GCM) || (cryptoData->CipherAlg == OVPN_CIPHER_ALG_CHACHA20_POLY1305)) {
-        // destroy previous keys
-        if (keySlot->Encrypt.Key) {
-            BCryptDestroyKey(keySlot->Encrypt.Key);
-            keySlot->Encrypt.Key = NULL;
-        }
-
-        if (keySlot->Decrypt.Key) {
-            BCryptDestroyKey(keySlot->Decrypt.Key);
-            keySlot->Decrypt.Key = NULL;
-        }
+        // destroy everything the slot held, including future and retiring keys
+        OvpnCryptoEpochUninitSlot(keySlot);
 
         if ((cryptoData->Encrypt.KeyLen > 32) || (cryptoData->Decrypt.KeyLen > 32))
         {
