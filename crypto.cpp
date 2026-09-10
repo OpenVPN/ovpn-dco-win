@@ -29,6 +29,10 @@
 #include "socket.h"
 #include "peer.h"
 
+#if DBG
+ULONG g_OvpnTestAeadUsageLimit = 0;
+#endif
+
 UINT
 OvpnCryptoOpCompose(UINT opcode, UINT keyId)
 {
@@ -522,6 +526,14 @@ OvpnCryptoNewKey(OvpnCryptoContext* cryptoContext, POVPN_CRYPTO_DATA_V2 cryptoDa
 
         if (cryptoDataV2->CryptoOptions & CRYPTO_OPTIONS_EPOCH) {
             cryptoContext->Options.AeadUsageLimit = OvpnCryptoAeadUsageLimit(cryptoData->CipherAlg);
+#if DBG
+            if (g_OvpnTestAeadUsageLimit != 0) {
+                UINT64 limit = cryptoContext->Options.AeadUsageLimit;
+                if ((limit == 0) || (g_OvpnTestAeadUsageLimit < limit)) {
+                    cryptoContext->Options.AeadUsageLimit = g_OvpnTestAeadUsageLimit;
+                }
+            }
+#endif
             cryptoContext->Options.UseEpoch = TRUE;
             cryptoContext->Options.HkdfAlgHandle = hkdfAlgHandle;
             cryptoContext->Options.AeadAlgHangle = algHandle;
