@@ -37,6 +37,13 @@ struct OvpnPeerContext;
 
 #define AEAD_LIMIT_BLOCKSIZE 16
 
+#if DBG
+// Checked-build test hook, set from the driver's Parameters key in
+// DriverEntry. Caps the AEAD usage limit of every new key so epochs rotate
+// every few packets. It can only shorten a key's life, never extend it.
+extern ULONG g_OvpnTestAeadUsageLimit;
+#endif
+
 // The crypto helper uses this failure status to indicate that the caller must
 // retry the operation while holding the peer spinlock exclusively so key-slot
 // mutation can proceed safely.
