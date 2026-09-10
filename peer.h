@@ -31,7 +31,11 @@ struct OvpnPeerContext
 {
     LIST_ENTRY ListEntry; // used by iroute tries for deferred cleanup
 
-    EX_SPIN_LOCK SpinLock;
+    // TxLock is the peer lock: CryptoContext.Tx, Remote, Timer, keepalive. The
+    // receive path's crypto state is carved out under RxLock so RX never waits
+    // on TX. Never held together; cache-aligned so the two CPUs share no line.
+    DECLSPEC_CACHEALIGN KSPIN_LOCK RxLock;
+    DECLSPEC_CACHEALIGN KSPIN_LOCK TxLock;
 
     OvpnCryptoContext CryptoContext;
 

@@ -192,56 +192,56 @@ OvpnCryptoEpochKeyIterate(OvpnCryptoEpochKey* epochKey, BCRYPT_ALG_HANDLE hkdfAl
 }
 
 VOID
-OvpnCryptoEpochGenerateFutureRecvKeys(OvpnCryptoKeySlot* keySlot, OvpnCryptoOptions* opts)
+OvpnCryptoEpochGenerateFutureRecvKeys(OvpnCryptoRxState* rx, OvpnCryptoOptions* opts)
 {
-    UINT16 currentDecryptEpoch = keySlot->Decrypt.Epoch;
+    UINT16 currentDecryptEpoch = rx->Key.Epoch;
 
     // free unused keys
     for (int i = 0; i < FUTURE_EPOCH_KEYS_COUNT; ++i) {
-        auto key = &keySlot->FutureEpochKeys[i];
+        auto key = &rx->FutureKeys[i];
         if ((key->Epoch > 0) && (key->Epoch < currentDecryptEpoch)) {
             BCryptDestroyKey(key->Key);
             RtlZeroMemory(key, sizeof(*key));
         }
     }
 
-    // Highest generated epoch comes from EpochKeyRecv, like userspace
+    // Highest generated epoch comes from rx->EpochKey, like userspace
     // (crypto_epoch.c:235). Reading the last future-key slot instead breaks
     // when that slot is consumed/zeroed, overshooting numKeysGenerate.
-    UINT16 currentHighestKey = keySlot->EpochKeyRecv.Epoch;
+    UINT16 currentHighestKey = rx->EpochKey.Epoch;
     UINT16 desiredHighestKey = currentDecryptEpoch + FUTURE_EPOCH_KEYS_COUNT;
     UINT16 numKeysGenerate = desiredHighestKey - currentHighestKey;
 
-    RtlMoveMemory(keySlot->FutureEpochKeys, &keySlot->FutureEpochKeys[numKeysGenerate], (FUTURE_EPOCH_KEYS_COUNT - numKeysGenerate) * sizeof(OvpnCryptoKeyContext));
+    RtlMoveMemory(rx->FutureKeys, &rx->FutureKeys[numKeysGenerate], (FUTURE_EPOCH_KEYS_COUNT - numKeysGenerate) * sizeof(OvpnCryptoKeyContext));
 
     for (int i = FUTURE_EPOCH_KEYS_COUNT - numKeysGenerate; i < FUTURE_EPOCH_KEYS_COUNT; ++i)
     {
-        RtlSecureZeroMemory(&keySlot->FutureEpochKeys[i], sizeof(OvpnCryptoKeyContext));
+        RtlSecureZeroMemory(&rx->FutureKeys[i], sizeof(OvpnCryptoKeyContext));
 
-        OvpnCryptoEpochKeyIterate(&keySlot->EpochKeyRecv, opts->HkdfAlgHandle);
-        OvpnCryptoEpochInitKey(&keySlot->FutureEpochKeys[i], &keySlot->EpochKeyRecv, opts);
+        OvpnCryptoEpochKeyIterate(&rx->EpochKey, opts->HkdfAlgHandle);
+        OvpnCryptoEpochInitKey(&rx->FutureKeys[i], &rx->EpochKey, opts);
     }
 }
 
-// Installs the data key for the current EpochKeySend and restarts the packet
+// Installs the data key for the current tx->EpochKey and restarts the packet
 // counter, like userspace epoch_init_send_key_ctx().
 static VOID
-OvpnCryptoEpochInitSendKey(OvpnCryptoKeySlot* keySlot, OvpnCryptoOptions* opts)
+OvpnCryptoEpochInitSendKey(OvpnCryptoTxState* tx, OvpnCryptoOptions* opts)
 {
-    BCryptDestroyKey(keySlot->Encrypt.Key);
-    RtlSecureZeroMemory(&keySlot->Encrypt, sizeof(OvpnCryptoKeyContext));
-    OvpnCryptoEpochInitKey(&keySlot->Encrypt, &keySlot->EpochKeySend, opts);
+    BCryptDestroyKey(tx->Key.Key);
+    RtlSecureZeroMemory(&tx->Key, sizeof(OvpnCryptoKeyContext));
+    OvpnCryptoEpochInitKey(&tx->Key, &tx->EpochKey, opts);
 
-    RtlZeroMemory(&keySlot->PktidXmit, sizeof(keySlot->PktidXmit));
+    RtlZeroMemory(&tx->Pktid, sizeof(tx->Pktid));
 }
 
 VOID
-OvpnCryptoEpochReplaceUpdateRecvKey(OvpnCryptoKeySlot* keySlot, UINT16 new_epoch, OvpnCryptoOptions* opts)
+OvpnCryptoEpochReplaceUpdateRecvKey(OvpnCryptoRxState* rx, UINT16 new_epoch, OvpnCryptoOptions* opts)
 {
     // Find the key of the new epoch in future keys
     UINT16 fki;
     for (fki = 0; fki < FUTURE_EPOCH_KEYS_COUNT; fki++) {
-        if (keySlot->FutureEpochKeys[fki].Epoch == new_epoch) {
+        if (rx->FutureKeys[fki].Epoch == new_epoch) {
             break;
         }
     }
@@ -257,57 +257,63 @@ OvpnCryptoEpochReplaceUpdateRecvKey(OvpnCryptoKeySlot* keySlot, UINT16 new_epoch
         return;
     }
 
-    OvpnCryptoKeyContext* ctx = &keySlot->FutureEpochKeys[fki];
-
-    // Check if the new recv key epoch is higher than the send key epoch. If yes we will replace the send key as well
-    if (keySlot->Encrypt.Epoch < new_epoch) {
-        // Update the epoch_key for send to match the current key being used
-        while (keySlot->EpochKeySend.Epoch < new_epoch) {
-            OvpnCryptoEpochKeyIterate(&keySlot->EpochKeySend, opts->HkdfAlgHandle);
-        }
-        OvpnCryptoEpochInitSendKey(keySlot, opts);
-    }
+    OvpnCryptoKeyContext* ctx = &rx->FutureKeys[fki];
 
     // Replace receive key
-    BCryptDestroyKey(keySlot->RetiringEpochDataReceiveKey.Key);
-    RtlZeroMemory(&keySlot->RetiringEpochDataReceiveKey, sizeof(OvpnCryptoKeyContext));
+    BCryptDestroyKey(rx->RetiringKey.Key);
+    RtlZeroMemory(&rx->RetiringKey, sizeof(OvpnCryptoKeyContext));
 
-    keySlot->RetiringEpochDataReceiveKey = keySlot->Decrypt;
+    rx->RetiringKey = rx->Key;
 
     // Carry the replay window forward with the key it polices: the current
-    // PktidRecv becomes the retiring window so already-seen packet IDs under
+    // rx->Pktid becomes the retiring window so already-seen packet IDs under
     // the old key cannot be replayed during the grace period. Mirrors
     // packet_id_move_recv() in userspace OpenVPN (src/openvpn/crypto_epoch.c).
-    keySlot->PktidRecvRetiring = keySlot->PktidRecv;
-    RtlZeroMemory(&keySlot->PktidRecv, sizeof(keySlot->PktidRecv));
+    rx->PktidRetiring = rx->Pktid;
+    RtlZeroMemory(&rx->Pktid, sizeof(rx->Pktid));
 
-    keySlot->Decrypt = *ctx;
+    rx->Key = *ctx;
 
     RtlZeroMemory(ctx, sizeof(*ctx));
 
     // Generate new future keys
-    OvpnCryptoEpochGenerateFutureRecvKeys(keySlot, opts);
+    OvpnCryptoEpochGenerateFutureRecvKeys(rx, opts);
+}
+
+VOID
+OvpnCryptoEpochBumpSendKey(OvpnCryptoTxState* tx, UINT16 new_epoch, OvpnCryptoOptions* opts)
+{
+    // the peer sends with a newer epoch; follow it, as userspace does in epoch_replace_update_recv_key()
+    if (tx->Key.Epoch >= new_epoch) {
+        return;
+    }
+
+    // Update the epoch_key for send to match the current key being used
+    while (tx->EpochKey.Epoch < new_epoch) {
+        OvpnCryptoEpochKeyIterate(&tx->EpochKey, opts->HkdfAlgHandle);
+    }
+    OvpnCryptoEpochInitSendKey(tx, opts);
 }
 
 OvpnCryptoKeyContext*
-OvpnCryptoEpochLookupDecryptKey(OvpnCryptoKeySlot* keySlot, UINT16 epoch)
+OvpnCryptoEpochLookupDecryptKey(OvpnCryptoRxState* rx, UINT16 epoch)
 {
     /* Current decrypt key is the most likely one */
-    if (keySlot->Decrypt.Epoch == epoch) {
-        return &keySlot->Decrypt;
+    if (rx->Key.Epoch == epoch) {
+        return &rx->Key;
     }
-    else if (keySlot->RetiringEpochDataReceiveKey.Epoch && keySlot->RetiringEpochDataReceiveKey.Epoch == epoch) {
-        return &keySlot->RetiringEpochDataReceiveKey;
+    else if (rx->RetiringKey.Epoch && rx->RetiringKey.Epoch == epoch) {
+        return &rx->RetiringKey;
     }
-    else if (epoch > keySlot->Decrypt.Epoch && epoch <= keySlot->Decrypt.Epoch + FUTURE_EPOCH_KEYS_COUNT) {
+    else if (epoch > rx->Key.Epoch && epoch <= rx->Key.Epoch + FUTURE_EPOCH_KEYS_COUNT) {
         // Key in the range of future keys
-        int index = epoch - (keySlot->Decrypt.Epoch + 1);
+        int index = epoch - (rx->Key.Epoch + 1);
 
         if (epoch > (UINT16_MAX - FUTURE_EPOCH_KEYS_COUNT - 1)) {
             return NULL;
         }
         else {
-            return &keySlot->FutureEpochKeys[index];
+            return &rx->FutureKeys[index];
         }
     }
     else {
@@ -329,28 +335,34 @@ OvpnCryptoMakeEpochNonce(UCHAR* epochIv, UINT64 packet_id_net, UCHAR* nonce)
 }
 
 VOID
-OvpnCryptoEpochIterateSendKey(OvpnCryptoKeySlot* keySlot, OvpnCryptoOptions* opts)
+OvpnCryptoEpochIterateSendKey(OvpnCryptoTxState* tx, OvpnCryptoOptions* opts)
 {
-    OvpnCryptoEpochKeyIterate(&keySlot->EpochKeySend, opts->HkdfAlgHandle);
-    OvpnCryptoEpochInitSendKey(keySlot, opts);
+    OvpnCryptoEpochKeyIterate(&tx->EpochKey, opts->HkdfAlgHandle);
+    OvpnCryptoEpochInitSendKey(tx, opts);
 }
 
 VOID
-OvpnCryptoEpochUninitSlot(OvpnCryptoKeySlot* slot)
+OvpnCryptoEpochUninitTx(OvpnCryptoTxState* tx)
 {
-    if (slot->Encrypt.Key) {
-        BCryptDestroyKey(slot->Encrypt.Key);
+    if (tx->Key.Key) {
+        BCryptDestroyKey(tx->Key.Key);
     }
-    if (slot->Decrypt.Key) {
-        BCryptDestroyKey(slot->Decrypt.Key);
+    RtlSecureZeroMemory(tx, sizeof(*tx));
+}
+
+VOID
+OvpnCryptoEpochUninitRx(OvpnCryptoRxState* rx)
+{
+    if (rx->Key.Key) {
+        BCryptDestroyKey(rx->Key.Key);
     }
     for (int i = 0; i < FUTURE_EPOCH_KEYS_COUNT; ++i) {
-        if (slot->FutureEpochKeys[i].Key) {
-            BCryptDestroyKey(slot->FutureEpochKeys[i].Key);
+        if (rx->FutureKeys[i].Key) {
+            BCryptDestroyKey(rx->FutureKeys[i].Key);
         }
     }
-    if (slot->RetiringEpochDataReceiveKey.Key) {
-        BCryptDestroyKey(slot->RetiringEpochDataReceiveKey.Key);
+    if (rx->RetiringKey.Key) {
+        BCryptDestroyKey(rx->RetiringKey.Key);
     }
-    RtlSecureZeroMemory(slot, sizeof(OvpnCryptoKeySlot));
+    RtlSecureZeroMemory(rx, sizeof(*rx));
 }

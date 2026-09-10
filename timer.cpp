@@ -77,15 +77,15 @@ static VOID OvpnTimerXmit(WDFTIMER timer)
 
     OvpnPeerContext* peer = timerCtx->Peer;
 
-    ExAcquireSpinLockSharedAtDpcLevel(&peer->SpinLock);
+    KIRQL irql;
+    KeAcquireSpinLock(&peer->TxLock, &irql);
 
     auto peerId = peer->PeerId;
     SOCKADDR_STORAGE sa = {0};
-    BOOLEAN exclusive = FALSE;
 
-    OvpnCryptoContext* cryptoContext = &peer->CryptoContext;
-    if (cryptoContext->Encrypt) {
-        const OvpnCryptoPacketLayout layout = cryptoContext->Layout;
+    OvpnCryptoTxContext* tx = &peer->CryptoContext.Tx;
+    if (tx->Encrypt) {
+        const OvpnCryptoPacketLayout layout = tx->Layout;
 
         if (layout.FrontLen > OVPN_BUFFER_HEADROOM) {
             status = STATUS_INVALID_BUFFER_SIZE;
@@ -102,8 +102,7 @@ static VOID OvpnTimerXmit(WDFTIMER timer)
             OvpnTxBufferPush(buffer, layout.FrontLen);
             OvpnBufferPut(buffer, layout.TailLen);
 
-            OvpnCryptoEncryptParams encryptParams = { buffer->Data, buffer->Len };
-            status = OvpnCryptoCallWithRetry(peer, TRUE, &exclusive, nullptr, OvpnCryptoInvokeEncrypt, &encryptParams);
+            status = OvpnCryptoEncrypt(tx, buffer->Data, buffer->Len);
         }
 
         if (NT_SUCCESS(status)) {
@@ -115,7 +114,7 @@ static VOID OvpnTimerXmit(WDFTIMER timer)
         // LOG_WARN("CryptoContext not initialized");
     }
 
-    OvpnReleaseSpinLock(TRUE, 0, &peer->SpinLock, exclusive);
+    KeReleaseSpinLock(&peer->TxLock, irql);
 
     if (NT_SUCCESS(status)) {
         // start async send, completion handler will return ciphertext buffer to the pool

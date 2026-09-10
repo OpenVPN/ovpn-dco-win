@@ -223,23 +223,22 @@ VOID OvpnSocketDataPacketReceived(_In_ POVPN_DEVICE device, UCHAR op, UINT32 pee
         return;
     }
 
-    KIRQL kirql = OvpnAcquireSpinLock(dpc, &peer->SpinLock, FALSE);
+    UCHAR keyId = OvpnCryptoKeyIdExtract(op);
+    UINT16 peerEpoch = 0;
 
-    BOOLEAN exclusive = FALSE;
+    KIRQL kirql;
+    KeAcquireSpinLock(&peer->RxLock, &kirql);
 
-    OvpnCryptoContext* cryptoContext = &peer->CryptoContext;
+    OvpnCryptoRxContext* rx = &peer->CryptoContext.Rx;
 
-    if (cryptoContext->Decrypt) {
-        UCHAR keyId = OvpnCryptoKeyIdExtract(op);
-
+    if (rx->Decrypt) {
         // extend data area in the buffer for plaintext and crypto overhead
         OvpnBufferPut(buffer, len);
 
-        OvpnCryptoDecryptParams decryptParams = { keyId, cipherTextBuf, len, buffer->Data };
-        status = OvpnCryptoCallWithRetry(peer, dpc, &exclusive, dpc ? nullptr : &kirql, OvpnCryptoInvokeDecrypt, &decryptParams);
+        status = OvpnCryptoDecrypt(rx, keyId, cipherTextBuf, len, buffer->Data, &peerEpoch);
 
         if (NT_SUCCESS(status)) {
-            const OvpnCryptoPacketLayout layout = cryptoContext->Layout;
+            const OvpnCryptoPacketLayout layout = rx->Layout;
 
             OvpnBufferTrim(buffer, len - layout.TailLen);
             OvpnBufferPull(buffer, layout.FrontLen);
@@ -260,7 +259,14 @@ VOID OvpnSocketDataPacketReceived(_In_ POVPN_DEVICE device, UCHAR op, UINT32 pee
 
     auto mss = peer->MSS;
 
-    OvpnReleaseSpinLock(dpc, kirql, &peer->SpinLock, exclusive);
+    KeReleaseSpinLock(&peer->RxLock, kirql);
+
+    if (peerEpoch != 0) {
+        // the peer moved to a newer epoch; follow with our send key, after RxLock is released
+        KeAcquireSpinLock(&peer->TxLock, &kirql);
+        OvpnCryptoFollowPeerEpoch(&peer->CryptoContext.Tx, keyId, peerEpoch);
+        KeReleaseSpinLock(&peer->TxLock, kirql);
+    }
 
     // decrypt failed - don't proceed
     if (!NT_SUCCESS(status)) {
