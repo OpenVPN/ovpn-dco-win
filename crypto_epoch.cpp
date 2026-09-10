@@ -246,12 +246,8 @@ OvpnCryptoEpochReplaceUpdateRecvKey(OvpnCryptoRxState* rx, UINT16 new_epoch, Ovp
         }
     }
 
-    // Callers only reach this with an AEAD-authenticated future epoch, so the
-    // key is always present. Guard the not-found case anyway: without it fki
-    // would be FUTURE_EPOCH_KEYS_COUNT and the ctx below would point one past
-    // the array, type-confusing PktidRecvRetiring as a key context on the
-    // *ctx read and the RtlZeroMemory write. Userspace ASSERTs here; we can't
-    // (release builds compile it out), so bail explicitly.
+    // callers pass an authenticated future epoch, so this is unreachable;
+    // guard anyway, fki would otherwise index one past the array
     if (fki == FUTURE_EPOCH_KEYS_COUNT) {
         LOG_ERROR("New epoch not found in future keys", TraceLoggingValue(new_epoch, "epoch"));
         return;
@@ -339,6 +335,23 @@ OvpnCryptoEpochIterateSendKey(OvpnCryptoTxState* tx, OvpnCryptoOptions* opts)
 {
     OvpnCryptoEpochKeyIterate(&tx->EpochKey, opts->HkdfAlgHandle);
     OvpnCryptoEpochInitSendKey(tx, opts);
+}
+
+NTSTATUS
+OvpnCryptoEpochNextPacketId(OvpnCryptoTxState* tx, OvpnCryptoOptions* opts, SIZE_T len, UINT64* packetId)
+{
+    if (OvpnCryptoAeadUsageLimitReached(opts->AeadUsageLimit, tx->Key.PlaintextBlocks, tx->Pktid.SeqNum) || (tx->Pktid.SeqNum >= PACKET_ID_EPOCH_MAX)) {
+        if (tx->EpochKey.Epoch == UINT16_MAX) {
+            // no epoch left to move to; only a renegotiation helps
+            return STATUS_INTEGER_OVERFLOW;
+        }
+        OvpnCryptoEpochIterateSendKey(tx, opts);
+    }
+
+    tx->Key.PlaintextBlocks += ((UINT64)len + AEAD_LIMIT_BLOCKSIZE - 1) / AEAD_LIMIT_BLOCKSIZE;
+    *packetId = ((UINT64)tx->Key.Epoch << 48) | (UINT64)++tx->Pktid.SeqNum;
+
+    return STATUS_SUCCESS;
 }
 
 VOID

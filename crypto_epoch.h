@@ -42,6 +42,18 @@
 
 #define PACKET_ID_EPOCH_MAX 0x0000FFFFFFFFFFFFull
 
+#define AEAD_LIMIT_BLOCKSIZE 16
+
+static inline
+BOOLEAN
+OvpnCryptoAeadUsageLimitReached(UINT64 limit, UINT64 plaintextBlocks, UINT64 highestPid)
+{
+    /* This is the  q + s <=  p^(1/2) * 2^(129/2) - 1 calculation where
+     * q is the number of protected messages (highest_pid)
+     * s Total plaintext length in all messages (in blocks) */
+    return ((limit > 0) && (plaintextBlocks + highestPid) > limit);
+}
+
 // Receive-side acceptance window for epochs ahead of the current decrypt key.
 // One epoch lasts ~910 GiB with 128 byte packets (~78s at 100 Gbit/s), so
 // four keys tolerate minutes of total loss even at line rates far beyond this
@@ -177,6 +189,12 @@ OvpnCryptoMakeEpochNonce(UCHAR* epochIv, UINT64 packet_id_net, UCHAR* nonce);
 // Updates the send key and tx->EpochKey to use the next epoch
 VOID
 OvpnCryptoEpochIterateSendKey(OvpnCryptoTxState* tx, OvpnCryptoOptions* opts);
+
+// Accounts one outgoing packet of len plaintext bytes against the send key,
+// moving to the next epoch first if the key is used up, and returns the
+// packet id to put on the wire. Fails only when the last epoch is used up.
+NTSTATUS
+OvpnCryptoEpochNextPacketId(OvpnCryptoTxState* tx, OvpnCryptoOptions* opts, SIZE_T len, UINT64* packetId);
 
 // Destroy every key handle a state holds and scrub it.
 VOID
