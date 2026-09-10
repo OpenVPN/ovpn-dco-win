@@ -42,7 +42,11 @@
 
 #define PACKET_ID_EPOCH_MAX 0x0000FFFFFFFFFFFFull
 
-#define FUTURE_EPOCH_KEYS_COUNT 16
+// Receive-side acceptance window for epochs ahead of the current decrypt key.
+// One epoch lasts ~910 GiB with 128 byte packets (~78s at 100 Gbit/s), so
+// four keys tolerate minutes of total loss even at line rates far beyond this
+// driver. Matches userspace OpenVPN (init_epoch_keys in ssl.c).
+#define FUTURE_EPOCH_KEYS_COUNT 4
 
 struct OvpnCryptoKeyContext
 {
