@@ -35,6 +35,8 @@ OvpnPeerCtxAlloc()
     OvpnPeerContext* peer = (OvpnPeerContext*)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(OvpnPeerContext), 'ovpn');
     if (peer != NULL) {
         RtlZeroMemory(peer, sizeof(OvpnPeerContext));
+        KeInitializeSpinLock(&peer->RxLock);
+        KeInitializeSpinLock(&peer->TxLock);
         InitializeListHead(&peer->ListEntry);
         InterlockedIncrement(&peer->RefCounter);
     }    
@@ -61,10 +63,11 @@ VOID
 OvpnPeerCtxFree(OvpnPeerContext* peer)
 {
     // Detach the timer while holding the lock to prevent new callbacks
-    auto irql = ExAcquireSpinLockExclusive(&peer->SpinLock);
+    KIRQL irql;
+    KeAcquireSpinLock(&peer->TxLock, &irql);
     WDFTIMER timer = peer->Timer;
     peer->Timer = WDF_NO_HANDLE;
-    ExReleaseSpinLockExclusive(&peer->SpinLock, irql);
+    KeReleaseSpinLock(&peer->TxLock, irql);
 
     // Stop the timer outside the lock. Wait only if we're at PASSIVE_LEVEL
     if (timer != WDF_NO_HANDLE) {
@@ -635,7 +638,8 @@ done:
 
 VOID OvpnPeerSetDoWork(OvpnPeerContext *peer, LONG keepaliveInterval, LONG keepaliveTimeout, LONG mss)
 {
-    auto irql = ExAcquireSpinLockExclusive(&peer->SpinLock);
+    KIRQL irql;
+    KeAcquireSpinLock(&peer->TxLock, &irql);
 
     if (mss != -1) {
         peer->MSS = (UINT16)mss;
@@ -655,7 +659,7 @@ VOID OvpnPeerSetDoWork(OvpnPeerContext *peer, LONG keepaliveInterval, LONG keepa
         OvpnTimerSetRecvTimeout(peer->Timer, peer->KeepaliveTimeout);
     }
 
-    ExReleaseSpinLockExclusive(&peer->SpinLock, irql);
+    KeReleaseSpinLock(&peer->TxLock, irql);
 }
 
 _Use_decl_annotations_
@@ -915,9 +919,7 @@ OvpnPeerNewKey(POVPN_DEVICE device, WDFREQUEST request)
 
     RtlCopyMemory(&cryptoDataV2.V1, cryptoData, sizeof(OVPN_CRYPTO_DATA));
 
-    KIRQL irql = ExAcquireSpinLockExclusive(&peer->SpinLock);
-    LOG_IF_NOT_NT_SUCCESS(status = OvpnCryptoNewKey(&peer->CryptoContext, &cryptoDataV2, algHandle, NULL));
-    ExReleaseSpinLockExclusive(&peer->SpinLock, irql);
+    LOG_IF_NOT_NT_SUCCESS(status = OvpnCryptoNewKey(peer, &cryptoDataV2, algHandle, NULL));
 
 done:
     if (peer != nullptr) {
@@ -951,9 +953,7 @@ OvpnPeerNewKeyV2(POVPN_DEVICE device, WDFREQUEST request)
         goto done;
     }
 
-    KIRQL irql = ExAcquireSpinLockExclusive(&peer->SpinLock);
-    LOG_IF_NOT_NT_SUCCESS(status = OvpnCryptoNewKey(&peer->CryptoContext, cryptoDataV2, algHandle, device->HkdfAlgHandle));
-    ExReleaseSpinLockExclusive(&peer->SpinLock, irql);
+    LOG_IF_NOT_NT_SUCCESS(status = OvpnCryptoNewKey(peer, cryptoDataV2, algHandle, device->HkdfAlgHandle));
 
 done:
     if (peer != nullptr) {
@@ -973,9 +973,7 @@ OvpnPeerDoSwapKeys(POVPN_DEVICE device, INT32 peerId)
     // in client mode this returns the only peer
     OvpnPeerContext* peer = OvpnFindPeer(device, peerId, FALSE);
     if (peer != nullptr) {
-        KIRQL irql = ExAcquireSpinLockExclusive(&peer->SpinLock);
-        OvpnCryptoSwapKeys(&peer->CryptoContext);
-        ExReleaseSpinLockExclusive(&peer->SpinLock, irql);
+        OvpnCryptoSwapKeys(peer);
 
         OvpnPeerCtxRelease(peer);
 
@@ -1125,7 +1123,8 @@ OvpnPeerHandleFloat(OVPN_DEVICE* device, OvpnPeerContext *peer, PSOCKADDR sa, BO
 
     // modify peer's transport address
     {
-        KIRQL kirql = OvpnAcquireSpinLock(dpc, &peer->SpinLock, TRUE);
+        KIRQL kirql;
+        KeAcquireSpinLock(&peer->TxLock, &kirql);
 
         // update peer's transport address
         if (sa->sa_family == AF_INET)
@@ -1133,7 +1132,7 @@ OvpnPeerHandleFloat(OVPN_DEVICE* device, OvpnPeerContext *peer, PSOCKADDR sa, BO
         else
             RtlCopyMemory(&peer->TransportAddrs.Remote.IPv6, sa, sizeof(SOCKADDR_IN6));
 
-        OvpnReleaseSpinLock(dpc, kirql, &peer->SpinLock, TRUE);
+        KeReleaseSpinLock(&peer->TxLock, kirql);
     }
 
     // add peer back to by-transport-address hashtable

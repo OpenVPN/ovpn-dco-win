@@ -234,14 +234,14 @@ OvpnTxProcessPacket(_In_ POVPN_DEVICE device, _In_ POVPN_TXQUEUE queue, _In_ NET
     InterlockedExchangeAddNoFence64(&device->Stats.TunBytesSent, buffer->Len);
     InterlockedExchangeAddNoFence64(&peer->VpnTxBytes, buffer->Len);
 
-    auto irql = ExAcquireSpinLockShared(&peer->SpinLock);
-    BOOLEAN exclusive = FALSE;
+    KIRQL irql;
+    KeAcquireSpinLock(&peer->TxLock, &irql);
 
-    OvpnCryptoContext* cryptoContext = &peer->CryptoContext;
+    OvpnCryptoTxContext* tx = &peer->CryptoContext.Tx;
     auto remoteAddr = peer->TransportAddrs.Remote;
 
-    if (cryptoContext->Encrypt) {
-        const OvpnCryptoPacketLayout layout = cryptoContext->Layout;
+    if (tx->Encrypt) {
+        const OvpnCryptoPacketLayout layout = tx->Layout;
 
         if (layout.FrontLen > OVPN_BUFFER_HEADROOM) {
             status = STATUS_INVALID_BUFFER_SIZE;
@@ -263,8 +263,7 @@ OvpnTxProcessPacket(_In_ POVPN_DEVICE device, _In_ POVPN_TXQUEUE queue, _In_ NET
         OvpnTxBufferPush(buffer, layout.FrontLen);
         OvpnBufferPut(buffer, layout.TailLen);
 
-        OvpnCryptoEncryptParams encryptParams = { buffer->Data, buffer->Len };
-        status = OvpnCryptoCallWithRetry(peer, FALSE, &exclusive, &irql, OvpnCryptoInvokeEncrypt, &encryptParams);
+        status = OvpnCryptoEncrypt(tx, buffer->Data, buffer->Len);
     }
     else {
         status = STATUS_INVALID_DEVICE_STATE;
@@ -272,7 +271,7 @@ OvpnTxProcessPacket(_In_ POVPN_DEVICE device, _In_ POVPN_TXQUEUE queue, _In_ NET
     }
 
 unlock:
-    OvpnReleaseSpinLock(FALSE, irql, &peer->SpinLock, exclusive);
+    KeReleaseSpinLock(&peer->TxLock, irql);
 
     if (NT_SUCCESS(status)) {
         InterlockedExchangeAddNoFence64(&peer->LinkTxBytes, buffer->Len);

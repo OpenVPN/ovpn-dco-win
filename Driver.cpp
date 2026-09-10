@@ -103,6 +103,25 @@ DriverEntry(_In_ PDRIVER_OBJECT driverObject, _In_ PUNICODE_STRING registryPath)
     driverConfig.EvtDriverUnload = OvpnEvtDriverUnload;
     GOTO_IF_NOT_NT_SUCCESS(done, status, WdfDriverCreate(driverObject, registryPath, &driverAttrs, &driverConfig, WDF_NO_HANDLE));
 
+#if DBG
+    // Test hook, checked builds only: REG_DWORD "TestAeadUsageLimit" under
+    // HKLM\SYSTEM\CurrentControlSet\Services\ovpn-dco\Parameters caps the
+    // AEAD usage limit so epoch keys rotate every few packets instead of every
+    // few hundred gigabytes. Used to stress epoch rotation under traffic.
+    {
+        WDFKEY paramsKey;
+        if (NT_SUCCESS(WdfDriverOpenParametersRegistryKey(WdfGetDriver(), KEY_READ, WDF_NO_OBJECT_ATTRIBUTES, &paramsKey))) {
+            DECLARE_CONST_UNICODE_STRING(valueName, L"TestAeadUsageLimit");
+            ULONG value = 0;
+            if (NT_SUCCESS(WdfRegistryQueryULong(paramsKey, &valueName, &value)) && (value != 0)) {
+                g_OvpnTestAeadUsageLimit = value;
+                LOG_WARN("TEST HOOK: AEAD usage limit capped", TraceLoggingValue(value, "limit"));
+            }
+            WdfRegistryClose(paramsKey);
+        }
+    }
+#endif
+
     // Register the WSK application
     wskClientNpi.ClientContext = NULL;
     wskClientNpi.Dispatch = &WskAppDispatch;

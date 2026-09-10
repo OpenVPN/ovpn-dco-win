@@ -35,12 +35,12 @@ struct OvpnPeerContext;
 #define OVPN_DATA_V2_LEN 4
 #define AEAD_AUTH_TAG_LEN 16
 
-#define AEAD_LIMIT_BLOCKSIZE 16
-
-// The crypto helper uses this failure status to indicate that the caller must
-// retry the operation while holding the peer spinlock exclusively so key-slot
-// mutation can proceed safely.
-#define STATUS_OVPN_CRYPTO_RETRY ((NTSTATUS)0xC0E44001L)
+#if DBG
+// Checked-build test hook, set from the driver's Parameters key in
+// DriverEntry. Caps the AEAD usage limit of every new key so epochs rotate
+// every few packets. It can only shorten a key's life, never extend it.
+extern ULONG g_OvpnTestAeadUsageLimit;
+#endif
 
  // packet opcode (high 5 bits) and key-id (low 3 bits) are combined in one byte
 #define OVPN_OP_DATA_V2 9
@@ -53,7 +53,7 @@ _IRQL_requires_max_(DISPATCH_LEVEL)
 _Must_inspect_result_
 typedef
 NTSTATUS
-OVPN_CRYPTO_ENCRYPT(_In_ OvpnCryptoKeySlot* keySlot, _In_ UCHAR* buf, _In_ SIZE_T len, _In_ OvpnCryptoOptions* opts, BOOLEAN allowRekey);
+OVPN_CRYPTO_ENCRYPT(_Inout_ OvpnCryptoTxState* tx, _In_ UCHAR* buf, _In_ SIZE_T len, _In_ OvpnCryptoOptions* opts);
 typedef OVPN_CRYPTO_ENCRYPT* POVPN_CRYPTO_ENCRYPT;
 
 _Function_class_(OVPN_CRYPTO_DECRYPT)
@@ -61,7 +61,7 @@ _IRQL_requires_max_(DISPATCH_LEVEL)
 _Must_inspect_result_
 typedef
 NTSTATUS
-OVPN_CRYPTO_DECRYPT(_In_ OvpnCryptoKeySlot* keySlot, _In_ UCHAR* bufIn, _In_ SIZE_T len, _In_ UCHAR* bufOut, _In_ OvpnCryptoOptions* opts, BOOLEAN allowRekey);
+OVPN_CRYPTO_DECRYPT(_Inout_ OvpnCryptoRxState* rx, _In_ UCHAR* bufIn, _In_ SIZE_T len, _In_ UCHAR* bufOut, _In_ OvpnCryptoOptions* opts, _Out_ UINT16* sendEpoch);
 typedef OVPN_CRYPTO_DECRYPT* POVPN_CRYPTO_DECRYPT;
 
 struct OvpnCryptoPacketLayout
@@ -70,67 +70,56 @@ struct OvpnCryptoPacketLayout
     ULONG TailLen;
 };
 
-struct OvpnCryptoContext
+// Crypto state is split by traffic direction: OvpnCryptoTxContext under
+// peer->TxLock, OvpnCryptoRxContext under peer->RxLock. Neither lock is ever
+// taken while holding the other.
+
+// Everything the TX path needs. Guarded by peer->TxLock.
+struct OvpnCryptoTxContext
 {
-    OvpnCryptoKeySlot Primary;
-    OvpnCryptoKeySlot Secondary;
+    OvpnCryptoTxState Primary;
+    OvpnCryptoTxState Secondary;
 
     POVPN_CRYPTO_ENCRYPT Encrypt;
-    POVPN_CRYPTO_DECRYPT Decrypt;
-
     OvpnCryptoOptions Options;
     OvpnCryptoPacketLayout Layout;
 };
 
+// Everything the RX path needs. Guarded by peer->RxLock.
+struct OvpnCryptoRxContext
+{
+    OvpnCryptoRxState Primary;
+    OvpnCryptoRxState Secondary;
 
+    POVPN_CRYPTO_DECRYPT Decrypt;
+    OvpnCryptoOptions Options;
+    OvpnCryptoPacketLayout Layout;
+};
+
+struct OvpnCryptoContext
+{
+    OvpnCryptoTxContext Tx;
+    OvpnCryptoRxContext Rx;
+};
+
+// Encrypts in place with the primary key. Caller holds peer->TxLock.
+_Must_inspect_result_
+_IRQL_requires_(DISPATCH_LEVEL)
+NTSTATUS
+OvpnCryptoEncrypt(_Inout_ OvpnCryptoTxContext* tx, _Inout_ PUCHAR buf, _In_ SIZE_T len);
+
+// Decrypts with the key that has keyId. Caller holds peer->RxLock. A non-zero
+// *sendEpoch asks the caller to call OvpnCryptoFollowPeerEpoch under TxLock
+// once RxLock is released.
+_Must_inspect_result_
+_IRQL_requires_(DISPATCH_LEVEL)
+NTSTATUS
+OvpnCryptoDecrypt(_Inout_ OvpnCryptoRxContext* rx, _In_ UCHAR keyId, _In_reads_bytes_(len) PUCHAR cipherText, _In_ SIZE_T len, _Inout_updates_bytes_(len) PUCHAR plainText, _Out_ UINT16* sendEpoch);
+
+// Moves the send key with keyId forward to epoch. Caller holds peer->TxLock.
+_IRQL_requires_(DISPATCH_LEVEL)
 VOID
-OvpnCryptoDescribePacketLayout(_In_ const OvpnCryptoContext* cryptoContext, _Out_ OvpnCryptoPacketLayout* layout);
-
-typedef
-NTSTATUS
-OVPN_CRYPTO_RETRY_ROUTINE(_In_ OvpnCryptoContext* cryptoContext, _In_ BOOLEAN allowRekey, _Inout_opt_ PVOID context);
-typedef OVPN_CRYPTO_RETRY_ROUTINE* POVPN_CRYPTO_RETRY_ROUTINE;
-
-struct OvpnCryptoEncryptParams
-{
-    PUCHAR Buffer;
-    SIZE_T Length;
-};
-
-struct OvpnCryptoDecryptParams
-{
-    UCHAR KeyId;
-    PUCHAR CipherText;
-    SIZE_T Length;
-    PUCHAR PlainText;
-};
-
-_Must_inspect_result_
-_IRQL_requires_max_(DISPATCH_LEVEL)
-NTSTATUS
-OvpnCryptoCallWithRetry(
-    _In_ OvpnPeerContext* peer,
-    _In_ BOOLEAN atDpcLevel,
-    _Inout_opt_ PBOOLEAN exclusive,
-    _Inout_opt_ PKIRQL kirql,
-    _In_ POVPN_CRYPTO_RETRY_ROUTINE routine,
-    _Inout_opt_ PVOID context);
-
-_Must_inspect_result_
-_IRQL_requires_max_(DISPATCH_LEVEL)
-NTSTATUS
-OvpnCryptoInvokeEncrypt(
-    _In_ OvpnCryptoContext* cryptoContext,
-    _In_ BOOLEAN allowRekey,
-    _Inout_opt_ PVOID context);
-
-_Must_inspect_result_
-_IRQL_requires_max_(DISPATCH_LEVEL)
-NTSTATUS
-OvpnCryptoInvokeDecrypt(
-    _In_ OvpnCryptoContext* cryptoContext,
-    _In_ BOOLEAN allowRekey,
-    _Inout_opt_ PVOID context);
+OvpnCryptoFollowPeerEpoch(_Inout_ OvpnCryptoTxContext* tx, _In_ UCHAR keyId, _In_ UINT16 epoch);
 
 _Must_inspect_result_
 _IRQL_requires_(PASSIVE_LEVEL)
@@ -146,14 +135,10 @@ OvpnCryptoUninit(_In_ OvpnCryptoContext* cryptoContext);
 
 _Must_inspect_result_
 NTSTATUS
-OvpnCryptoNewKey(_In_ OvpnCryptoContext* cryptoContext, _In_ POVPN_CRYPTO_DATA_V2 cryptoData, _In_opt_ BCRYPT_ALG_HANDLE algHandle, _In_opt_ BCRYPT_ALG_HANDLE hkdfAlgHandle);
-
-_Must_inspect_result_
-OvpnCryptoKeySlot*
-OvpnCryptoKeySlotFromKeyId(_In_ OvpnCryptoContext* cryptoContext, unsigned int keyId);
+OvpnCryptoNewKey(_Inout_ OvpnPeerContext* peer, _In_ POVPN_CRYPTO_DATA_V2 cryptoData, _In_opt_ BCRYPT_ALG_HANDLE algHandle, _In_opt_ BCRYPT_ALG_HANDLE hkdfAlgHandle);
 
 VOID
-OvpnCryptoSwapKeys(_In_ OvpnCryptoContext* cryptoContext);
+OvpnCryptoSwapKeys(_Inout_ OvpnPeerContext* peer);
 
 static inline
 UCHAR
@@ -166,16 +151,6 @@ static inline
 UCHAR OvpnCryptoOpcodeExtract(UCHAR op)
 {
     return op >> OVPN_OPCODE_SHIFT;
-}
-
-static inline
-BOOLEAN
-OvpnCryptoAeadUsageLimitReached(UINT64 limit, UINT64 plaintextBlocks, UINT64 highestPid)
-{
-    /* This is the  q + s <=  p^(1/2) * 2^(129/2) - 1 calculation where
-     * q is the number of protected messages (highest_pid)
-     * s Total plaintext length in all messages (in blocks) */
-    return ((limit > 0) && (plaintextBlocks + highestPid) > limit);
 }
 
 static inline

@@ -14,7 +14,8 @@ protected:
     void SetUp() override
     {
         RtlZeroMemory(&opts, sizeof(opts));
-        RtlZeroMemory(&keySlot, sizeof(keySlot));
+        RtlZeroMemory(&tx, sizeof(tx));
+        RtlZeroMemory(&rx, sizeof(rx));
 
         opts.KeyLen = 32;
         opts.UseEpoch = 1;
@@ -22,18 +23,19 @@ protected:
         ASSERT_EQ(BCryptOpenAlgorithmProvider(&opts.HkdfAlgHandle, BCRYPT_HKDF_ALGORITHM, NULL, 0), STATUS_SUCCESS);
         ASSERT_EQ(BCryptOpenAlgorithmProvider(&opts.AeadAlgHangle, BCRYPT_AES_ALGORITHM, NULL, 0), STATUS_SUCCESS);
 
-        keySlot.EpochKeySend.Epoch = 1;
-        keySlot.EpochKeyRecv.Epoch = 1;
+        tx.EpochKey.Epoch = 1;
+        rx.EpochKey.Epoch = 1;
 
-        OvpnCryptoEpochInitKey(&keySlot.Encrypt, &keySlot.EpochKeySend, &opts);
-        OvpnCryptoEpochInitKey(&keySlot.Decrypt, &keySlot.EpochKeyRecv, &opts);
+        OvpnCryptoEpochInitKey(&tx.Key, &tx.EpochKey, &opts);
+        OvpnCryptoEpochInitKey(&rx.Key, &rx.EpochKey, &opts);
 
-        RtlZeroMemory(keySlot.FutureEpochKeys, sizeof(keySlot.FutureEpochKeys));
-        OvpnCryptoEpochGenerateFutureRecvKeys(&keySlot, &opts);
+        RtlZeroMemory(rx.FutureKeys, sizeof(rx.FutureKeys));
+        OvpnCryptoEpochGenerateFutureRecvKeys(&rx, &opts);
     }
 
     OvpnCryptoOptions opts;
-    OvpnCryptoKeySlot keySlot;
+    OvpnCryptoTxState tx;
+    OvpnCryptoRxState rx;
 };
 
 TEST_F(CryptoTest, HkdfExpand) {
@@ -52,176 +54,257 @@ TEST_F(CryptoTest, HkdfExpand) {
     ASSERT_EQ(0, std::memcmp(out, out_expected, sizeof(out)));
 }
 
+/* The epoch tests below are written in terms of FUTURE_EPOCH_KEYS_COUNT (N)
+ * so they keep tracking the window size. Fixture state: Rx.Key.Epoch == 1,
+ * future keys span 2..1+N, Rx.EpochKey.Epoch == 1+N. */
+static constexpr int N = FUTURE_EPOCH_KEYS_COUNT;
+
+/* A full rotation as the driver performs it: the receive side moves first,
+ * then the send key follows the peer's epoch (under a different lock there). */
+static void RotateToEpoch(OvpnCryptoTxState* tx, OvpnCryptoRxState* rx, UINT16 epoch, OvpnCryptoOptions* opts)
+{
+    OvpnCryptoEpochReplaceUpdateRecvKey(rx, epoch, opts);
+    OvpnCryptoEpochBumpSendKey(tx, epoch, opts);
+}
+
 TEST_F(CryptoTest, EpochKeyGeneration) {
     // check that the keys look like expected
-    ASSERT_EQ(keySlot.FutureEpochKeys[0].Epoch, 2);
-    ASSERT_EQ(keySlot.FutureEpochKeys[15].Epoch, 17);
-    ASSERT_EQ(keySlot.EpochKeySend.Epoch, 1);
-    ASSERT_EQ(keySlot.EpochKeyRecv.Epoch, 17);
+    ASSERT_EQ(rx.FutureKeys[0].Epoch, 2);
+    ASSERT_EQ(rx.FutureKeys[N - 1].Epoch, 1 + N);
+    ASSERT_EQ(tx.EpochKey.Epoch, 1);
+    ASSERT_EQ(rx.EpochKey.Epoch, 1 + N);
 
-    // Now replace the recv key with the 6th future key (epoch = 8)
-    BCryptDestroyKey(keySlot.Decrypt.Key);
-    RtlZeroMemory(&keySlot.Decrypt, sizeof(keySlot.Decrypt));
-    ASSERT_EQ(keySlot.FutureEpochKeys[6].Epoch, 8);
-    keySlot.Decrypt = keySlot.FutureEpochKeys[6];
-    RtlZeroMemory(&keySlot.FutureEpochKeys[6].Epoch, sizeof(OvpnCryptoKeyContext));
+    // Now replace the recv key with a future key from the middle of the window
+    const int slot = N / 2;
+    const UINT16 epoch = 2 + slot;
+    BCryptDestroyKey(rx.Key.Key);
+    RtlZeroMemory(&rx.Key, sizeof(rx.Key));
+    ASSERT_EQ(rx.FutureKeys[slot].Epoch, epoch);
+    rx.Key = rx.FutureKeys[slot];
+    RtlZeroMemory(&rx.FutureKeys[slot], sizeof(OvpnCryptoKeyContext));
 
-    OvpnCryptoEpochGenerateFutureRecvKeys(&keySlot, &opts);
-    ASSERT_EQ(keySlot.FutureEpochKeys[0].Epoch, 9);
-    ASSERT_EQ(keySlot.FutureEpochKeys[15].Epoch, 24);
+    OvpnCryptoEpochGenerateFutureRecvKeys(&rx, &opts);
+    ASSERT_EQ(rx.FutureKeys[0].Epoch, epoch + 1);
+    ASSERT_EQ(rx.FutureKeys[N - 1].Epoch, epoch + N);
+    ASSERT_EQ(rx.EpochKey.Epoch, epoch + N);
 }
 
 TEST_F(CryptoTest, EpochKeyRotateToHighestFutureKey) {
-    /* Fixture: Decrypt.Epoch == 1, future keys span 2..17 (slot 15 == 17).
-     * Rotating to the highest future epoch (Decrypt + FUTURE_EPOCH_KEYS_COUNT)
-     * is a legitimate protocol fast-forward, but it consumes and zeroes the
-     * last future key. GenerateFutureRecvKeys then read a zeroed
-     * highestFutureKey, collapsed currentHighestKey to 1, and computed
-     * numKeysGenerate = 32 -- turning the RtlMoveMemory into a multi-gigabyte
-     * out-of-bounds copy and the regen loop into negative-index writes.
-     * Pre-fix this crashes; post-fix the whole window regenerates to 18..33. */
-    ASSERT_EQ(keySlot.FutureEpochKeys[15].Epoch, 17);
+    /* Rotating to the highest future epoch (Decrypt + N) is a legitimate
+     * protocol fast-forward, but it consumes and zeroes the last future key.
+     * GenerateFutureRecvKeys used to read a zeroed highestFutureKey, collapsed
+     * currentHighestKey to 1, and computed numKeysGenerate = 2N -- turning the
+     * RtlMoveMemory into an out-of-bounds copy and the regen loop into
+     * negative-index writes. Pre-fix this crashes; post-fix the whole window
+     * regenerates to 2+N..1+2N. */
+    ASSERT_EQ(rx.FutureKeys[N - 1].Epoch, 1 + N);
 
-    OvpnCryptoEpochReplaceUpdateRecvKey(&keySlot, 17, &opts);
+    OvpnCryptoEpochReplaceUpdateRecvKey(&rx, 1 + N, &opts);
 
-    ASSERT_EQ(keySlot.Decrypt.Epoch, 17);
-    ASSERT_EQ(keySlot.FutureEpochKeys[0].Epoch, 18);
-    ASSERT_EQ(keySlot.FutureEpochKeys[15].Epoch, 33);
+    ASSERT_EQ(rx.Key.Epoch, 1 + N);
+    ASSERT_EQ(rx.FutureKeys[0].Epoch, 2 + N);
+    ASSERT_EQ(rx.FutureKeys[N - 1].Epoch, 1 + 2 * N);
+}
+
+TEST_F(CryptoTest, EpochKeyRegeneratesFullWindowAfterRotation) {
+    /* Every slot must hold a live key with the expected epoch after a
+     * rotation. Catches a regen loop whose start index is not derived from
+     * FUTURE_EPOCH_KEYS_COUNT (it used to hardcode 16): with a smaller window
+     * the loop would not execute at all and the window would silently go
+     * stale after the first rotation. */
+    OvpnCryptoEpochReplaceUpdateRecvKey(&rx, 2, &opts);
+
+    for (int i = 0; i < N; ++i) {
+        ASSERT_EQ(rx.FutureKeys[i].Epoch, 3 + i) << "slot " << i;
+        ASSERT_NE(rx.FutureKeys[i].Key, nullptr) << "slot " << i;
+    }
+    ASSERT_EQ(rx.EpochKey.Epoch, 2 + N);
 }
 
 TEST_F(CryptoTest, EpochKeyRotation) {
     /* should replace send + key recv */
-    OvpnCryptoEpochReplaceUpdateRecvKey(&keySlot, 9, &opts);
+    RotateToEpoch(&tx, &rx, N, &opts);
 
-    ASSERT_EQ(keySlot.Decrypt.Epoch, 9);
-    ASSERT_EQ(keySlot.Encrypt.Epoch, 9);
-    ASSERT_EQ(keySlot.EpochKeySend.Epoch, 9);
-    ASSERT_EQ(keySlot.RetiringEpochDataReceiveKey.Epoch, 1);
+    ASSERT_EQ(rx.Key.Epoch, N);
+    ASSERT_EQ(tx.Key.Epoch, N);
+    ASSERT_EQ(tx.EpochKey.Epoch, N);
+    ASSERT_EQ(rx.RetiringKey.Epoch, 1);
 
-    /* Iterate the data send key four times to get it to 13 */
-    for (int i = 0; i < 4; i++)
+    /* Iterate the data send key N times to get it to 2N */
+    for (int i = 0; i < N; i++)
     {
-        OvpnCryptoEpochKeyIterate(&keySlot.EpochKeySend, opts.HkdfAlgHandle);
+        OvpnCryptoEpochKeyIterate(&tx.EpochKey, opts.HkdfAlgHandle);
 
-        BCryptDestroyKey(&keySlot.Encrypt.Key);
-        RtlZeroMemory(&keySlot.Encrypt, sizeof(OvpnCryptoKeyContext));
+        BCryptDestroyKey(tx.Key.Key);
+        RtlZeroMemory(&tx.Key, sizeof(OvpnCryptoKeyContext));
 
-        OvpnCryptoEpochInitKey(&keySlot.Encrypt, &keySlot.EpochKeySend, &opts);
+        OvpnCryptoEpochInitKey(&tx.Key, &tx.EpochKey, &opts);
     }
-    ASSERT_EQ(keySlot.Encrypt.Epoch, 13);
+    ASSERT_EQ(tx.Key.Epoch, 2 * N);
 
-    OvpnCryptoEpochReplaceUpdateRecvKey(&keySlot, 10, &opts);
-    ASSERT_EQ(keySlot.Decrypt.Epoch, 10);
-    ASSERT_EQ(keySlot.Encrypt.Epoch, 13);
-    ASSERT_EQ(keySlot.EpochKeySend.Epoch, 13);
-    ASSERT_EQ(keySlot.RetiringEpochDataReceiveKey.Epoch, 9);
+    /* recv epochs below the send epoch must leave the send side alone */
+    RotateToEpoch(&tx, &rx, N + 1, &opts);
+    ASSERT_EQ(rx.Key.Epoch, N + 1);
+    ASSERT_EQ(tx.Key.Epoch, 2 * N);
+    ASSERT_EQ(tx.EpochKey.Epoch, 2 * N);
+    ASSERT_EQ(rx.RetiringKey.Epoch, N);
 
-    OvpnCryptoEpochReplaceUpdateRecvKey(&keySlot, 12, &opts);
-    ASSERT_EQ(keySlot.Decrypt.Epoch, 12);
-    ASSERT_EQ(keySlot.Encrypt.Epoch, 13);
-    ASSERT_EQ(keySlot.EpochKeySend.Epoch, 13);
-    ASSERT_EQ(keySlot.RetiringEpochDataReceiveKey.Epoch, 10);
+    RotateToEpoch(&tx, &rx, 2 * N - 1, &opts);
+    ASSERT_EQ(rx.Key.Epoch, 2 * N - 1);
+    ASSERT_EQ(tx.Key.Epoch, 2 * N);
+    ASSERT_EQ(tx.EpochKey.Epoch, 2 * N);
+    ASSERT_EQ(rx.RetiringKey.Epoch, N + 1);
 
-    OvpnCryptoEpochKeyIterate(&keySlot.EpochKeySend, opts.HkdfAlgHandle);
+    OvpnCryptoEpochKeyIterate(&tx.EpochKey, opts.HkdfAlgHandle);
 
-    BCryptDestroyKey(&keySlot.Encrypt.Key);
-    RtlZeroMemory(&keySlot.Encrypt, sizeof(OvpnCryptoKeyContext));
+    BCryptDestroyKey(tx.Key.Key);
+    RtlZeroMemory(&tx.Key, sizeof(OvpnCryptoKeyContext));
 
-    OvpnCryptoEpochInitKey(&keySlot.Encrypt, &keySlot.EpochKeySend, &opts);
+    OvpnCryptoEpochInitKey(&tx.Key, &tx.EpochKey, &opts);
 
-    ASSERT_EQ(keySlot.Encrypt.Epoch, 14);
+    ASSERT_EQ(tx.Key.Epoch, 2 * N + 1);
 }
 
 TEST_F(CryptoTest, EpochKeyReceiveLookup)
 {
     /* lookup some wacky things that should fail */
-    ASSERT_EQ(OvpnCryptoEpochLookupDecryptKey(&keySlot, 2000), nullptr);
-    ASSERT_EQ(OvpnCryptoEpochLookupDecryptKey(&keySlot, -1), nullptr);
-    ASSERT_EQ(OvpnCryptoEpochLookupDecryptKey(&keySlot, 0xefff), nullptr);
+    ASSERT_EQ(OvpnCryptoEpochLookupDecryptKey(&rx, 2000), nullptr);
+    ASSERT_EQ(OvpnCryptoEpochLookupDecryptKey(&rx, -1), nullptr);
+    ASSERT_EQ(OvpnCryptoEpochLookupDecryptKey(&rx, 0xefff), nullptr);
 
-    /* Lookup the edges of the current window */
-    ASSERT_EQ(OvpnCryptoEpochLookupDecryptKey(&keySlot, 0), nullptr);
-    ASSERT_EQ(keySlot.RetiringEpochDataReceiveKey.Epoch, 0);
-    ASSERT_EQ(OvpnCryptoEpochLookupDecryptKey(&keySlot, 1)->Epoch, 1);
-    ASSERT_EQ(OvpnCryptoEpochLookupDecryptKey(&keySlot, 2)->Epoch, 2);
-    ASSERT_EQ(OvpnCryptoEpochLookupDecryptKey(&keySlot, 16)->Epoch, 16);
-    ASSERT_EQ(OvpnCryptoEpochLookupDecryptKey(&keySlot, 17)->Epoch, 17);
-    ASSERT_EQ(OvpnCryptoEpochLookupDecryptKey(&keySlot, 18), nullptr);
+    /* Lookup the edges of the current window: 1 active, 2..1+N future */
+    ASSERT_EQ(OvpnCryptoEpochLookupDecryptKey(&rx, 0), nullptr);
+    ASSERT_EQ(rx.RetiringKey.Epoch, 0);
+    ASSERT_EQ(OvpnCryptoEpochLookupDecryptKey(&rx, 1)->Epoch, 1);
+    ASSERT_EQ(OvpnCryptoEpochLookupDecryptKey(&rx, 2)->Epoch, 2);
+    ASSERT_EQ(OvpnCryptoEpochLookupDecryptKey(&rx, N)->Epoch, N);
+    ASSERT_EQ(OvpnCryptoEpochLookupDecryptKey(&rx, 1 + N)->Epoch, 1 + N);
+    ASSERT_EQ(OvpnCryptoEpochLookupDecryptKey(&rx, 2 + N), nullptr);
 
-    /* Should move 1 to retiring key but leave 2-6 undefined, 7 as
-     * active and 8-23 as future keys*/
-    OvpnCryptoEpochReplaceUpdateRecvKey(&keySlot, 7, &opts);
+    /* Should move 1 to retiring key but leave 2..a-1 undefined, a as
+     * active and a+1..a+N as future keys */
+    const UINT16 a = 1 + N / 2;
+    OvpnCryptoEpochReplaceUpdateRecvKey(&rx, a, &opts);
 
-    ASSERT_EQ(OvpnCryptoEpochLookupDecryptKey(&keySlot, 0), nullptr);
-    ASSERT_EQ(OvpnCryptoEpochLookupDecryptKey(&keySlot, 1)->Epoch, 1);
-    ASSERT_EQ(OvpnCryptoEpochLookupDecryptKey(&keySlot, 1), &keySlot.RetiringEpochDataReceiveKey);
+    ASSERT_EQ(OvpnCryptoEpochLookupDecryptKey(&rx, 0), nullptr);
+    ASSERT_EQ(OvpnCryptoEpochLookupDecryptKey(&rx, 1)->Epoch, 1);
+    ASSERT_EQ(OvpnCryptoEpochLookupDecryptKey(&rx, 1), &rx.RetiringKey);
 
-    ASSERT_EQ(OvpnCryptoEpochLookupDecryptKey(&keySlot, 2), nullptr);
-    ASSERT_EQ(OvpnCryptoEpochLookupDecryptKey(&keySlot, 3), nullptr);
-    ASSERT_EQ(OvpnCryptoEpochLookupDecryptKey(&keySlot, 4), nullptr);
-    ASSERT_EQ(OvpnCryptoEpochLookupDecryptKey(&keySlot, 5), nullptr);
-    ASSERT_EQ(OvpnCryptoEpochLookupDecryptKey(&keySlot, 6), nullptr);
-    ASSERT_EQ(OvpnCryptoEpochLookupDecryptKey(&keySlot, 21)->Epoch, 21);
-    ASSERT_EQ(OvpnCryptoEpochLookupDecryptKey(&keySlot, 22)->Epoch, 22);
-    ASSERT_EQ(OvpnCryptoEpochLookupDecryptKey(&keySlot, 23)->Epoch, 23);
-    ASSERT_EQ(OvpnCryptoEpochLookupDecryptKey(&keySlot, 24), nullptr);
-    ASSERT_EQ(OvpnCryptoEpochLookupDecryptKey(&keySlot, 25), nullptr);
+    for (UINT16 e = 2; e < a; ++e) {
+        ASSERT_EQ(OvpnCryptoEpochLookupDecryptKey(&rx, e), nullptr) << "epoch " << e;
+    }
+    ASSERT_EQ(OvpnCryptoEpochLookupDecryptKey(&rx, a)->Epoch, a);
+    ASSERT_EQ(OvpnCryptoEpochLookupDecryptKey(&rx, a + N - 1)->Epoch, a + N - 1);
+    ASSERT_EQ(OvpnCryptoEpochLookupDecryptKey(&rx, a + N)->Epoch, a + N);
+    ASSERT_EQ(OvpnCryptoEpochLookupDecryptKey(&rx, a + N + 1), nullptr);
+    ASSERT_EQ(OvpnCryptoEpochLookupDecryptKey(&rx, a + N + 2), nullptr);
 
-    /* Should move 7 to retiring key and have 8 as active key and
-     * 9-24 as future keys */
-    OvpnCryptoEpochReplaceUpdateRecvKey(&keySlot, 8, &opts);
-    ASSERT_EQ(OvpnCryptoEpochLookupDecryptKey(&keySlot, 0), nullptr);
-    ASSERT_EQ(OvpnCryptoEpochLookupDecryptKey(&keySlot, 1), nullptr);
-    ASSERT_EQ(OvpnCryptoEpochLookupDecryptKey(&keySlot, 2), nullptr);
-    ASSERT_EQ(OvpnCryptoEpochLookupDecryptKey(&keySlot, 3), nullptr);
-    ASSERT_EQ(OvpnCryptoEpochLookupDecryptKey(&keySlot, 4), nullptr);
-    ASSERT_EQ(OvpnCryptoEpochLookupDecryptKey(&keySlot, 5), nullptr);
-    ASSERT_EQ(OvpnCryptoEpochLookupDecryptKey(&keySlot, 6), nullptr);
-    ASSERT_EQ(OvpnCryptoEpochLookupDecryptKey(&keySlot, 7)->Epoch, 7);
-    ASSERT_EQ(OvpnCryptoEpochLookupDecryptKey(&keySlot, 7), &keySlot.RetiringEpochDataReceiveKey);
-    ASSERT_EQ(OvpnCryptoEpochLookupDecryptKey(&keySlot, 8)->Epoch, 8);
-    ASSERT_EQ(OvpnCryptoEpochLookupDecryptKey(&keySlot, 23)->Epoch, 23);
-    ASSERT_EQ(OvpnCryptoEpochLookupDecryptKey(&keySlot, 24)->Epoch, 24);
-    ASSERT_EQ(OvpnCryptoEpochLookupDecryptKey(&keySlot, 25), nullptr);
-    ASSERT_EQ(OvpnCryptoEpochLookupDecryptKey(&keySlot, 26), nullptr);
+    /* Should move a to retiring key and have a+1 as active key and
+     * a+2..a+1+N as future keys */
+    OvpnCryptoEpochReplaceUpdateRecvKey(&rx, a + 1, &opts);
+    for (UINT16 e = 0; e < a; ++e) {
+        ASSERT_EQ(OvpnCryptoEpochLookupDecryptKey(&rx, e), nullptr) << "epoch " << e;
+    }
+    ASSERT_EQ(OvpnCryptoEpochLookupDecryptKey(&rx, a)->Epoch, a);
+    ASSERT_EQ(OvpnCryptoEpochLookupDecryptKey(&rx, a), &rx.RetiringKey);
+    ASSERT_EQ(OvpnCryptoEpochLookupDecryptKey(&rx, a + 1)->Epoch, a + 1);
+    ASSERT_EQ(OvpnCryptoEpochLookupDecryptKey(&rx, a + N)->Epoch, a + N);
+    ASSERT_EQ(OvpnCryptoEpochLookupDecryptKey(&rx, a + N + 1)->Epoch, a + N + 1);
+    ASSERT_EQ(OvpnCryptoEpochLookupDecryptKey(&rx, a + N + 2), nullptr);
+    ASSERT_EQ(OvpnCryptoEpochLookupDecryptKey(&rx, a + N + 3), nullptr);
 }
 
 TEST_F(CryptoTest, EpochKeyOverflow)
 {
     /* Modify the receive epoch and keys to have a very high epoch to test
      * the end of array. Iterating through all 65k keys takes a 2-3s, so we
-     * avoid this for the unit test */
-    keySlot.Decrypt.Epoch = 65516;
-    keySlot.Encrypt.Epoch = 65516;
+     * avoid this for the unit test.
+     *
+     * Lookup refuses any epoch above UINT16_MAX - N - 1, because rotating to
+     * it would need future keys past UINT16_MAX. Start two epochs below that
+     * limit so both the accepted and the refused edges are in the window. */
+    const UINT16 highest = UINT16_MAX - N - 1;
+    const UINT16 start = highest - 2;
 
-    keySlot.EpochKeySend.Epoch = 65516;
-    keySlot.EpochKeyRecv.Epoch = 65516 + FUTURE_EPOCH_KEYS_COUNT;
+    rx.Key.Epoch = start;
+    tx.Key.Epoch = start;
 
-    for (int i = 0; i < FUTURE_EPOCH_KEYS_COUNT; ++i) {
-        keySlot.FutureEpochKeys[i].Epoch = 65517 + i;
+    tx.EpochKey.Epoch = start;
+    rx.EpochKey.Epoch = start + N;
+
+    for (int i = 0; i < N; ++i) {
+        rx.FutureKeys[i].Epoch = start + 1 + i;
     }
 
-    /* Move the last few keys until we are close to the limit */
-    while (keySlot.Decrypt.Epoch < (UINT16_MAX - 24))
-    {
-        OvpnCryptoEpochReplaceUpdateRecvKey(&keySlot, keySlot.Decrypt.Epoch + 10, &opts);
-    }
+    /* Looking up these keys should still work as they will not break the
+     * limit when generating keys */
+    ASSERT_EQ(OvpnCryptoEpochLookupDecryptKey(&rx, highest - 1)->Epoch, highest - 1);
+    ASSERT_EQ(OvpnCryptoEpochLookupDecryptKey(&rx, highest)->Epoch, highest);
 
-    /* Looking up this key should still work as it will not break the limit
-     * when generating keys */
-    ASSERT_EQ(OvpnCryptoEpochLookupDecryptKey(&keySlot, UINT16_MAX - 18)->Epoch, UINT16_MAX - 18);
-    ASSERT_EQ(OvpnCryptoEpochLookupDecryptKey(&keySlot, UINT16_MAX - 17)->Epoch, UINT16_MAX - 17);
-
-    /* This key is no longer eligible for decrypting as the 16 future keys
+    /* This key is no longer eligible for decrypting as the N future keys
      * would be larger than uint16_t maximum */
-    ASSERT_EQ(OvpnCryptoEpochLookupDecryptKey(&keySlot, UINT16_MAX - FUTURE_EPOCH_KEYS_COUNT), nullptr);
-    ASSERT_EQ(OvpnCryptoEpochLookupDecryptKey(&keySlot, UINT16_MAX), nullptr);
+    ASSERT_EQ(OvpnCryptoEpochLookupDecryptKey(&rx, UINT16_MAX - N), nullptr);
+    ASSERT_EQ(OvpnCryptoEpochLookupDecryptKey(&rx, UINT16_MAX), nullptr);
 
     /* Check that moving to the last possible epoch works */
-    OvpnCryptoEpochReplaceUpdateRecvKey(&keySlot, UINT16_MAX - 17, &opts);
-    ASSERT_EQ(OvpnCryptoEpochLookupDecryptKey(&keySlot, UINT16_MAX - 17)->Epoch, UINT16_MAX - 17);
-    ASSERT_EQ(OvpnCryptoEpochLookupDecryptKey(&keySlot, UINT16_MAX - 16), nullptr);
-    ASSERT_EQ(OvpnCryptoEpochLookupDecryptKey(&keySlot, UINT16_MAX), nullptr);
+    OvpnCryptoEpochReplaceUpdateRecvKey(&rx, highest, &opts);
+    ASSERT_EQ(rx.EpochKey.Epoch, UINT16_MAX - 1);
+    ASSERT_EQ(OvpnCryptoEpochLookupDecryptKey(&rx, highest)->Epoch, highest);
+    ASSERT_EQ(OvpnCryptoEpochLookupDecryptKey(&rx, UINT16_MAX - N), nullptr);
+    ASSERT_EQ(OvpnCryptoEpochLookupDecryptKey(&rx, UINT16_MAX), nullptr);
+}
+
+TEST_F(CryptoTest, EpochSendKeyBumpResetsPacketId)
+{
+    /* A higher epoch from the peer bumps our send key too; a fresh key must
+     * restart its packet counter, as IterateSendKey and userspace do. */
+    tx.Pktid.SeqNum = 1234;
+    RotateToEpoch(&tx, &rx, 2, &opts);
+    ASSERT_EQ(tx.Key.Epoch, 2);
+    ASSERT_EQ(tx.Pktid.SeqNum, 0);
+
+    /* A receive-only rotation that does not overtake the send epoch must
+     * leave the counter alone. */
+    OvpnCryptoEpochIterateSendKey(&tx, &opts);
+    ASSERT_EQ(tx.Key.Epoch, 3);
+    tx.Pktid.SeqNum = 77;
+    RotateToEpoch(&tx, &rx, 3, &opts);
+    ASSERT_EQ(rx.Key.Epoch, 3);
+    ASSERT_EQ(tx.Key.Epoch, 3);
+    ASSERT_EQ(tx.Pktid.SeqNum, 77);
+}
+
+TEST_F(CryptoTest, EpochNextPacketId)
+{
+    UINT64 pid = 0;
+
+    /* counter runs from 1 under the current epoch */
+    ASSERT_EQ(OvpnCryptoEpochNextPacketId(&tx, &opts, 1400, &pid), STATUS_SUCCESS);
+    ASSERT_EQ(pid, (1ull << 48) | 1);
+    ASSERT_EQ(OvpnCryptoEpochNextPacketId(&tx, &opts, 1400, &pid), STATUS_SUCCESS);
+    ASSERT_EQ(pid, (1ull << 48) | 2);
+    ASSERT_EQ(tx.Key.PlaintextBlocks, 2u * 88);
+
+    /* usage limit reached: next epoch, counter restarts */
+    opts.AeadUsageLimit = 100;
+    ASSERT_EQ(OvpnCryptoEpochNextPacketId(&tx, &opts, 1400, &pid), STATUS_SUCCESS);
+    ASSERT_EQ(pid, (2ull << 48) | 1);
+    ASSERT_EQ(tx.Key.Epoch, 2);
+    ASSERT_EQ(tx.Key.PlaintextBlocks, 88u);
+    opts.AeadUsageLimit = 0;
+
+    /* counter exhausted: next epoch, never a wrapped counter */
+    tx.Pktid.SeqNum = PACKET_ID_EPOCH_MAX;
+    ASSERT_EQ(OvpnCryptoEpochNextPacketId(&tx, &opts, 1400, &pid), STATUS_SUCCESS);
+    ASSERT_EQ(pid, (3ull << 48) | 1);
+
+    /* last epoch used up: fail, state untouched */
+    tx.EpochKey.Epoch = UINT16_MAX;
+    tx.Key.Epoch = UINT16_MAX;
+    tx.Pktid.SeqNum = PACKET_ID_EPOCH_MAX;
+    ASSERT_EQ(OvpnCryptoEpochNextPacketId(&tx, &opts, 1400, &pid), STATUS_INTEGER_OVERFLOW);
+    ASSERT_EQ(tx.Key.Epoch, UINT16_MAX);
+    ASSERT_EQ(tx.Pktid.SeqNum, (LONG64)PACKET_ID_EPOCH_MAX);
 }
 
 TEST_F(CryptoTest, EpochKeyRotationCarriesReplayWindow)
@@ -245,20 +328,20 @@ TEST_F(CryptoTest, EpochKeyRotationCarriesReplayWindow)
     before.History[7] = 0x55;
     before.Expire.QuadPart = 1234567;
 
-    keySlot.PktidRecv = before;
+    rx.Pktid = before;
 
     /* Sanity: retiring window starts at zero (set up by SetUp). */
     OvpnPktidRecv zero = {};
-    ASSERT_EQ(0, std::memcmp(&keySlot.PktidRecvRetiring, &zero, sizeof(zero)));
+    ASSERT_EQ(0, std::memcmp(&rx.PktidRetiring, &zero, sizeof(zero)));
 
     /* Rotate from epoch 1 -> epoch 2. */
-    OvpnCryptoEpochReplaceUpdateRecvKey(&keySlot, 2, &opts);
+    OvpnCryptoEpochReplaceUpdateRecvKey(&rx, 2, &opts);
 
     /* Security-critical: PktidRecvRetiring MUST inherit the previous current
      * window. Without this, any captured packet from epoch 1 will be
      * accepted at least once under the retiring key because PktidRecvRetiring
      * is still all-zero (Id=0, IdFloor=0, empty History). */
-    ASSERT_EQ(0, std::memcmp(&keySlot.PktidRecvRetiring, &before, sizeof(before)))
+    ASSERT_EQ(0, std::memcmp(&rx.PktidRetiring, &before, sizeof(before)))
         << "PktidRecvRetiring did not inherit PktidRecv state after rotation; "
            "captured retiring-epoch packets are replayable.";
 
@@ -266,7 +349,7 @@ TEST_F(CryptoTest, EpochKeyRotationCarriesReplayWindow)
      * high bits of the 64-bit pktid (the auto-rebase in OvpnPktidRecvVerify
      * handles the transition), but matches userspace and prevents stale state
      * from leaking forward if the wire format ever changes. */
-    ASSERT_EQ(0, std::memcmp(&keySlot.PktidRecv, &zero, sizeof(zero)))
+    ASSERT_EQ(0, std::memcmp(&rx.Pktid, &zero, sizeof(zero)))
         << "PktidRecv was not reset on rotation.";
 }
 
