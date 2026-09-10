@@ -274,6 +274,39 @@ TEST_F(CryptoTest, EpochSendKeyBumpResetsPacketId)
     ASSERT_EQ(tx.Pktid.SeqNum, 77);
 }
 
+TEST_F(CryptoTest, EpochNextPacketId)
+{
+    UINT64 pid = 0;
+
+    /* counter runs from 1 under the current epoch */
+    ASSERT_EQ(OvpnCryptoEpochNextPacketId(&tx, &opts, 1400, &pid), STATUS_SUCCESS);
+    ASSERT_EQ(pid, (1ull << 48) | 1);
+    ASSERT_EQ(OvpnCryptoEpochNextPacketId(&tx, &opts, 1400, &pid), STATUS_SUCCESS);
+    ASSERT_EQ(pid, (1ull << 48) | 2);
+    ASSERT_EQ(tx.Key.PlaintextBlocks, 2u * 88);
+
+    /* usage limit reached: next epoch, counter restarts */
+    opts.AeadUsageLimit = 100;
+    ASSERT_EQ(OvpnCryptoEpochNextPacketId(&tx, &opts, 1400, &pid), STATUS_SUCCESS);
+    ASSERT_EQ(pid, (2ull << 48) | 1);
+    ASSERT_EQ(tx.Key.Epoch, 2);
+    ASSERT_EQ(tx.Key.PlaintextBlocks, 88u);
+    opts.AeadUsageLimit = 0;
+
+    /* counter exhausted: next epoch, never a wrapped counter */
+    tx.Pktid.SeqNum = PACKET_ID_EPOCH_MAX;
+    ASSERT_EQ(OvpnCryptoEpochNextPacketId(&tx, &opts, 1400, &pid), STATUS_SUCCESS);
+    ASSERT_EQ(pid, (3ull << 48) | 1);
+
+    /* last epoch used up: fail, state untouched */
+    tx.EpochKey.Epoch = UINT16_MAX;
+    tx.Key.Epoch = UINT16_MAX;
+    tx.Pktid.SeqNum = PACKET_ID_EPOCH_MAX;
+    ASSERT_EQ(OvpnCryptoEpochNextPacketId(&tx, &opts, 1400, &pid), STATUS_INTEGER_OVERFLOW);
+    ASSERT_EQ(tx.Key.Epoch, UINT16_MAX);
+    ASSERT_EQ(tx.Pktid.SeqNum, (LONG64)PACKET_ID_EPOCH_MAX);
+}
+
 TEST_F(CryptoTest, EpochKeyRotationCarriesReplayWindow)
 {
     /* Seed PktidRecv with non-trivial state, simulating that some packets

@@ -366,18 +366,7 @@ OvpnCryptoEncryptAEAD(OvpnCryptoTxState* tx, UCHAR* buf, SIZE_T len, OvpnCryptoO
     RtlCopyMemory(buf, &op, sizeof(op));
 
     if (opts->UseEpoch) {
-        if (tx->EpochKey.Epoch == UINT16_MAX) {
-            return STATUS_BUFFER_OVERFLOW;
-        }
-
-        if (OvpnCryptoAeadUsageLimitReached(opts->AeadUsageLimit, tx->Key.PlaintextBlocks, tx->Pktid.SeqNum) || (tx->Pktid.SeqNum >= PACKET_ID_EPOCH_MAX)) {
-            OvpnCryptoEpochIterateSendKey(tx, opts);
-        }
-
-        // calculate 64-bit packet-id = (epoch << 48) | ctr48
-        // the overflow of pktid is checked above
-        UINT64 ctr48 = (UINT64)++tx->Pktid.SeqNum;
-        packet_id = ((UINT64)tx->Key.Epoch << 48) | ctr48;
+        GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnCryptoEpochNextPacketId(tx, opts, len, &packet_id));
 
         // prepend with pktid
         UINT64 packet_id_net = RtlUlonglongByteSwap(packet_id);
@@ -398,11 +387,6 @@ OvpnCryptoEncryptAEAD(OvpnCryptoTxState* tx, UCHAR* buf, SIZE_T len, OvpnCryptoO
         // prepend with pktid
         RtlCopyMemory(buf + OVPN_DATA_V2_LEN, &packet_id_net, sizeof(packet_id_net));
     }
-
-    // update number of plaintext blocks encrypted. Use the (x + (n-1))/n trick to round up the result to the number of blocks used
-    const ULONGLONG blocksize = AEAD_LIMIT_BLOCKSIZE;
-    ULONGLONG inc = ((ULONGLONG)len + (blocksize - 1)) / blocksize;
-    tx->Key.PlaintextBlocks += inc;
 
     BCRYPT_AUTHENTICATED_CIPHER_MODE_INFO authInfo;
     BCRYPT_INIT_AUTH_MODE_INFO(authInfo);
