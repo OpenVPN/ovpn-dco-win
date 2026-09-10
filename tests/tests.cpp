@@ -244,6 +244,26 @@ TEST_F(CryptoTest, EpochKeyOverflow)
     ASSERT_EQ(OvpnCryptoEpochLookupDecryptKey(&keySlot, UINT16_MAX), nullptr);
 }
 
+TEST_F(CryptoTest, EpochSendKeyBumpResetsPacketId)
+{
+    /* A higher epoch from the peer bumps our send key too; a fresh key must
+     * restart its packet counter, as IterateSendKey and userspace do. */
+    keySlot.PktidXmit.SeqNum = 1234;
+    OvpnCryptoEpochReplaceUpdateRecvKey(&keySlot, 2, &opts);
+    ASSERT_EQ(keySlot.Encrypt.Epoch, 2);
+    ASSERT_EQ(keySlot.PktidXmit.SeqNum, 0);
+
+    /* A receive-only rotation that does not overtake the send epoch must
+     * leave the counter alone. */
+    OvpnCryptoEpochIterateSendKey(&keySlot, &opts);
+    ASSERT_EQ(keySlot.Encrypt.Epoch, 3);
+    keySlot.PktidXmit.SeqNum = 77;
+    OvpnCryptoEpochReplaceUpdateRecvKey(&keySlot, 3, &opts);
+    ASSERT_EQ(keySlot.Decrypt.Epoch, 3);
+    ASSERT_EQ(keySlot.Encrypt.Epoch, 3);
+    ASSERT_EQ(keySlot.PktidXmit.SeqNum, 77);
+}
+
 TEST_F(CryptoTest, EpochKeyRotationCarriesReplayWindow)
 {
     /* Seed PktidRecv with non-trivial state, simulating that some packets

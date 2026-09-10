@@ -428,7 +428,7 @@ OvpnCryptoEncryptAEAD(OvpnCryptoKeySlot* keySlot, UCHAR* buf, SIZE_T len, OvpnCr
             return STATUS_BUFFER_OVERFLOW;
         }
 
-        if (OvpnCryptoAeadUsageLimitReached(opts->AeadUsageLimit, keySlot->Encrypt.PlaintextBlocks, keySlot->PktidXmit.SeqNum) || (keySlot->PktidXmit.SeqNum == PACKET_ID_EPOCH_MAX)) {
+        if (OvpnCryptoAeadUsageLimitReached(opts->AeadUsageLimit, keySlot->Encrypt.PlaintextBlocks, keySlot->PktidXmit.SeqNum) || (keySlot->PktidXmit.SeqNum >= PACKET_ID_EPOCH_MAX)) {
             if (!allowRekey) {
                 return STATUS_OVPN_CRYPTO_RETRY;
             }

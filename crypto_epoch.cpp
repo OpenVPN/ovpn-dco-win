@@ -223,6 +223,18 @@ OvpnCryptoEpochGenerateFutureRecvKeys(OvpnCryptoKeySlot* keySlot, OvpnCryptoOpti
     }
 }
 
+// Installs the data key for the current EpochKeySend and restarts the packet
+// counter, like userspace epoch_init_send_key_ctx().
+static VOID
+OvpnCryptoEpochInitSendKey(OvpnCryptoKeySlot* keySlot, OvpnCryptoOptions* opts)
+{
+    BCryptDestroyKey(keySlot->Encrypt.Key);
+    RtlSecureZeroMemory(&keySlot->Encrypt, sizeof(OvpnCryptoKeyContext));
+    OvpnCryptoEpochInitKey(&keySlot->Encrypt, &keySlot->EpochKeySend, opts);
+
+    RtlZeroMemory(&keySlot->PktidXmit, sizeof(keySlot->PktidXmit));
+}
+
 VOID
 OvpnCryptoEpochReplaceUpdateRecvKey(OvpnCryptoKeySlot* keySlot, UINT16 new_epoch, OvpnCryptoOptions* opts)
 {
@@ -249,14 +261,11 @@ OvpnCryptoEpochReplaceUpdateRecvKey(OvpnCryptoKeySlot* keySlot, UINT16 new_epoch
 
     // Check if the new recv key epoch is higher than the send key epoch. If yes we will replace the send key as well
     if (keySlot->Encrypt.Epoch < new_epoch) {
-        BCryptDestroyKey(keySlot->Encrypt.Key);
-        RtlZeroMemory(&keySlot->Encrypt, sizeof(OvpnCryptoKeyContext));
-
         // Update the epoch_key for send to match the current key being used
         while (keySlot->EpochKeySend.Epoch < new_epoch) {
             OvpnCryptoEpochKeyIterate(&keySlot->EpochKeySend, opts->HkdfAlgHandle);
         }
-        OvpnCryptoEpochInitKey(&keySlot->Encrypt, &keySlot->EpochKeySend, opts);
+        OvpnCryptoEpochInitSendKey(keySlot, opts);
     }
 
     // Replace receive key
@@ -323,12 +332,7 @@ VOID
 OvpnCryptoEpochIterateSendKey(OvpnCryptoKeySlot* keySlot, OvpnCryptoOptions* opts)
 {
     OvpnCryptoEpochKeyIterate(&keySlot->EpochKeySend, opts->HkdfAlgHandle);
-
-    BCryptDestroyKey(keySlot->Encrypt.Key);
-    RtlSecureZeroMemory(&keySlot->Encrypt, sizeof(OvpnCryptoKeyContext));
-    OvpnCryptoEpochInitKey(&keySlot->Encrypt, &keySlot->EpochKeySend, opts);
-
-    RtlZeroMemory(&keySlot->PktidXmit, sizeof(keySlot->PktidXmit));
+    OvpnCryptoEpochInitSendKey(keySlot, opts);
 }
 
 VOID
