@@ -56,7 +56,10 @@ struct OVPN_TX_BUFFER
 
     LIST_ENTRY PoolListEntry;
 
-    // used when sending from EvtIoWrite
+    // control channel packet, not data channel
+    BOOLEAN ControlChannel;
+
+    // set only when a write request is parked waiting for this send, which is TCP only
     WDFQUEUE IoQueue;
 
 #pragma warning(suppress:4200) //nonstandard extension used: zero-sized array in struct/union
