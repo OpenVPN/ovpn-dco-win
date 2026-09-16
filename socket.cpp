@@ -790,16 +790,14 @@ static
 VOID
 OvpnSocketFinalizeTxBuffer(_In_ OVPN_TX_BUFFER* buffer, NTSTATUS ioStatus, ULONG bytesSent)
 {
-    if (buffer->IoQueue != NULL) {
+    // only a parked TCP write has a request still waiting on the outcome
+    if (buffer->IoQueue != WDF_NO_HANDLE) {
         WDFREQUEST request;
-        NTSTATUS status;
-        GOTO_IF_NOT_NT_SUCCESS(done, status, WdfIoQueueRetrieveNextRequest(buffer->IoQueue, &request));
-
-        // report status and bytesSent to userspace
-        WdfRequestCompleteWithInformation(request, ioStatus, bytesSent);
+        if (NT_SUCCESS(WdfIoQueueRetrieveNextRequest(buffer->IoQueue, &request))) {
+            WdfRequestCompleteWithInformation(request, ioStatus, bytesSent);
+        }
     }
 
-done:
     while (buffer != NULL) {
         OVPN_TX_BUFFER* next = (OVPN_TX_BUFFER*)buffer->WskBufList.Next;
         OvpnTxBufferPoolPut(buffer);
@@ -819,16 +817,15 @@ OvpnSocketSendComplete(_In_ PDEVICE_OBJECT deviceObj, _In_ PIRP irp, _In_ PVOID 
 
     if (irp->IoStatus.Status != STATUS_SUCCESS) {
         LOG_ERROR("Send failed", TraceLoggingNTStatus(irp->IoStatus.Status, "status"));
+        InterlockedIncrementNoFence(buffer->ControlChannel ? &device->Stats.LostOutControlPackets : &device->Stats.LostOutDataPackets);
     }
-    else {
-        if (buffer->IoQueue == NULL) {
-            // this is data channel packet
-            InterlockedExchangeAddNoFence64(&device->Stats.TransportBytesSent, bytesSend);
-        }
+    else if (!buffer->ControlChannel) {
+        InterlockedExchangeAddNoFence64(&device->Stats.TransportBytesSent, bytesSend);
     }
 
-    if (device->Socket.Tcp)
-        bytesSend -= 2;
+    if (device->Socket.Tcp) {
+        bytesSend -= 2; // the length prefix the driver added is not the caller's
+    }
     OvpnSocketFinalizeTxBuffer(buffer, irp->IoStatus.Status, bytesSend);
 
     IoFreeIrp(irp);
@@ -846,16 +843,16 @@ OvpnSocketSend(OvpnSocket* ovpnSocket, OVPN_TX_BUFFER* buffer, SOCKADDR* sa) {
     PIRP irp = IoAllocateIrp(1, FALSE);
     if (irp == NULL) {
         LOG_ERROR("Failed to allocate IRP");
+        InterlockedIncrementNoFence(buffer->ControlChannel ? &device->Stats.LostOutControlPackets : &device->Stats.LostOutDataPackets);
         OvpnSocketFinalizeTxBuffer(buffer, STATUS_INSUFFICIENT_RESOURCES, 0);
-        InterlockedIncrementNoFence(buffer->IoQueue != WDF_NO_HANDLE ? &device->Stats.LostOutControlPackets : &device->Stats.LostOutDataPackets);
         return STATUS_INSUFFICIENT_RESOURCES;
     }
 
     if (socket == NULL) {
         LOG_ERROR("Socket is NULL");
-        OvpnSocketFinalizeTxBuffer(buffer, STATUS_INVALID_DEVICE_STATE, 0);
         IoFreeIrp(irp);
-        InterlockedIncrementNoFence(buffer->IoQueue != WDF_NO_HANDLE ? &device->Stats.LostOutControlPackets : &device->Stats.LostOutDataPackets);
+        InterlockedIncrementNoFence(buffer->ControlChannel ? &device->Stats.LostOutControlPackets : &device->Stats.LostOutDataPackets);
+        OvpnSocketFinalizeTxBuffer(buffer, STATUS_INVALID_DEVICE_STATE, 0);
         return STATUS_INVALID_DEVICE_STATE;
     }
 

@@ -191,6 +191,7 @@ OvpnTxBufferPoolGet(OVPN_TX_BUFFER_POOL handle, OVPN_TX_BUFFER** buffer)
 
     RtlZeroMemory(&(*buffer)->WskBufList, sizeof(WSK_BUF_LIST));
 
+    (*buffer)->ControlChannel = FALSE;
     (*buffer)->IoQueue = WDF_NO_HANDLE;
 
     return STATUS_SUCCESS;

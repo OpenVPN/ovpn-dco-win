@@ -230,8 +230,6 @@ _Use_decl_annotations_
 VOID
 OvpnEvtIoWrite(WDFQUEUE queue, WDFREQUEST request, size_t length)
 {
-    UNREFERENCED_PARAMETER(length);
-
     NTSTATUS status = STATUS_SUCCESS;
 
     POVPN_DEVICE device = OvpnGetDeviceContext(WdfIoQueueGetDevice(queue));
@@ -316,23 +314,32 @@ OvpnEvtIoWrite(WDFQUEUE queue, WDFREQUEST request, size_t length)
     PUCHAR data = OvpnBufferPut(txBuf, bufLen);
     RtlCopyMemory(data, buf, bufLen);
 
-    txBuf->IoQueue = device->PendingWritesQueue;
+    txBuf->ControlChannel = TRUE;
 
-    // move request to manual queue
-    GOTO_IF_NOT_NT_SUCCESS(error, status, WdfRequestForwardToIoQueue(request, device->PendingWritesQueue));
+    // TCP is a stream, so keep the request parked: sends stay ordered and the caller
+    // still learns how the send went.
+    if (device->Socket.Tcp) {
+        txBuf->IoQueue = device->PendingWritesQueue;
+        GOTO_IF_NOT_NT_SUCCESS(error, status, WdfRequestForwardToIoQueue(request, device->PendingWritesQueue));
 
-    // send
-    LOG_IF_NOT_NT_SUCCESS(status = OvpnSocketSend(&device->Socket, txBuf, sa));
+        LOG_IF_NOT_NT_SUCCESS(status = OvpnSocketSend(&device->Socket, txBuf, sa));
+        goto done_not_complete;
+    }
 
-    goto done_not_complete;
+    // The payload is copied, so a datagram send completes here, the way a socket does.
+    NTSTATUS sendStatus;
+    LOG_IF_NOT_NT_SUCCESS(sendStatus = OvpnSocketSend(&device->Socket, txBuf, sa));
+    txBuf = NULL; // the send owns it now
+
+    // STATUS_PENDING would leave the caller's overlapped write looking unfinished
+    status = NT_SUCCESS(sendStatus) ? STATUS_SUCCESS : sendStatus;
 
 error:
     if (txBuf != NULL) {
         OvpnTxBufferPoolPut(txBuf);
     }
 
-    ULONG_PTR bytesCopied = 0;
-    WdfRequestCompleteWithInformation(request, status, bytesCopied);
+    WdfRequestCompleteWithInformation(request, status, NT_SUCCESS(status) ? length : 0);
 
 done_not_complete:
     ExReleaseSpinLockShared(&device->SpinLock, kiqrl);
