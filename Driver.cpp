@@ -1003,11 +1003,13 @@ OvpnDeviceNotifyPeerDel(POVPN_DEVICE device, INT32 peerId, OVPN_DEL_PEER_REASON 
     WDFREQUEST request;
     status = WdfIoQueueRetrieveNextRequest(device->PendingNotificationRequestsQueue, &request);
     if (!NT_SUCCESS(status)) {
-        LOG_INFO("Adding del peer notification to the queue");
+        LOG_INFO("Adding del peer notification to the queue", TraceLoggingValue(peerId, "peer-id"),
+            TraceLoggingValue(OvpnPeerGetDelReasonString(reason), "reason"));
         return device->PendingNotificationsQueue.AddDelPeerEvent(peerId, reason);
     }
     else {
-        LOG_INFO("Notify userspace about deleted peer", TraceLoggingValue(OvpnPeerGetDelReasonString(reason), "reason"));
+        LOG_INFO("Notify userspace about deleted peer", TraceLoggingValue(peerId, "peer-id"),
+            TraceLoggingValue(OvpnPeerGetDelReasonString(reason), "reason"));
         OVPN_NOTIFY_EVENT* evt;
         ULONG_PTR bytesSent = 0;
         LOG_IF_NOT_NT_SUCCESS(status = WdfRequestRetrieveOutputBuffer(request, sizeof(OVPN_NOTIFY_EVENT), (PVOID*)&evt, nullptr));
@@ -1030,11 +1032,11 @@ OvpnDeviceNotifyPeerFloat(POVPN_DEVICE device, INT32 peerId, PSOCKADDR floatAddr
     WDFREQUEST request;
     status = WdfIoQueueRetrieveNextRequest(device->PendingNotificationRequestsQueue, &request);
     if (!NT_SUCCESS(status)) {
-        LOG_INFO("Adding float peer notification to the queue");
+        LOG_INFO("Adding float peer notification to the queue", TraceLoggingValue(peerId, "peer-id"));
         return device->PendingNotificationsQueue.AddFloatEvent(peerId, floatAddr);
     }
     else {
-        LOG_INFO("Notify userspace about floated peer");
+        LOG_INFO("Notify userspace about floated peer", TraceLoggingValue(peerId, "peer-id"));
         OVPN_NOTIFY_EVENT* evt;
         ULONG_PTR bytesSent = 0;
         LOG_IF_NOT_NT_SUCCESS(status = WdfRequestRetrieveOutputBuffer(request, sizeof(OVPN_NOTIFY_EVENT), (PVOID*)&evt, nullptr));

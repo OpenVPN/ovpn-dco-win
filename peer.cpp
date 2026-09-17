@@ -984,6 +984,7 @@ OvpnPeerNewKey(POVPN_DEVICE device, WDFREQUEST request)
 
     peer = OvpnFindPeer(device, cryptoData->PeerId, FALSE);
     if (peer == nullptr) {
+        LOG_ERROR("Peer not found", TraceLoggingValue(cryptoData->PeerId, "peer-id"));
         status = STATUS_OBJECTID_NOT_FOUND;
         goto done;
     }
@@ -1020,6 +1021,7 @@ OvpnPeerNewKeyV2(POVPN_DEVICE device, WDFREQUEST request)
     peer = OvpnFindPeer(device, cryptoDataV2->V1.PeerId, FALSE);
 
     if (peer == nullptr) {
+        LOG_ERROR("Peer not found", TraceLoggingValue(cryptoDataV2->V1.PeerId, "peer-id"));
         status = STATUS_OBJECTID_NOT_FOUND;
         goto done;
     }
@@ -1051,7 +1053,7 @@ OvpnPeerDoSwapKeys(POVPN_DEVICE device, INT32 peerId)
         return STATUS_SUCCESS;
     }
     else {
-        LOG_ERROR("Peer not found");
+        LOG_ERROR("Peer not found", TraceLoggingValue(peerId, "peer-id"));
         return STATUS_INVALID_DEVICE_REQUEST;
     }
 }
