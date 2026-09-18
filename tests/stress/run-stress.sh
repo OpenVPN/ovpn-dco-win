@@ -265,6 +265,8 @@ printf '  %-26s %s (mostly peer setup)\n' "epoch key derivations" \
        "$(json_num "$rotations" KeyDerivations)"
 printf '  %-26s %s (epoch window %s, replay %s)\n' "decrypt errors" "${decrypt_errors:-?}" \
        "$(json_num "$rotations" UnknownEpoch)" "$(json_num "$rotations" InvalidPacketId)"
+printf '  %-26s %s late, %s ahead\n' "  unknown epoch" \
+       "$(json_num "$rotations" UnknownEpochLate)" "$(json_num "$rotations" UnknownEpochAhead)"
 printf '  %-26s %s\n' "LostInData (delta)"       "$d_lost_in"
 printf '  %-26s %s\n' "LostOutData (delta)"      "$d_lost_out"
 printf '  %-26s %s MB -> %s MB\n' "nonpaged pool" \

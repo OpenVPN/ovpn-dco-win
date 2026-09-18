@@ -296,7 +296,10 @@ OvpnCryptoDecryptAEAD(OvpnCryptoRxState* rx, UCHAR* bufIn, SIZE_T len, UCHAR* bu
 
         decryptKey = OvpnCryptoEpochLookupDecryptKey(rx, rx_epoch);
         if (decryptKey == NULL) {
-            LOG_ERROR("Data packet with unknown epoch", TraceLoggingValue(rx_epoch, "epoch"));
+            // An epoch we already retired means a late packet, which is common when a peer id
+            // is reused. An epoch past the future keys means a sender we can no longer follow.
+            LOG_ERROR("Data packet with unknown epoch", TraceLoggingValue(rx_epoch, "epoch"),
+                TraceLoggingValue(rx->Key.Epoch, "current-epoch"));
             return STATUS_DATA_ERROR;
         }
 

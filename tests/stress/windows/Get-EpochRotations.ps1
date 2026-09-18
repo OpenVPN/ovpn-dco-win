@@ -53,6 +53,17 @@ if (-not (Test-Path $xml)) {
 }
 $text = Get-Content $xml -Raw
 
+# Classify the refusals. Both values are logged on the same event, and tracerpt writes
+# EventData before the rendered message, so the last pair seen belongs to this event.
+$lateEpoch = 0; $aheadEpoch = 0; $pktEpoch = -1; $curEpoch = -1
+foreach ($line in [System.IO.File]::ReadLines($xml)) {
+    if ($line -match 'Name="epoch">(\d+)<')         { $pktEpoch = [int]$matches[1] }
+    elseif ($line -match 'Name="current-epoch">(\d+)<') { $curEpoch = [int]$matches[1] }
+    elseif ($line.Contains('unknown epoch') -and $pktEpoch -ge 0 -and $curEpoch -ge 0) {
+        if ($pktEpoch -lt $curEpoch) { $lateEpoch++ } else { $aheadEpoch++ }
+    }
+}
+
 $result = [pscustomobject]@{
     WindowSeconds   = $Seconds
     TotalEvents     = ([regex]::Matches($text, '<Event ')).Count
@@ -65,6 +76,10 @@ $result = [pscustomobject]@{
     # and why, so a count is something you can act on
     NoKeyForKeyId   = ([regex]::Matches($text, 'No key for KeyId')).Count
     UnknownEpoch    = ([regex]::Matches($text, 'unknown epoch')).Count
+    # Split them: a packet from an epoch we already retired is late, which peer id reuse
+    # produces constantly, while one past the future keys is a sender we cannot follow.
+    UnknownEpochLate  = $lateEpoch
+    UnknownEpochAhead = $aheadEpoch
     InvalidPacketId = ([regex]::Matches($text, 'Invalid packet_id')).Count
     InvalidEpoch0   = ([regex]::Matches($text, 'Invalid epoch 0')).Count
     PacketTooShort  = ([regex]::Matches($text, 'Packet too short')).Count
