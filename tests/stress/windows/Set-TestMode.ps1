@@ -22,13 +22,12 @@ param(
     [switch]$Disarm,
     [switch]$Show,
     # The limit is compared against plaintext blocks plus packet id, so at a 1390-byte
-    # MTU a packet costs about 88 of it. 2,000,000 therefore rotates roughly every 22000
-    # packets: a few hundred rotations per peer over a long run, with enough slack that a
-    # receiver can miss about ten seconds of traffic and still be inside the four future
-    # keys the driver keeps. Rotating every few hundred packets instead, as this used to,
-    # desynchronises a receiver after a tenth of a second of loss, and the traffic pairs
-    # then lose their data channel and reconnect every few minutes.
-    [uint32]$AeadUsageLimit = 2000000
+    # MTU a packet costs about 88 of it. Measured: 2,000,000 gave 327 rotations and 2206
+    # receivers that had fallen past the four future keys the driver holds, which leaves
+    # them deaf until the session renegotiates. 8,000,000 trades some of that rate for
+    # four times the slack: roughly 80 rotations a run, still plenty to exercise both
+    # rotation paths, and a receiver can miss minutes rather than seconds.
+    [uint32]$AeadUsageLimit = 8000000
 )
 
 $paramKey = 'HKLM:\SYSTEM\CurrentControlSet\Services\ovpn-dco\Parameters'

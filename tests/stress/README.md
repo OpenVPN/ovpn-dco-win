@@ -53,10 +53,15 @@ The value is a compromise rather than "as fast as possible". A receiver follows 
 rotating sender by deriving a bounded number of future keys -- four in the driver, 16 in
 an OpenVPN client -- and a receiver that misses more rotations than that can never catch
 up, because it only advances its epoch on a packet it could decrypt. It stays deaf until
-the session is renegotiated. Rotating every few hundred packets, as this rig first did,
-left a receiver about a tenth of a second of loss before that happened, so the traffic
-pairs lost their data channel and reconnected every few minutes. The default now leaves
-roughly ten seconds, and still rotates a few hundred times per peer in a long run.
+the session is renegotiated.
+
+Rotating every few hundred packets, as this rig first did, left a receiver about a tenth
+of a second of loss before that happened, and the traffic pairs lost their data channel
+and reconnected every few minutes. Raising the limit to two million fixed the pairs but
+a run still ended with 2206 receivers past the window, against 327 rotations. The
+default is four times higher again: about 80 rotations in a fifteen-minute run, which
+still exercises both rotation paths many times over, and minutes of slack instead of
+seconds. The summary reports the split, so a run says which way it went.
 
 ## Requirements
 
