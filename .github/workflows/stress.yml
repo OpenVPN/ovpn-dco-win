@@ -1,0 +1,236 @@
+name: Stress (multipeer + epoch rotation)
+
+# Long-running driver stress on real hardware: on demand, and on every pull request
+# against multipeer, which is where the peer table and the data path change.
+#
+# There is one device under test and a run owns it for ~20 minutes including reboots, so
+# runs are serialised and later ones wait their turn.
+#
+# The job itself runs on a GitHub-hosted runner, which briefly authorises its own address
+# to reach the instances over SSH and revokes it afterwards. That avoids an always-on
+# self-hosted runner and keeps the job off the device under test: a detected fault
+# bugchecks that machine, and a job running there would die with it and report nothing.
+#
+# A pull request from a fork is skipped rather than failed. It has no access to the
+# credentials this needs, and running a fork's code on a machine that holds them is not
+# something to arrange.
+
+on:
+  workflow_dispatch:
+    inputs:
+      duration:
+        description: workload seconds
+        default: '900'
+      swarm:
+        description: churn clients
+        default: '16'
+      pairs:
+        description: client-to-client traffic pairs
+        default: '4'
+      flood:
+        description: connect-only clients per wave
+        default: '800'
+      openvpn:
+        # Temporary: until Gerrit 1835 and 1920 merge, the stock server exits when the
+        # driver expires a peer just before a key install, which at this flood happens
+        # about one run in three. Drop this input once they are released.
+        description: server binary on the device under test
+        default: 'C:\stage\ovpn-patched\openvpn.exe'
+  pull_request:
+    branches: [multipeer]
+
+# One device under test, so one run at a time. A run in progress is never cut short:
+# it owns a machine it is rebooting and arming, and killing it there leaves that machine
+# half configured. Later runs wait. GitHub keeps one waiting run per group, so a burst of
+# pushes leaves the newest waiting and drops the ones it supersedes.
+concurrency:
+  group: ovpn-dco-stress-hardware
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write         # OIDC, so no long-lived AWS keys
+
+jobs:
+  build:
+    # The driver needs the Windows toolchain, so build here and hand the result to the
+    # stress job as an artifact. Debug because the rotation knob is compiled under DBG only.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - uses: microsoft/setup-msbuild@v2
+        with:
+          msbuild-architecture: x64
+      - name: Build (Debug x64)
+        run: msbuild /m /p:Configuration=Debug /p:Platform=x64 ovpn-dco-win.vcxproj
+      - uses: actions/upload-artifact@v4
+        with:
+          name: driver-debug-x64
+          path: |
+            x64/Debug/ovpn-dco/ovpn-dco.sys
+            x64/Debug/ovpn-dco/ovpn-dco.inf
+            x64/Debug/ovpn-dco/ovpn-dco.cat
+          if-no-files-found: error
+
+  stress:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      AWS_REGION:  ${{ vars.AWS_REGION }}
+      SG:          ${{ vars.STRESS_SECURITY_GROUP }}
+      DUT_ID:      ${{ vars.STRESS_DUT_INSTANCE_ID }}
+      CLIENT_ID:   ${{ vars.STRESS_CLIENT_INSTANCE_ID }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.STRESS_AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: driver-debug-x64
+          path: driver
+
+      - name: Open SSH to this runner only
+        id: net
+        run: |
+          MYIP=$(curl -fsS https://checkip.amazonaws.com | tr -d '[:space:]')
+          echo "myip=$MYIP" >> "$GITHUB_OUTPUT"
+          aws ec2 authorize-security-group-ingress --group-id "$SG" \
+            --protocol tcp --port 22 --cidr "$MYIP/32" >/dev/null
+          echo "authorised $MYIP/32"
+
+      - name: Start the instances
+        id: ec2
+        run: |
+          aws ec2 start-instances --instance-ids "$DUT_ID" "$CLIENT_ID" >/dev/null
+          aws ec2 wait instance-running --instance-ids "$DUT_ID" "$CLIENT_ID"
+          addr() { aws ec2 describe-instances --instance-ids "$1" \
+                     --query 'Reservations[].Instances[].[PublicIpAddress,PrivateIpAddress]' --output text; }
+          read -r DUT_PUB DUT_PRIV <<<"$(addr "$DUT_ID")"
+          read -r CLI_PUB CLI_PRIV <<<"$(addr "$CLIENT_ID")"
+          { echo "dut_pub=$DUT_PUB"; echo "dut_priv=$DUT_PRIV"; echo "cli_pub=$CLI_PUB"; } >> "$GITHUB_OUTPUT"
+          echo "dut $DUT_PUB ($DUT_PRIV)  client $CLI_PUB"
+
+      # The key goes through the environment rather than into the script text. A
+      # ${{ }} substitution is spliced in before the shell parses the line, so the
+      # secret would become part of the program; masking only covers the log.
+      - name: Set up SSH
+        env:
+          SSH_KEY: ${{ secrets.STRESS_SSH_KEY }}
+          DUT_HOST: ${{ steps.ec2.outputs.dut_pub }}
+          CLI_HOST: ${{ steps.ec2.outputs.cli_pub }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/stress
+          chmod 600 ~/.ssh/stress
+          cat > ~/.ssh/config <<EOF
+          Host dut
+            HostName $DUT_HOST
+            User Administrator
+          Host client
+            HostName $CLI_HOST
+            User ubuntu
+          Host *
+            IdentityFile ~/.ssh/stress
+            IdentitiesOnly yes
+            StrictHostKeyChecking accept-new
+            ConnectTimeout 10
+          EOF
+          for h in dut client; do
+            for _ in $(seq 1 40); do
+              ssh -o BatchMode=yes $h 'echo up' 2>/dev/null | grep -q up && break
+              sleep 10
+            done
+          done
+          ssh dut 'hostname'; ssh client 'hostname'
+
+      # The driver is signed with whatever test certificate the build runner had, which the
+      # device under test does not trust. Import it per build so the machine image stays
+      # stable even if that certificate rotates.
+      - name: Trust the build's signing certificate and install the driver
+        run: |
+          ssh dut 'New-Item -ItemType Directory -Force C:\stage | Out-Null'
+          scp -q driver/* tests/stress/windows/*.ps1 ovpn-dco-win.wprp dut:'C:\stage\'
+          ssh dut 'powershell -NoProfile -ExecutionPolicy Bypass -File C:\stage\Trust-DriverCert.ps1 -SysPath C:\stage\ovpn-dco.sys'
+          ssh dut 'powershell -NoProfile -ExecutionPolicy Bypass -File C:\stage\Install-Driver.ps1 -InfPath C:\stage\ovpn-dco.inf'
+
+      # The rig runs on the client host, which is also the load generator. It reaches the
+      # device under test over the private address, so no public path is used for the test
+      # traffic itself.
+      # The client reaches the device under test with a key of its own, and the runner's
+      # key is never copied across, so a shell on the client is not also a shell on the
+      # machine the runner controls. That key is part of the client image, set up once:
+      #
+      #   ssh-keygen -t ed25519 -N '' -f ~/.ssh/dut_key       # on the client
+      #   # then append ~/.ssh/dut_key.pub to, on the device under test,
+      #   # C:\ProgramData\ssh\administrators_authorized_keys
+      - name: Run the stress workload
+        env:
+          DUT_PRIV: ${{ steps.ec2.outputs.dut_priv }}
+        run: |
+          ssh client 'test -f ~/.ssh/dut_key' ||
+            { echo 'client has no ~/.ssh/dut_key; see the comment above this step' >&2; exit 1; }
+          ssh client 'rm -rf ~/stress && mkdir -p ~/stress'
+          scp -q -r tests/stress/* client:'~/stress/'
+          ssh client "printf 'Host dut\n  HostName $DUT_PRIV\n  User Administrator\n  IdentityFile ~/.ssh/dut_key\n  IdentitiesOnly yes\n  StrictHostKeyChecking accept-new\n' > ~/.ssh/config"
+          ssh client "cd ~/stress && chmod +x run-stress.sh linux/*.sh && ./run-stress.sh \
+            --dut dut --server-ip $DUT_PRIV \
+            --remote-dir 'C:\stage' \
+            --pairs '${{ inputs.pairs || '4' }}' \
+            --swarm '${{ inputs.swarm || '16' }}' \
+            --flood '${{ inputs.flood || '800' }}' \
+            --duration '${{ inputs.duration || '900' }}' \
+            --openvpn '${{ inputs.openvpn || 'C:\stage\ovpn-patched\openvpn.exe' }}' \
+            --outdir ~/stress-results"
+
+      # One compressed file rather than the tree: a run leaves ~1700 files and a quarter
+      # of a gigabyte, scp pays a round trip per file, and upload-artifact then pays
+      # again. The generated client configs are left behind; they are inputs the rig
+      # sudo because the client logs belong to root: openvpn runs under sudo in the
+      # namespaces, and a plain tar silently ships an incomplete tree.
+      # rewrites every run, not evidence.
+      - name: Collect results
+        if: always()
+        run: |
+          mkdir -p stress-results
+          ssh client "sudo tar czf /tmp/stress-results.tgz --exclude='*.conf' -C ~ stress-results && sudo chown \$(id -u):\$(id -g) /tmp/stress-results.tgz" \
+            || echo "no results to pack"
+          scp -q client:/tmp/stress-results.tgz stress-results/ 2>/dev/null \
+            || echo "no results to collect"
+          ls -lh stress-results/ || true
+
+      # The charts come from two small CSVs inside the tarball, so unpack just those.
+      - name: Summary
+        if: always()
+        run: |
+          tar xzf stress-results/stress-results.tgz -C /tmp \
+            stress-results/throughput.csv stress-results/peer-rates.csv 2>/dev/null || true
+          python3 tests/stress/linux/summarise.py /tmp/stress-results \
+            >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: stress-results
+          path: stress-results/
+
+      # Always tear down, including after a bugcheck. A bugchecked instance will not stop
+      # gracefully, hence --force.
+      - name: Stop instances and close SSH
+        if: always()
+        run: |
+          aws ec2 stop-instances --instance-ids "$DUT_ID" "$CLIENT_ID" --force >/dev/null || true
+          if [ -n "${{ steps.net.outputs.myip }}" ]; then
+            aws ec2 revoke-security-group-ingress --group-id "$SG" \
+              --protocol tcp --port 22 --cidr "${{ steps.net.outputs.myip }}/32" >/dev/null || true
+            echo "revoked ${{ steps.net.outputs.myip }}/32"
+          fi
