@@ -179,6 +179,13 @@ wait_for_dut 60 || fail "device under test stopped responding (bugcheck)"
 server_status=$(dut_ps 'Start-Server.ps1' -Status | tr -d '\r')
 ssh "$DUT" "Get-Content \$env:TEMP\\ovpn-stress\\server.log" 2>/dev/null | tr -d '\r' > "$OUTDIR/server.log"
 dut_ps 'Start-Server.ps1' -Down >/dev/null
+
+# A NIC reset on the device under test presents exactly as a driver stall from here:
+# traffic stops, clients time out, the sampler freezes, CPU sits at zero. Windows logs
+# the reset, so ask rather than guess.
+dut_ps "Get-NicResets.ps1" -Minutes $(( (DURATION + 600) / 60 )) | tr -d '\r' > "$OUTDIR/nic-resets.txt" 2>/dev/null
+nic_resets=$(grep -oE "minutes: [0-9]+" "$OUTDIR/nic-resets.txt" 2>/dev/null | grep -oE "[0-9]+$")
+nic_resets=${nic_resets:-0}
 # scp will not take the backslashes, so ask for the same directory with forward slashes
 REMOTE_FWD=$(echo "$REMOTE_DIR" | tr '\\' '/')
 scp -q "$DUT:$REMOTE_FWD/throughput.csv" "$OUTDIR/throughput.csv" 2>/dev/null ||
@@ -236,6 +243,7 @@ printf '  %-26s %s\n' "server errors (expected)" "${errors:-?}"
 printf '  %-26s %s\n' "server churn (expected)"  "${churn:-?}"
 printf '  %-26s %s\n' "server dropped sends"     "${drops:-?}"
 printf '  %-26s %s\n' "server exited"            "${exited:-?}"
+printf '  %-26s %s\n' "NIC resets (DUT)"         "${nic_resets:-0}"
 printf '  %-26s %s / %s\n' "relaying pairs"      "${relay:-0}" "$PAIRS"
 printf '  %-26s %s\n' "iroute reachable"         "$(json_num "$summary" iroute_ok)"
 printf '  %-26s %s in, %s handed over\n' "route trie inserts" \
@@ -309,6 +317,22 @@ if [ "${d_recv:-0}" -gt 10000 ]; then
 fi
 
 [ "${d_recv:-0}" -lt 10000 ] && fail "only ${d_recv:-0} data packets were received: the workload did not run"
+
+# A NIC reset is an EC2 fault, not a driver one, and Windows names it with timestamps,
+# so it does not have to end the run. It costs a gap: while the adapter is down nothing
+# moves and every client times out and reconnects. The rest of the run still counts, and
+# the gates above still had to pass. Say it happened, so the gap is never read as a
+# driver stall, and only refuse to judge a run the outages dominated.
+if [ "${nic_resets:-0}" -gt 0 ]; then
+    echo
+    echo "  NOTE: the device under test reset its network adapter ${nic_resets} time(s)"
+    echo "  during this run. That is an EC2/ENA fault, not the driver. Each reset stops"
+    echo "  traffic for about a minute and makes every client time out and reconnect, so"
+    echo "  expect a gap in the throughput samples around it. See nic-resets.txt."
+    echo
+    [ "${nic_resets:-0}" -gt 2 ] &&
+        fail "the device under test reset its NIC ${nic_resets} times, see nic-resets.txt: too much of the run was spent with the adapter down to judge it"
+fi
 
 # Not gated: a multipeer server under this churn logs per-client errors routinely, a key
 # install refused for an expired peer among them. The server exiting is what fails a run,

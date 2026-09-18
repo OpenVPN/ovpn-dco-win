@@ -190,12 +190,22 @@ The run itself was no good, and must not be called a pass, if:
   rotation. Count rotations, not key derivations: a key is derived six times per peer
   session before any traffic moves, so with a flood of short-lived peers the derivation
   count is large whether or not anything rotated;
-* fewer than 10000 data packets crossed the adapter.
+* fewer than 10000 data packets crossed the adapter;
+* the Windows machine reset its network adapter more than twice (see below).
 
 Everything else is reported but does not decide the verdict: throughput, the server's
 per-client errors, the churn count, and lost or undecryptable packets under the
 thresholds above. A multipeer server with this much churn logs per-client errors all the
 time, including a key refused for a peer that has just expired.
+
+A **NIC reset on the Windows machine** is reported but does not by itself fail a run. On
+EC2 the adapter is ENA, whose driver resets the device when its watchdog finds no
+keep-alive or packets stuck in a transmit queue. While it is down nothing moves, every
+client times out and reconnects, and the sampler blocks, so a run reads like a driver
+stall for about a minute. It is not one, and Windows names it with timestamps, so the
+run says so and carries on: the gap is visible in the throughput samples and the events
+are in `nic-resets.txt`. Past two resets the run fails instead, because by then too
+little of it ran with a working adapter to judge.
 
 Throughput in particular is never a pass or a fail. It varies by a factor of two between
 runs on an idle machine, and the Linux machine is usually the limit, not the driver.
