@@ -21,6 +21,8 @@
 param(
     [int]$Seconds = 8,
     [string]$OutFile = '',
+    # per-second peer add/delete counts, for the run summary's charts
+    [string]$RatesFile = '',
     [string]$Profile = '',
     [string]$WorkDir = "$env:TEMP\ovpn-stress",
     [switch]$AsJson
@@ -78,6 +80,31 @@ $result = [pscustomobject]@{
     # an insert that took a prefix a live peer still held, so the old reference was
     # dropped after the lock was released
     TrieHandovers   = ([regex]::Matches($text, 'Release previous peer')).Count
+}
+
+# Peer lifecycle over time, not just totals: the flood connects in waves and their peers
+# expire together 120s later, so the interesting seconds are bursts rather than the mean.
+# Events are chronological, so the timestamp only has to be parsed when its second changes.
+if ($RatesFile) {
+    $added = @{}; $deleted = @{}; $stamp = ''; $t0 = $null; $sec = 0
+    foreach ($line in [System.IO.File]::ReadLines($xml)) {
+        $k = $line.IndexOf('SystemTime="')
+        if ($k -ge 0) {
+            $s = $line.Substring($k + 12, 19)
+            if ($s -ne $stamp) {
+                $stamp = $s
+                $now = [datetime]::ParseExact($s, 'yyyy-MM-ddTHH:mm:ss', $null)
+                if ($null -eq $t0) { $t0 = $now }
+                $sec = [int]($now - $t0).TotalSeconds
+            }
+        }
+        elseif ($line.Contains('Peer added'))    { $added[$sec]   = 1 + $added[$sec] }
+        elseif ($line.Contains('Deleting peer')) { $deleted[$sec] = 1 + $deleted[$sec] }
+    }
+    $rows = foreach ($s in ($added.Keys + $deleted.Keys | Sort-Object -Unique)) {
+        '{0},{1},{2}' -f $s, (0 + $added[$s]), (0 + $deleted[$s])
+    }
+    @('elapsed,added,deleted') + $rows | Set-Content $RatesFile
 }
 
 Remove-Item $etl, $xml -ErrorAction SilentlyContinue

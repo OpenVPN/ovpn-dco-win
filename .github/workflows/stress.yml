@@ -208,6 +208,15 @@ jobs:
             || echo "no results to collect"
           ls -lh stress-results/ || true
 
+      # The charts come from two small CSVs inside the tarball, so unpack just those.
+      - name: Summary
+        if: always()
+        run: |
+          tar xzf stress-results/stress-results.tgz -C /tmp \
+            stress-results/throughput.csv stress-results/peer-rates.csv 2>/dev/null || true
+          python3 tests/stress/linux/summarise.py /tmp/stress-results \
+            >> "$GITHUB_STEP_SUMMARY"
+
       - uses: actions/upload-artifact@v4
         if: always()
         with:

@@ -158,8 +158,8 @@ DUT="$SERVER_IP" "$HERE/linux/setup-clients.sh" "$CLIENTS" || fail "client names
 # own events for the whole workload. Detached for the same reason as the sampler above.
 # Clear the previous run's file first: the collector below would otherwise fetch it at
 # once and report the last run's numbers as this one's.
-ssh "$DUT" "Remove-Item '$REMOTE_DIR\\rotations.json','$REMOTE_DIR\\throughput.csv' -ErrorAction SilentlyContinue" 2>/dev/null
-ssh "$DUT" "\$c = 'cmd.exe /c powershell -NoProfile -ExecutionPolicy Bypass -File $REMOTE_DIR\\Get-EpochRotations.ps1 -Seconds $DURATION -OutFile $REMOTE_DIR\\rotations.json'; Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = \$c } | Out-Null" \
+ssh "$DUT" "Remove-Item '$REMOTE_DIR\\rotations.json','$REMOTE_DIR\\throughput.csv','$REMOTE_DIR\\peer-rates.csv' -ErrorAction SilentlyContinue" 2>/dev/null
+ssh "$DUT" "\$c = 'cmd.exe /c powershell -NoProfile -ExecutionPolicy Bypass -File $REMOTE_DIR\\Get-EpochRotations.ps1 -Seconds $DURATION -OutFile $REMOTE_DIR\\rotations.json -RatesFile $REMOTE_DIR\\peer-rates.csv'; Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = \$c } | Out-Null" \
     2>/dev/null || echo "  note: could not start the ETW capture"
 
 # Detached, writing to a file on the device. The SSH it used to stream over is the first
@@ -188,6 +188,9 @@ for _ in $(seq 1 30); do
     scp -q "$DUT:$REMOTE_FWD/rotations.json" "$OUTDIR/rotations.json" 2>/dev/null && break
     sleep 5
 done
+# Written by the same pass, just before rotations.json, so it is there once that is.
+scp -q "$DUT:$REMOTE_FWD/peer-rates.csv" "$OUTDIR/peer-rates.csv" 2>/dev/null ||
+    echo "  note: no peer rate histogram collected"
 after=$(dut_ps 'Get-DcoStats.ps1' -AsJson | tr -d '\r')
 echo "$after" > "$OUTDIR/driver-after.json"
 
