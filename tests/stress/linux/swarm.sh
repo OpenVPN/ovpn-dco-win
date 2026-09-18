@@ -180,10 +180,31 @@ check_iroute() {
     done
     if [ -n "$got" ]; then
         echo "  iroute: server -> $IROUTE_PROBE was delivered to $got"
-        iroute_ok=1
+        iroute_ok=1; IROUTE_OWNER=$got
     else
         echo "  iroute: server -> $IROUTE_PROBE was not delivered to any peer"
     fi
+}
+
+# The driver checks the source address of everything it decrypts against the peer that
+# sent it, falling back to the iroute trie when the source is not that peer own address.
+# Nothing else in the run reaches that fallback, because a client only ever sends from
+# its tunnel address. Give the peer that owns the subnet an address inside it and send
+# from there. A reply proves the driver accepted the source and then found the same peer
+# again on the way back.
+check_rpf() {
+    local ns=$IROUTE_OWNER dev
+    [ -z "$ns" ] && { echo "  rpf: skipped, no peer owns $IROUTE_PROBE"; return; }
+    dev=$(sudo ip netns exec "$ns" sh -c 'ls /sys/class/net | grep "^tun" | head -1')
+    [ -z "$dev" ] && return
+    sudo ip netns exec "$ns" ip addr add "$IROUTE_PROBE/32" dev "$dev" 2>/dev/null
+    if sudo ip netns exec "$ns" ping -c 3 -W 2 -q -I "$IROUTE_PROBE" "$SERVER_TUN" >/dev/null 2>&1; then
+        echo "  rpf: $ns sent from $IROUTE_PROBE and the server answered"
+        rpf_ok=1
+    else
+        echo "  rpf: $ns sent from $IROUTE_PROBE and got no answer"
+    fi
+    sudo ip netns exec "$ns" ip addr del "$IROUTE_PROBE/32" dev "$dev" 2>/dev/null
 }
 
 echo "bringing up $NT traffic clients"
@@ -195,8 +216,9 @@ done
 # Traffic between two clients hairpins through the server's host stack, which drops it
 # unless that adapter forwards. Check it once here: without forwarding every pair reads
 # as a stall for the whole run, and a stall is also what a driver fault looks like.
-iroute_ok=0
+iroute_ok=0; rpf_ok=0; IROUTE_OWNER=""
 [ "$NT" -ge 2 ] && check_iroute
+[ "$NT" -ge 2 ] && check_rpf
 
 relay_ok=0
 for p in $(seq 1 "$PAIRS"); do
@@ -353,5 +375,5 @@ echo "logs kept in $OUTDIR"
 # Client-side connect timeouts are a harness property, not a driver signal: OpenVPN
 # handles handshakes serially, so a swarm arriving together overruns the client timeout
 # long before the server is loaded. Cross-check against the server log.
-printf '{"swarm_connects":%d,"swarm_timeouts":%d,"flood_connects":%d,"traffic_samples":%d,"traffic_mbit":%s,"relay_pairs":%d,"pairs":%d,"iroute_ok":%d,"outdir":"%s"}\n' \
-    "$ok" "$fail" "$flood_ok" "$samples" "$combined" "$relay_ok" "$PAIRS" "$iroute_ok" "$OUTDIR"
+printf '{"swarm_connects":%d,"swarm_timeouts":%d,"flood_connects":%d,"traffic_samples":%d,"traffic_mbit":%s,"relay_pairs":%d,"pairs":%d,"iroute_ok":%d,"rpf_ok":%d,"outdir":"%s"}\n' \
+    "$ok" "$fail" "$flood_ok" "$samples" "$combined" "$relay_ok" "$PAIRS" "$iroute_ok" "$rpf_ok" "$OUTDIR"

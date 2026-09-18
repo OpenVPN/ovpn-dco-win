@@ -35,6 +35,14 @@ recovery.
 Together, the swarm and the flood keep adding and removing peers while the pairs read the
 peer table. The single-peer tests never reach that.
 
+Two one-packet probes run at startup, before the churn begins. One pings the iroute
+subnet from the server and watches every peer to see which one receives it, which
+exercises the route trie lookup on the way out. The other gives that peer an address
+inside the subnet and pings back from it, which exercises the reverse path filter the
+driver applies to every packet it decrypts: a source that is not a peer own address is
+looked up in the trie and must resolve to the peer that sent it. Both are reported and
+neither fails a run.
+
 Epoch keys rotate the whole time. A registry value that only checked builds read,
 `TestAeadUsageLimit`, lowers the AEAD usage limit so keys rotate every few thousand
 packets instead of roughly every terabyte. The driver rotates its send key, the client

@@ -246,6 +246,7 @@ printf '  %-26s %s\n' "server exited"            "${exited:-?}"
 printf '  %-26s %s\n' "NIC resets (DUT)"         "${nic_resets:-0}"
 printf '  %-26s %s / %s\n' "relaying pairs"      "${relay:-0}" "$PAIRS"
 printf '  %-26s %s\n' "iroute reachable"         "$(json_num "$summary" iroute_ok)"
+printf '  %-26s %s\n' "reverse path (iroute)"    "$(json_num "$summary" rpf_ok)"
 printf '  %-26s %s in, %s handed over\n' "route trie inserts" \
        "$(json_num "$rotations" IrouteAdds)" "$(json_num "$rotations" TrieHandovers)"
 printf '  %-26s %s by userspace, %s by peer teardown\n' "route trie removals" \
