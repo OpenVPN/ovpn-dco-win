@@ -168,7 +168,7 @@ ssh "$DUT" "\$c = 'cmd.exe /c powershell -NoProfile -ExecutionPolicy Bypass -Fil
     2>"$OUTDIR/throughput.err" || echo "  note: could not start the throughput sampler"
 
 echo "== running workload (${DURATION}s)"
-summary=$("$HERE/linux/swarm.sh" --server "$SERVER_IP" --pairs "$PAIRS" --swarm "$SWARM" \
+summary=$("$HERE/linux/swarm.sh" --server "$SERVER_IP" --dut "$DUT" --pairs "$PAIRS" --swarm "$SWARM" \
              --flood "$FLOOD" --duration "$DURATION" --keys "$KEYS" --outdir "$OUTDIR" |
              tee /dev/stderr | tail -1)
 

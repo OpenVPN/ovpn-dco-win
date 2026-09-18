@@ -1,6 +1,6 @@
 #!/bin/bash
-# swarm.sh --server <ip> [--pairs 4] [--swarm 16] [--flood 800] [--duration 900]
-#          [--hold 1.5] [--outdir <dir>] [--keys <dir>] [--port 11197] [--tun-mtu 1390]
+# swarm.sh --server <ip> [--dut <ssh-target>] [--pairs 4] [--swarm 16] [--flood 800]
+#          [--duration 900] [--hold 1.5] [--outdir <dir>] [--keys <dir>] [--port 11197]
 #
 # Three workloads against the device under test at the same time:
 #
@@ -22,6 +22,7 @@
 set -u
 
 SERVER=""; PORT=11197; PAIRS=4; SWARM=16; DURATION=900; HOLD=1.5
+DUT_SSH=""   # ssh target for the device under test, used by the iroute probe
 # must match the server's client-config-dir entry
 IROUTE_PROBE=10.90.0.5
 FLOOD=800; FLOOD_HOLD=5; FLOOD_GIVEUP=120
@@ -32,6 +33,7 @@ OVPN=${OVPN:-openvpn}
 while [ $# -gt 0 ]; do
     case "$1" in
         --server)   SERVER=$2; shift 2 ;;
+        --dut)      DUT_SSH=$2; shift 2 ;;
         --port)     PORT=$2; shift 2 ;;
         --pairs)    PAIRS=$2; shift 2 ;;
         --swarm)    SWARM=$2; shift 2 ;;
@@ -148,33 +150,39 @@ mean_throughput() { mbits mean < "$R/$1.cli.log" 2>/dev/null; }
 
 add() { awk -v a="$1" -v b="$2" 'BEGIN {printf "%.1f", a + b}'; }
 
-# Does the driver route into a peer's iroute subnet? Nothing else in the run reaches
+# Does the driver route into a peer iroute subnet? Nothing else in the run reaches
 # IPTrie::Find with entries present, and the trie is the code peers churn hardest.
 #
-# Every peer is given the same subnet, so whichever connected last owns it. Rather than
-# guess, watch all of them and report which one the packet reaches.
+# The probe runs from the server, not from a client. Every peer is given the same
+# subnet in ccd/DEFAULT, and OpenVPN strips a pushed route from any client that owns
+# that iroute ("REMOVE PUSH ROUTE" in the server log), so no client can send into it.
+# The server can: the route directive puts the subnet in its own routing table, which
+# sends the packet back down the adapter for the driver to look up.
+#
+# Whichever peer connected last owns the subnet, so watch all of them and report which
+# one the packet reaches.
 check_iroute() {
-    local from=$1 i ns dev got=""
+    local i ns dev got=""
+    [ -z "$DUT_SSH" ] && { echo "  iroute: skipped, no --dut given"; return; }
     for i in $(seq 1 $NT); do
         ns=c$i
-        [ "$ns" = "$from" ] && continue
         dev=$(sudo ip netns exec "$ns" sh -c 'ls /sys/class/net | grep "^tun" | head -1')
         [ -z "$dev" ] && continue
         sudo ip netns exec "$ns" timeout 8 tcpdump -i "$dev" -n -c 1 icmp \
             > "$R/iroute.$ns.txt" 2>&1 &
     done
     sleep 1
-    sudo ip netns exec "$from" ping -c 6 -W 1 -q "$IROUTE_PROBE" >/dev/null 2>&1
+    ssh "$DUT_SSH" "ping -n 4 -w 1000 $IROUTE_PROBE" >/dev/null 2>&1
     wait 2>/dev/null
     for i in $(seq 1 $NT); do
         ns=c$i
         grep -q "$IROUTE_PROBE" "$R/iroute.$ns.txt" 2>/dev/null && got=$ns
     done
     if [ -n "$got" ]; then
-        echo "  iroute: $from -> $IROUTE_PROBE routed to $got"
+        echo "  iroute: server -> $IROUTE_PROBE was delivered to $got"
         iroute_ok=1
     else
-        echo "  iroute: $from -> $IROUTE_PROBE reached no peer"
+        echo "  iroute: server -> $IROUTE_PROBE was not delivered to any peer"
     fi
 }
 
@@ -188,7 +196,7 @@ done
 # unless that adapter forwards. Check it once here: without forwarding every pair reads
 # as a stall for the whole run, and a stall is also what a driver fault looks like.
 iroute_ok=0
-[ "$NT" -ge 2 ] && check_iroute c1 c2
+[ "$NT" -ge 2 ] && check_iroute
 
 relay_ok=0
 for p in $(seq 1 "$PAIRS"); do
