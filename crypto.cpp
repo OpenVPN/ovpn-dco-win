@@ -296,7 +296,10 @@ OvpnCryptoDecryptAEAD(OvpnCryptoRxState* rx, UCHAR* bufIn, SIZE_T len, UCHAR* bu
 
         decryptKey = OvpnCryptoEpochLookupDecryptKey(rx, rx_epoch);
         if (decryptKey == NULL) {
-            LOG_ERROR("Data packet with unknown epoch", TraceLoggingValue(rx_epoch, "epoch"));
+            // An epoch we already retired means a late packet, which is common when a peer id
+            // is reused. An epoch past the future keys means a sender we can no longer follow.
+            LOG_ERROR("Data packet with unknown epoch", TraceLoggingValue(rx_epoch, "epoch"),
+                TraceLoggingValue(rx->Key.Epoch, "current-epoch"));
             return STATUS_DATA_ERROR;
         }
 
@@ -324,7 +327,16 @@ OvpnCryptoDecryptAEAD(OvpnCryptoRxState* rx, UCHAR* bufIn, SIZE_T len, UCHAR* bu
 
     // non-chaining mode
     ULONG bytesDone = 0;
-    GOTO_IF_NOT_NT_SUCCESS(done, status, BCryptDecrypt(decryptKey->Key, bufIn, (ULONG)len, &authInfo, NULL, 0, bufOut, (ULONG)len, &bytesDone, 0));
+    // A key was found but the tag does not verify. Distinct from an unknown epoch, and
+    // common when a peer id is reused and a packet from the previous session lands
+    // inside the new window, so name it rather than reporting a bare status.
+    status = BCryptDecrypt(decryptKey->Key, bufIn, (ULONG)len, &authInfo, NULL, 0, bufOut,
+        (ULONG)len, &bytesDone, 0);
+    if (!NT_SUCCESS(status)) {
+        LOG_ERROR("Packet failed authentication", TraceLoggingValue(rx_epoch, "epoch"),
+            TraceLoggingValue(rx->Key.Epoch, "current-epoch"), TraceLoggingValue(status, "status"));
+        goto done;
+    }
 
     status = OvpnCryptoCheckReplay(rx, packet_id, rx_epoch, opts, sendEpoch);
     if (!NT_SUCCESS(status)) {
