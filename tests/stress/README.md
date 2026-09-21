@@ -86,6 +86,8 @@ number of future keys — four in the driver, 16 in an OpenVPN client — and on
 further behind than that can never catch up, because it only advances its epoch on a
 packet it could decrypt. It stays deaf until the session renegotiates.
 
+The machines, the Actions variables and the AWS side are described in [../INFRASTRUCTURE.md](../INFRASTRUCTURE.md).
+
 ## Requirements
 
 **Windows machine**

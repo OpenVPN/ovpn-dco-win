@@ -147,11 +147,12 @@ jobs:
           # a tunnel is a single flow. An instance outside the group measures about a third
           # lower and reads as a driver regression, so say so rather than let it pass quietly.
           # Not fatal: the run is still valid, it just has a lower ceiling.
+          # Group names only: this log is public, and the instance ids are not.
           groups=$(aws ec2 describe-instances --instance-ids $IDS \
-                     --query 'Reservations[].Instances[].[InstanceId,Placement.GroupName]' \
-                     --output text)
-          echo "$groups"
-          if [ "$(echo "$groups" | awk '{print $2}' | sort -u | wc -l)" != 1 ]; then
+                     --query 'Reservations[].Instances[].Placement.GroupName' \
+                     --output text | tr '\t' '\n' | sort -u)
+          echo "placement groups in use: $(echo $groups)"
+          if [ "$(echo "$groups" | wc -l)" != 1 ] || [ -z "$groups" ]; then
             echo "::warning::rig instances are not all in one placement group; a single flow is capped near 5 Gbps outside one"
           fi
           addr() { aws ec2 describe-instances --instance-ids "$1" \
