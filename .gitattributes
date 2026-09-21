@@ -1,0 +1,9 @@
+# Shell scripts must keep LF: a CRLF shebang is a broken interpreter line on Linux.
+*.sh text eol=lf
+*.py text eol=lf
+
+# Windows-side sources and scripts keep CRLF.
+*.ps1 text eol=crlf
+*.cpp text eol=crlf
+*.h   text eol=crlf
+*.inf text eol=crlf
