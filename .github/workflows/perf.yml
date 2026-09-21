@@ -1,0 +1,352 @@
+name: Perf (throughput)
+
+# Throughput on real hardware: on demand, and on every pull request against multipeer,
+# alongside the stress rig. Stress says the driver stays correct under churn; this says
+# what it costs.
+#
+# It shares the stress rig's machines and its concurrency group, so the two never run at
+# once: perf needs a release driver with Driver Verifier off, stress needs a checked one
+# with Verifier armed, and each would measure the other's setup.
+#
+# The gate is a floor, not a target. Throughput on these instances varies by a factor of
+# two between runs, so anything tighter would flap and then be ignored. What the floor
+# catches is a collapse, and what still fails a run outright is a measurement that cannot
+# be trusted at all: no traffic, or an adapter resetting mid-run.
+#
+# A pull request from a fork is skipped rather than failed, for the same reason as stress.
+
+on:
+  workflow_dispatch:
+    inputs:
+      seconds:
+        description: seconds per direction
+        default: '30'
+      runs:
+        description: runs per direction
+        default: '3'
+      min_mbit:
+        description: floor below which a run fails
+        default: '1500'
+      win_win:
+        description: also run windows server against windows client
+        type: boolean
+        default: true
+  pull_request:
+    branches: [multipeer]
+
+
+permissions:
+  contents: read
+  id-token: write         # OIDC, so no long-lived AWS keys
+
+jobs:
+  build:
+    # Release, unlike the stress rig: a checked build traces the data path and reports a
+    # number a factor low, which reads as a regression.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - uses: microsoft/setup-msbuild@v2
+        with:
+          msbuild-architecture: x64
+      - name: Build (Release x64)
+        run: msbuild /m /p:Configuration=Release /p:Platform=x64 ovpn-dco-win.vcxproj
+      - uses: actions/upload-artifact@v4
+        with:
+          name: driver-release-x64
+          path: |
+            x64/Release/ovpn-dco/ovpn-dco.sys
+            x64/Release/ovpn-dco/ovpn-dco.inf
+            x64/Release/ovpn-dco/ovpn-dco.cat
+          if-no-files-found: error
+
+  perf:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    # The same machines as the stress rig, so the same group: one run at a time across
+    # both workflows, and a run in progress is never cut short. The lock is on this job
+    # rather than the workflow so the build is not queued behind hardware it never touches.
+    concurrency:
+      group: ovpn-dco-stress-hardware
+      cancel-in-progress: false
+    env:
+      AWS_REGION:  ${{ vars.AWS_REGION }}
+      SG:          ${{ vars.STRESS_SECURITY_GROUP }}
+      DUT_ID:      ${{ vars.STRESS_DUT_INSTANCE_ID }}
+      CLIENT_ID:   ${{ vars.STRESS_CLIENT_INSTANCE_ID }}
+      # Optional: a second Windows machine for the windows-to-windows test. Without it
+      # that test is skipped rather than failed.
+      PEER_ID:     ${{ vars.PERF_PEER_INSTANCE_ID }}
+      # Optional: a second Linux machine for the control run that involves no Windows
+      # machine at all. Without it that test is skipped rather than failed.
+      LPEER_ID:    ${{ vars.PERF_LINUX_PEER_INSTANCE_ID }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.STRESS_AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: driver-release-x64
+          path: driver
+
+      - name: Open SSH to this runner only
+        id: net
+        run: |
+          MYIP=$(curl -fsS https://checkip.amazonaws.com | tr -d '[:space:]')
+          echo "myip=$MYIP" >> "$GITHUB_OUTPUT"
+          aws ec2 authorize-security-group-ingress --group-id "$SG" \
+            --protocol tcp --port 22 --cidr "$MYIP/32" >/dev/null
+          echo "authorised $MYIP/32"
+
+      - name: Start the instances
+        id: ec2
+        run: |
+          # Empty means a pull request, where inputs do not exist: run it there too, so
+          # every test the rig has is visible on every run. A dispatch says true or false.
+          WANT_WINWIN='${{ inputs.win_win }}'
+          [ -z "$WANT_WINWIN" ] && WANT_WINWIN=true
+          IDS="$DUT_ID $CLIENT_ID"
+          if [ "$WANT_WINWIN" = 'true' ] && [ -n "$PEER_ID" ]; then
+            IDS="$IDS $PEER_ID"
+            echo "winwin=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "winwin=false" >> "$GITHUB_OUTPUT"
+            [ "$WANT_WINWIN" = 'true' ] &&
+              echo "::warning::windows-to-windows asked for but PERF_PEER_INSTANCE_ID is not set; skipping it"
+          fi
+          if [ -n "$LPEER_ID" ]; then
+            IDS="$IDS $LPEER_ID"
+            echo "baseline=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "baseline=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "ids=$IDS" >> "$GITHUB_OUTPUT"
+          # The other workflow stops these on its way out, and an instance still stopping
+          # cannot be started. Wait for it to settle rather than racing it.
+          for id in $IDS; do
+            state=$(aws ec2 describe-instances --instance-ids "$id" \
+                      --query 'Reservations[].Instances[].State.Name' --output text)
+            if [ "$state" = stopping ]; then
+              echo "$id is stopping; waiting for it to stop"
+              aws ec2 wait instance-stopped --instance-ids "$id"
+            fi
+          done
+          aws ec2 start-instances --instance-ids $IDS >/dev/null
+          aws ec2 wait instance-running --instance-ids $IDS
+          # A cluster placement group is what lifts the per-flow limit from 5 to 10 Gbps, and
+          # a tunnel is a single flow. An instance outside the group measures about a third
+          # lower and reads as a driver regression, so say so rather than let it pass quietly.
+          # Not fatal: the run is still valid, it just has a lower ceiling.
+          groups=$(aws ec2 describe-instances --instance-ids $IDS \
+                     --query 'Reservations[].Instances[].[InstanceId,Placement.GroupName]' \
+                     --output text)
+          echo "$groups"
+          if [ "$(echo "$groups" | awk '{print $2}' | sort -u | wc -l)" != 1 ]; then
+            echo "::warning::rig instances are not all in one placement group; a single flow is capped near 5 Gbps outside one"
+          fi
+          addr() { aws ec2 describe-instances --instance-ids "$1" \
+                     --query 'Reservations[].Instances[].[PublicIpAddress,PrivateIpAddress]' --output text; }
+          read -r DUT_PUB DUT_PRIV <<<"$(addr "$DUT_ID")"
+          read -r CLI_PUB CLI_PRIV <<<"$(addr "$CLIENT_ID")"
+          { echo "dut_pub=$DUT_PUB"; echo "dut_priv=$DUT_PRIV"; echo "cli_pub=$CLI_PUB"; } >> "$GITHUB_OUTPUT"
+          if [ -n "$PEER_ID" ] && [ "$WANT_WINWIN" = 'true' ]; then
+            read -r PEER_PUB PEER_PRIV <<<"$(addr "$PEER_ID")"
+            { echo "peer_pub=$PEER_PUB"; echo "peer_priv=$PEER_PRIV"; } >> "$GITHUB_OUTPUT"
+          fi
+          if [ -n "$LPEER_ID" ]; then
+            read -r LPEER_PUB LPEER_PRIV <<<"$(addr "$LPEER_ID")"
+            echo "lpeer_priv=$LPEER_PRIV" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up SSH
+        env:
+          SSH_KEY:   ${{ secrets.STRESS_SSH_KEY }}
+          DUT_HOST:  ${{ steps.ec2.outputs.dut_pub }}
+          CLI_HOST:  ${{ steps.ec2.outputs.cli_pub }}
+          PEER_HOST: ${{ steps.ec2.outputs.peer_pub }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/stress
+          chmod 600 ~/.ssh/stress
+          cat > ~/.ssh/config <<EOF
+          Host dut
+            HostName $DUT_HOST
+            User Administrator
+          Host client
+            HostName $CLI_HOST
+            User ubuntu
+          Host *
+            IdentityFile ~/.ssh/stress
+            IdentitiesOnly yes
+            StrictHostKeyChecking accept-new
+            ConnectTimeout 10
+          EOF
+          if [ -n "$PEER_HOST" ]; then
+            printf 'Host peer\n  HostName %s\n  User Administrator\n' "$PEER_HOST" |
+              cat - ~/.ssh/config > ~/.ssh/config.new && mv ~/.ssh/config.new ~/.ssh/config
+          fi
+          hosts="dut client"
+          [ -n "$PEER_HOST" ] && hosts="$hosts peer"
+          for h in $hosts; do
+            for _ in $(seq 1 40); do
+              ssh -o BatchMode=yes $h 'echo up' 2>/dev/null | grep -q up && break
+              sleep 10
+            done
+            ssh $h 'hostname'
+          done
+
+      # Perf refuses to measure a machine left armed by a stress run, so undo that here
+      # rather than failing. Disarming needs a reboot, and the install has to come after
+      # it: Install-Driver checks that the image it staged is the one now running, and a
+      # reboot in between would make that check meaningless.
+      - name: Put the machines in measurement state and install the driver
+        env:
+          WINWIN: ${{ steps.ec2.outputs.winwin }}
+        run: |
+          hosts=dut
+          if [ "$WINWIN" = 'true' ]; then hosts="$hosts peer"; fi
+          for h in $hosts; do
+            ssh $h 'New-Item -ItemType Directory -Force C:\stage | Out-Null'
+            scp -q driver/* tests/stress/windows/Trust-DriverCert.ps1 \
+                   tests/stress/windows/Install-Driver.ps1 \
+                   tests/stress/windows/Set-TestMode.ps1 $h:'C:\stage'
+            ssh $h 'powershell -NoProfile -ExecutionPolicy Bypass -File C:\stage\Trust-DriverCert.ps1 -SysPath C:\stage\ovpn-dco.sys'
+            ssh $h 'powershell -NoProfile -ExecutionPolicy Bypass -File C:\stage\Set-TestMode.ps1 -Disarm'
+            ssh $h 'shutdown /r /t 3' || true
+          done
+          sleep 20
+          for h in $hosts; do
+            for _ in $(seq 1 40); do
+              ssh -o BatchMode=yes $h 'echo up' 2>/dev/null | grep -q up && break
+              sleep 10
+            done
+            ssh $h 'powershell -NoProfile -ExecutionPolicy Bypass -File C:\stage\Install-Driver.ps1 -InfPath C:\stage\ovpn-dco.inf'
+          done
+
+      # The rig runs from the Linux machine, which is one end of the tunnel in client
+      # mode and the load generator's home in the others. It reaches the Windows machines
+      # over private addresses with a key of its own; see the stress workflow for how
+      # that key is set up.
+      - name: Measure
+        id: run
+        env:
+          DUT_PRIV:   ${{ steps.ec2.outputs.dut_priv }}
+          PEER_PRIV:  ${{ steps.ec2.outputs.peer_priv }}
+          LPEER_PRIV: ${{ steps.ec2.outputs.lpeer_priv }}
+          WINWIN:     ${{ steps.ec2.outputs.winwin }}
+        run: |
+          ssh client 'test -f ~/.ssh/dut_key' ||
+            { echo 'client has no ~/.ssh/dut_key; see the stress workflow' >&2; exit 1; }
+          ssh client 'rm -rf ~/perf && mkdir -p ~/perf/tests'
+          scp -q -r tests/perf tests/stress client:'~/perf/tests/'
+          # Each host carries its own identity rather than a Host * catch-all: this file is
+          # pulled in ahead of the machine's own config, and a catch-all there would set the
+          # key for every host the machine talks to, not just these.
+          entry() {
+            printf 'Host %s\n  HostName %s\n  User %s\n  IdentityFile ~/.ssh/dut_key\n  IdentitiesOnly yes\n  StrictHostKeyChecking accept-new\n' \
+              "$1" "$2" "$3"
+          }
+          {
+            entry dut "$DUT_PRIV" Administrator
+            [ "$WINWIN" = 'true' ] && entry dut2 "$PEER_PRIV" Administrator
+            [ -n "$LPEER_PRIV" ] && entry lpeer "$LPEER_PRIV" ubuntu
+            true
+          } | ssh client 'cat > ~/.ssh/config.perf'
+          # Kept in a file of its own and pulled in with Include, rather than replacing
+          # ~/.ssh/config: that file is how anyone running the rig by hand reaches these
+          # hosts, and a run that overwrote it broke the next manual one. Include goes
+          # first, so a run's addresses win while everything else on the machine survives.
+          ssh client 'chmod 600 ~/.ssh/config.perf;
+                      touch ~/.ssh/config;
+                      grep -q "^Include config.perf" ~/.ssh/config ||
+                        sed -i "1i Include config.perf" ~/.ssh/config'
+
+          # The control run reaches the second Linux machine from the load generator, not
+          # from here, so wait on that path. Starting an instance only means AWS has it
+          # running; sshd comes up later, and nothing else in this job waits for it.
+          if [ -n "$LPEER_PRIV" ]; then
+            ssh client 'for _ in $(seq 1 40); do
+                          ssh -o BatchMode=yes lpeer "echo up" 2>/dev/null | grep -q up && break
+                          sleep 10
+                        done
+                        ssh -o BatchMode=yes lpeer "hostname; command -v iperf3 >/dev/null ||
+                          echo \"WARNING: no iperf3 on the second Linux machine\""'
+          fi
+
+          # A pull request needs the floor cleared and a table to glance at, and neither
+          # wants precision: run-to-run spread on one configuration is about a fifth, so
+          # a longer run buys nothing a gate can use. Halve the duration rather than drop
+          # a stream count: parallel streams have found driver bugs before, so they are a
+          # stressor here and not only a throughput diagnostic.
+          SEC='${{ inputs.seconds || '15' }}'
+          RUNS='${{ inputs.runs || '3' }}'
+          MIN='${{ inputs.min_mbit || '1500' }}'
+          rig="cd ~/perf/tests/perf && chmod +x run-perf.sh linux/*.sh &&"
+          rc=0
+          run_one() {   # run_one <label> <extra args...>
+            label=$1; shift
+            echo "::group::$label"
+            ssh client "$rig ./run-perf.sh --dut dut --seconds $SEC --runs $RUNS \
+              --min-mbit $MIN --markdown ~/perf/table.md --outdir ~/perf-$label $*" 2>&1 |
+              tee /tmp/$label.log
+            grep -q '"verdict":"PASS"' /tmp/$label.log || rc=1
+            echo "::endgroup::"
+          }
+          run_one client-udp --mode client --proto udp
+          run_one client-tcp --mode client --proto tcp
+          run_one server-udp --mode server --proto udp
+          [ "$WINWIN" = 'true' ] && run_one win-win-udp --mode server --peer dut2 --proto udp
+          # The control runs last: it says nothing about the driver, so it should not
+          # delay the tests that do.
+          [ -n "$LPEER_PRIV" ] && run_one linux-linux-udp --mode baseline --peer lpeer --proto udp
+          exit $rc
+
+      - name: Report
+        if: always()
+        run: |
+          {
+            echo "## Throughput"
+            echo
+            ssh client 'cat ~/perf/table.md' 2>/dev/null || echo '_no results_'
+            echo
+            echo "Medians of \`${{ inputs.runs || '3' }}\` runs of \`${{ inputs.seconds || '30' }}\`s"
+            echo "per direction. Floor for a pass: \`${{ inputs.min_mbit || '1500' }}\` Mbit/s."
+            echo
+            echo "Which machine each column means flips with the test, so the ends column"
+            echo "says which is which."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Collect results
+        if: always()
+        run: |
+          mkdir -p perf-results
+          ssh client 'tar czf /tmp/perf-results.tgz -C ~ $(cd ~ && ls -d perf-* 2>/dev/null) perf/table.md' \
+            || echo "no results to pack"
+          scp -q client:/tmp/perf-results.tgz perf-results/ 2>/dev/null || echo "no results to collect"
+          ls -lh perf-results/ || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: perf-results
+          path: perf-results/
+
+      - name: Stop instances and close SSH
+        if: always()
+        run: |
+          aws ec2 stop-instances --instance-ids ${{ steps.ec2.outputs.ids }} --force >/dev/null || true
+          if [ -n "${{ steps.net.outputs.myip }}" ]; then
+            aws ec2 revoke-security-group-ingress --group-id "$SG" \
+              --protocol tcp --port 22 --cidr "${{ steps.net.outputs.myip }}/32" >/dev/null || true
+            echo "revoked ${{ steps.net.outputs.myip }}/32"
+          fi

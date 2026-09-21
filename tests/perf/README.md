@@ -73,10 +73,13 @@ Thirty seconds measures twenty-seven. Much below ten and the window left over sw
 half, which is enough to invent a regression or hide one, so the rig says how long it
 actually measured and warns when that is short.
 
-Each direction is also measured with one stream and with four. The comparison is the
-point: the driver has a single transmit queue and no RSS, so parallel streams cannot
-multiply its throughput. If `-P 4` runs far ahead of `-P 1`, the single flow was limited
-somewhere else — a window, a latency, the other end — and not by the driver.
+Each direction is also measured with one stream and with four, and both are worth the
+time for different reasons. As a measurement the comparison is a diagnostic: the driver
+has a single transmit queue and no RSS, so `-P 4` running far ahead of `-P 1` would mean
+the single flow was limited somewhere other than the driver. As a workload, parallel
+streams are a stressor — they have turned up driver bugs before — which is why CI keeps
+both stream counts on every run and shortens the measurement instead when it needs to be
+quicker.
 
 ## Requirements
 
@@ -95,6 +98,20 @@ The Linux side needs no packages beyond `openvpn` 2.7 and `iperf3`: the `ovpn` m
 in the kernel from 6.16, and OpenVPN uses it when it is there. The Linux scripts say
 whether offload actually happened and fail if it did not, rather than quietly measuring a
 userspace tunnel.
+
+## The ceiling
+
+AWS limits a single network flow to 5 Gbps inside a VPC, and a tunnel is exactly one
+flow however many streams run inside it — so without care every test here measures that
+limit rather than the driver. Inside a cluster placement group the limit doubles: a
+single raw flow between these machines goes from 4965 to 9529 Mbit/s, and the tunnel
+figures stop being suspiciously identical run to run.
+
+All the rig's instances therefore live in one cluster placement group. That is an
+attribute of each instance and survives stop and start, but nothing stops a replacement
+being launched without it, and the only symptom would be every number dropping by about
+a third — which reads exactly like a driver regression. CI prints each instance's group
+and warns when they differ.
 
 ## Reading the result
 
@@ -120,9 +137,9 @@ row that failed is marked in the table.
 and its concurrency group, so the two never run at once: one wants a release driver with
 Driver Verifier off and the other a checked build with it armed.
 
-`perf-win-win-udp` is off by default there and needs a second Windows machine, named by
-the `PERF_PEER_INSTANCE_ID` repository variable. Without it that test is skipped rather
-than failed.
+`perf-win-win-udp` needs a second Windows machine, named by the `PERF_PEER_INSTANCE_ID`
+repository variable. Without it the test is skipped rather than failed. A dispatch can
+turn it off with the `win_win` input when the extra machine is not worth the minutes.
 
 `perf-linux-linux-udp` likewise needs a second Linux machine, named by
 `PERF_LINUX_PEER_INSTANCE_ID`, and is skipped without one. That machine needs `iperf3`,
