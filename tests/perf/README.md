@@ -130,6 +130,8 @@ under it, so it catches a collapse and nothing else. Every median has to clear i
 failure in one direction or at one stream count is not hidden by the others, and the
 row that failed is marked in the table.
 
+The machines, the Actions variables and the AWS side are described in [../INFRASTRUCTURE.md](../INFRASTRUCTURE.md).
+
 ## In CI
 
 `.github/workflows/perf.yml` runs the rig on demand and on pull requests against
