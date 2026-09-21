@@ -815,11 +815,22 @@ OvpnSocketSendComplete(_In_ PDEVICE_OBJECT deviceObj, _In_ PIRP irp, _In_ PVOID 
     OVPN_DEVICE* device = (OVPN_DEVICE*)OvpnTxBufferPoolGetContext(buffer->Pool);
     ULONG bytesSend = (ULONG)(irp->IoStatus.Information);
 
+    // The transmit path batches packets for the same peer into one send, so a completion
+    // covers a chain of buffers. Count the chain, or every counter here reads per send.
+    LONG packets = 0;
+    for (OVPN_TX_BUFFER* b = buffer; b != NULL; b = (OVPN_TX_BUFFER*)b->WskBufList.Next) {
+        ++packets;
+    }
+
     if (irp->IoStatus.Status != STATUS_SUCCESS) {
         LOG_ERROR("Send failed", TraceLoggingNTStatus(irp->IoStatus.Status, "status"));
-        InterlockedIncrementNoFence(buffer->ControlChannel ? &device->Stats.LostOutControlPackets : &device->Stats.LostOutDataPackets);
+        InterlockedExchangeAddNoFence(buffer->ControlChannel ? &device->Stats.LostOutControlPackets : &device->Stats.LostOutDataPackets, packets);
     }
-    else if (!buffer->ControlChannel) {
+    else if (buffer->ControlChannel) {
+        InterlockedExchangeAddNoFence(&device->Stats.SentControlPackets, packets);
+    }
+    else {
+        InterlockedExchangeAddNoFence(&device->Stats.SentDataPackets, packets);
         InterlockedExchangeAddNoFence64(&device->Stats.TransportBytesSent, bytesSend);
     }
 
