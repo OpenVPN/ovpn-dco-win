@@ -150,14 +150,17 @@ From the Linux machine:
 
 ```sh
 tests/stress/run-stress.sh --dut <ssh-target> [--server-ip <dut-ip>] \
-    [--pairs 4] [--swarm 16] [--flood 800] [--duration 600] [--outdir <dir>] \
+    [--pairs 4] [--swarm 16] [--flood 800] [--duration 300] [--outdir <dir>] \
     [--openvpn <path on the Windows machine>]
 ```
 
 `--dut` says how to reach the Windows machine over SSH and can be an `ssh_config` alias.
 `--server-ip` is the address clients dial; it defaults to `--dut` when that is a plain
-address. The defaults are the configuration the rig was validated at — smaller numbers are
-for debugging the rig, not for testing the driver.
+address. The defaults are the configuration the rig was validated at. The duration is 300
+seconds: each ENA adapter reset costs about ninety seconds, and a longer run does not
+tolerate proportionally more of them, so it mostly buys more chances to be interrupted.
+Five minutes still produces ten thousand or more peer sessions and forty-odd epoch
+rotations.
 
 The script sets `TestAeadUsageLimit`, turns on Driver Verifier, reboots the Windows
 machine, starts the server, builds the client namespaces, runs the workload, collects logs

@@ -10,7 +10,7 @@
 set -u
 
 DUT=""; SERVER_IP=""; REMOTE_DIR='C:\ovpn-stress'
-PAIRS=4; SWARM=16; DURATION=600; FLOOD=800
+PAIRS=4; SWARM=16; DURATION=300; FLOOD=800
 SKIP_ARM=0; OUTDIR=""
 KEYS=${KEYS:-/usr/share/doc/openvpn/examples/sample-keys}
 # empty means whatever Start-Server.ps1 defaults to, the installed openvpn
