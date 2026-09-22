@@ -1,0 +1,230 @@
+name: Ioctl (surface and churn)
+
+# Drives the driver's ioctl surface directly rather than through OpenVPN: malformed
+# buffers, values outside what the structs carry, control codes that do not exist, and
+# peer churn at memory speed with datagrams arriving throughout.
+#
+# It needs one Windows machine and no network peer, so it runs on the second Windows
+# machine rather than the device under test, and a run is minutes rather than tens of
+# minutes. It runs alongside the stress rig, which uses different machines entirely, and
+# waits for the perf rig, whose windows-to-windows test borrows this one.
+#
+# The verdict is not what the harness prints. It is that the machine still answers, that
+# Driver Verifier found nothing, and that the driver unloads cleanly at the end — pool
+# tracking reports leaks there and nowhere else.
+
+on:
+  workflow_dispatch:
+    inputs:
+      seconds:
+        description: seconds of churn
+        default: '120'
+  pull_request:
+    branches: [multipeer]
+    # These take tens of minutes on real machines. Documentation cannot change what
+    # they measure, so do not spend a runner and two reboots proving it.
+    paths-ignore: ['**/*.md', 'LICENSE*', '.github/ISSUE_TEMPLATE/**']
+
+# Supersede this workflow's own older run on the same branch: a new push makes the
+# previous one obsolete, and without this it does not just linger, it blocks the new run
+# at the wait below. Sharing the machines between *different* rigs is handled there, not
+# here, because a group cancels rather than queues.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  actions: read           # to see whether another rig is using the machines
+  id-token: write
+
+jobs:
+  build:
+    # Checked build: this rig is about the driver's own checking, and a checked build
+    # asserts far more of it. Nothing here needs a release build's speed.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - uses: microsoft/setup-msbuild@v2
+        with:
+          msbuild-architecture: x64
+      - name: Build the driver (Debug x64)
+        run: msbuild /m /p:Configuration=Debug /p:Platform=x64 ovpn-dco-win.vcxproj
+      # Built by path rather than through the solution: it is a user-mode tool and has no
+      # business in the driver's build matrix.
+      - name: Build the harness (Release x64)
+        run: msbuild /m /p:Configuration=Release /p:Platform=x64 tests\ioctl\ovpn-ioctl-test.vcxproj
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ioctl-bits
+          path: |
+            x64/Debug/ovpn-dco/ovpn-dco.sys
+            x64/Debug/ovpn-dco/ovpn-dco.inf
+            x64/Debug/ovpn-dco/ovpn-dco.cat
+            tests/ioctl/x64/Release/ovpn-ioctl-test.exe
+          if-no-files-found: error
+
+  ioctl:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      SG:         ${{ vars.STRESS_SECURITY_GROUP }}
+      TARGET_ID:  ${{ vars.PERF_PEER_INSTANCE_ID }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check a machine is configured
+        run: |
+          if [ -z "$TARGET_ID" ]; then
+            echo "::notice::PERF_PEER_INSTANCE_ID is not set; nothing to run on"
+            echo "skip=true" >> "$GITHUB_ENV"
+          fi
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        if: env.skip != 'true'
+        with:
+          role-to-assume: ${{ secrets.STRESS_AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - uses: actions/download-artifact@v4
+        if: env.skip != 'true'
+        with:
+          name: ioctl-bits
+          path: bits
+
+      # GitHub keeps only one *pending* run per concurrency group, so a newer run cancels
+      # the older one that is waiting: a shared group does not queue these rigs, it drops
+      # them. Wait explicitly instead, and only for the rigs this one actually collides
+      # with — see tests/INFRASTRUCTURE.md for which machine each uses. The order is by run
+      # id, which is total, so a run only waits for older ones and they cannot deadlock.
+      - name: Wait for the rigs that share these machines
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          me=${{ github.run_id }}
+          for _ in $(seq 1 120); do
+            ahead=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs?per_page=100" \
+                      --jq '.workflow_runs[] | select(.status=="in_progress" or .status=="queued")
+                            | select(.name|test("^(Perf)")) | .id' |
+                    awk -v me="$me" '$1 < me' | wc -l)
+            [ "$ahead" -eq 0 ] && break
+            echo "waiting for $ahead older run(s) using the same machines"
+            sleep 30
+          done
+          [ "$ahead" -eq 0 ] || { echo "still blocked after an hour; refusing to share the machines" >&2; exit 1; }
+
+      - name: Open SSH to this runner only
+        if: env.skip != 'true'
+        id: net
+        run: |
+          MYIP=$(curl -fsS https://checkip.amazonaws.com | tr -d '[:space:]')
+          echo "myip=$MYIP" >> "$GITHUB_OUTPUT"
+          aws ec2 authorize-security-group-ingress --group-id "$SG" \
+            --protocol tcp --port 22 --cidr "$MYIP/32" >/dev/null
+
+      - name: Start the machine
+        if: env.skip != 'true'
+        id: ec2
+        run: |
+          state=$(aws ec2 describe-instances --instance-ids "$TARGET_ID" \
+                    --query 'Reservations[].Instances[].State.Name' --output text)
+          [ "$state" = stopping ] && aws ec2 wait instance-stopped --instance-ids "$TARGET_ID"
+          aws ec2 start-instances --instance-ids "$TARGET_ID" >/dev/null
+          aws ec2 wait instance-running --instance-ids "$TARGET_ID"
+          PUB=$(aws ec2 describe-instances --instance-ids "$TARGET_ID" \
+                  --query 'Reservations[].Instances[].PublicIpAddress' --output text)
+          echo "pub=$PUB" >> "$GITHUB_OUTPUT"
+
+      - name: Set up SSH
+        if: env.skip != 'true'
+        env:
+          SSH_KEY: ${{ secrets.STRESS_SSH_KEY }}
+          HOST:    ${{ steps.ec2.outputs.pub }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/rig
+          chmod 600 ~/.ssh/rig
+          cat > ~/.ssh/config <<EOF
+          Host target
+            HostName $HOST
+            User Administrator
+            IdentityFile ~/.ssh/rig
+            IdentitiesOnly yes
+            StrictHostKeyChecking accept-new
+            ConnectTimeout 10
+          EOF
+          for _ in $(seq 1 40); do
+            ssh -o BatchMode=yes target 'echo up' 2>/dev/null | grep -q up && break
+            sleep 10
+          done
+          ssh target 'hostname'
+
+      # Verifier first, because arming it needs a reboot and the install has to land after
+      # that reboot: Install-Driver checks the image it staged is the one now running.
+      - name: Install the driver and arm Driver Verifier
+        if: env.skip != 'true'
+        run: |
+          ssh target 'New-Item -ItemType Directory -Force C:\ovpn-ioctl | Out-Null'
+          # The artifact carries two path roots, so it downloads as a tree rather than
+          # flat. Flatten whatever is in it instead of hardcoding the layout.
+          mkdir -p stage
+          find bits -type f -exec cp {} stage/ \;
+          cp tests/ioctl/Run-IoctlStress.ps1 \
+             tests/stress/windows/Trust-DriverCert.ps1 \
+             tests/stress/windows/Install-Driver.ps1 stage/
+          ls -l stage/
+          scp -q stage/* target:'C:\ovpn-ioctl\'
+          ssh target 'powershell -NoProfile -ExecutionPolicy Bypass -File C:\ovpn-ioctl\Trust-DriverCert.ps1 -SysPath C:\ovpn-ioctl\ovpn-dco.sys'
+          ssh target 'powershell -NoProfile -ExecutionPolicy Bypass -File C:\ovpn-ioctl\Run-IoctlStress.ps1 -Arm'
+          ssh target 'shutdown /r /t 3' || true
+          sleep 20
+          for _ in $(seq 1 40); do
+            ssh -o BatchMode=yes target 'echo up' 2>/dev/null | grep -q up && break
+            sleep 10
+          done
+          ssh target 'powershell -NoProfile -ExecutionPolicy Bypass -File C:\ovpn-ioctl\Install-Driver.ps1 -InfPath C:\ovpn-ioctl\ovpn-dco.inf'
+
+      - name: Drive the ioctl surface
+        if: env.skip != 'true'
+        run: |
+          ssh target "powershell -NoProfile -ExecutionPolicy Bypass -File C:\\ovpn-ioctl\\Run-IoctlStress.ps1 -Run -Seconds '${{ inputs.seconds || '120' }}'" 2>&1 | tee /tmp/ioctl.log
+
+      # A leak is reported when the driver unloads and at no other time, so force it. If
+      # the machine stops answering here, that is the finding.
+      - name: Unload the driver to check for leaked pool
+        if: env.skip != 'true'
+        run: |
+          ssh target 'powershell -NoProfile -ExecutionPolicy Bypass -File C:\ovpn-ioctl\Run-IoctlStress.ps1 -Unload'
+          for _ in $(seq 1 12); do
+            ssh -o BatchMode=yes target 'echo up' 2>/dev/null | grep -q up && ok=1 && break
+            sleep 10
+          done
+          [ -n "$ok" ] || { echo "the machine stopped answering while unloading the driver (leaked pool?)" >&2; exit 1; }
+
+      - name: Report
+        if: always() && env.skip != 'true'
+        run: |
+          {
+            echo "## Ioctl surface"
+            echo
+            echo '```'
+            grep -E '^(==|  [a-z-]+ +[0-9]|  ! )' /tmp/ioctl.log 2>/dev/null | head -60 || echo 'no output'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Disarm and stop
+        if: always() && env.skip != 'true'
+        run: |
+          ssh target 'powershell -NoProfile -ExecutionPolicy Bypass -File C:\ovpn-ioctl\Run-IoctlStress.ps1 -Disarm' || true
+          aws ec2 stop-instances --instance-ids "$TARGET_ID" --force >/dev/null || true
+          if [ -n "${{ steps.net.outputs.myip }}" ]; then
+            aws ec2 revoke-security-group-ingress --group-id "$SG" \
+              --protocol tcp --port 22 --cidr "${{ steps.net.outputs.myip }}/32" >/dev/null || true
+          fi
