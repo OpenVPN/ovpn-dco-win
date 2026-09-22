@@ -83,8 +83,13 @@ counters are there because what they catch is silent: the first expiry lane re-a
 keepalive on every pass, and `MP_SET_PEER` restarts the receive timer, so nothing ever
 expired — and the run looked exactly like a clean one.
 
-Five minutes produces around 1.2M peer lifecycles and 7M packets, against the stress
-rig's twenty thousand peer sessions in ten. That ratio is the reason this rig exists.
+The counters are ioctl calls attempted per thread, not peer lifetimes — a create on an id
+that still exists is a cheap refusal, and about half of them are. They only compare within
+one machine and one build. Sixty seconds on a six-core VM on a release build: 117k peer
+calls with Verifier armed as this rig arms it against 206k without, and 762k datagrams
+against 4.0M. So Verifier costs roughly twice on the ioctl paths and five times on the
+packet path here; the CI machine runs a checked build and produces far less again, which
+is that build and that machine rather than Verifier.
 
 ## Running
 
@@ -104,6 +109,15 @@ Each call goes out overlapped with a two second deadline. `NOTIFY_EVENT` parks b
 until an event arrives, and a call that parks is cancelled and counted rather than waited
 on — so the sweep finishes, and an ioctl that parks when it should not is visible instead
 of being a hang. Cancelling a parked request also exercises the driver's cancel path.
+
+The count is kept per control code, and anything other than `NOTIFY_EVENT` is called out,
+because the two mean opposite things: that one parking is the design, and any other ioctl
+taking two seconds is worth looking at.
+
+`--no-packets` leaves the ioctl threads alone with the driver. It is not a mode anyone
+needs routinely; it exists to tell a slow ioctl path apart from one being starved by the
+data path, which is a question that came up the first time the rig ran on a different
+machine and produced very different numbers. The answer was Driver Verifier both times.
 
 ## What the verdict is
 
