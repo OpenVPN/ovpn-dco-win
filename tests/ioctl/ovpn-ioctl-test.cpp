@@ -105,7 +105,11 @@ static HANDLE open_device()
 // cancel path, which is where lost-wakeup bugs live.
 #define CALL_PENDED 0xFFFFFFFF
 
-static unsigned g_pended = 0;
+// Counted per control code, not in total: NOTIFY_EVENT parking is by design, anything
+// else pending for two seconds is a finding, and one number cannot tell them apart.
+static LONG g_pended[64];
+
+static int pended_slot(DWORD code) { return (int)((code >> 2) & 63); }
 
 // One ioctl with an arbitrary buffer. Never asserts on the status: a refusal is the
 // correct answer to most of what this sends, and the driver is free to choose which.
@@ -134,7 +138,7 @@ static DWORD call(HANDLE h, DWORD code, void* in, DWORD inLen, void* out, DWORD 
     } else {
         CancelIoEx(h, &ov);
         GetOverlappedResult(h, &ov, &returned, TRUE);
-        g_pended++;
+        InterlockedIncrement(&g_pended[pended_slot(code)]);
         err = CALL_PENDED;
     }
     CloseHandle(ov.hEvent);
@@ -599,7 +603,16 @@ static int run_churn(HANDLE h, int seconds, USHORT port)
         printf("  %-8s %8ld ops\n", kThreads[i].name, g_ops[i]);
         CloseHandle(th[i]);
     }
-    printf("== %u calls pended past their deadline\n", g_pended);
+    unsigned pendedTotal = 0;
+    for (size_t i = 0; i < kIoctlCount; i++) {
+        LONG stuck = g_pended[pended_slot(kIoctls[i].code)];
+        if (stuck == 0)
+            continue;
+        pendedTotal += (unsigned)stuck;
+        printf("  %-15s %8ld calls pended past their deadline%s\n", kIoctls[i].name, stuck,
+               kIoctls[i].blocking ? " (parks by design)" : " <- not meant to block");
+    }
+    printf("== %u calls pended past their deadline\n", pendedTotal);
 
     // Tear the peers down, so what is left at exit is the driver's own state rather than
     // ours: a leak then shows up when the driver unloads.

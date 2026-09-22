@@ -65,6 +65,10 @@ until an event arrives, and a call that parks is cancelled and counted rather th
 on — so the sweep finishes, and an ioctl that parks when it should not is visible instead
 of being a hang. Cancelling a parked request also exercises the driver's cancel path.
 
+The count is kept per control code, and anything other than `NOTIFY_EVENT` is called out,
+because the two mean opposite things: that one parking is the design, and any other ioctl
+taking two seconds is worth looking at.
+
 ## What the verdict is
 
 The harness only reports what the driver returned. The verdict comes from the machine:

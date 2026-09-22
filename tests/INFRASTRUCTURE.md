@@ -61,6 +61,36 @@ group:
 A run opens SSH from the runner's own address for the duration and revokes it afterwards,
 so nothing is reachable from the internet between runs.
 
+## Sharing the machines
+
+Which rig needs what:
+
+| rig | machines | driver it installs |
+| --- | --- | --- |
+| stress | device under test, load generator | checked, Verifier armed |
+| perf | those two, plus both peers | release, Verifier off |
+| ioctl | the Windows peer | checked, Verifier armed |
+
+So stress and perf can never overlap: same machines, and they want opposite states on
+the device under test. The ioctl rig uses a different machine and runs alongside stress
+quite happily; it collides with perf only because the windows-to-windows test borrows
+that same peer.
+
+Each workflow does keep a group of its own, `workflow + branch`, purely to supersede
+its own older run when a new commit arrives — otherwise an obsolete run does not just
+linger, it blocks the new one at the wait.
+
+A shared group across rigs looks like the answer for the machines and is not: GitHub keeps only
+one *pending* run per group, so a third run cancels the one that was waiting rather than
+queueing behind it. Each workflow therefore waits explicitly, and only for the rigs it
+actually collides with. The wait is ordered by run id, which is total, so a run only ever
+waits for older ones and the three cannot deadlock.
+
+The better answer is a machine per run, launched from an image and terminated after. That
+needs an image pipeline, `RunInstances` scoped by tag and instance type rather than the
+current start/stop on named ARNs, and something to reap instances a cancelled run left
+behind. Worth doing; not done.
+
 ## Adding a machine takes three changes
 
 This is the part that has caught us out, so it is worth stating plainly. Adding a machine
