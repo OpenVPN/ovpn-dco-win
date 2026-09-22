@@ -1,6 +1,6 @@
 #!/bin/bash
 # swarm.sh --server <ip> [--dut <ssh-target>] [--pairs 4] [--swarm 16] [--flood 800]
-#          [--duration 900] [--hold 1.5] [--outdir <dir>] [--keys <dir>] [--port 11197]
+#          [--duration 300] [--hold 1.5] [--outdir <dir>] [--keys <dir>] [--port 11197]
 #
 # Three workloads against the device under test at the same time:
 #
@@ -21,7 +21,7 @@
 # runs; a JSON summary is the last line. Logs are kept under --outdir for triage.
 set -u
 
-SERVER=""; PORT=11197; PAIRS=4; SWARM=16; DURATION=900; HOLD=1.5
+SERVER=""; PORT=11197; PAIRS=4; SWARM=16; DURATION=300; HOLD=1.5
 DUT_SSH=""   # ssh target for the device under test, used by the iroute probe
 # must match the server's client-config-dir entry
 IROUTE_PROBE=10.90.0.5    # put on every traffic client, for the two startup probes

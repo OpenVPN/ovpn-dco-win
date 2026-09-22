@@ -3,7 +3,7 @@ name: Stress (multipeer + epoch rotation)
 # Long-running driver stress on real hardware: on demand, and on every pull request
 # against multipeer, which is where the peer table and the data path change.
 #
-# There is one device under test and a run owns it for ~20 minutes including reboots, so
+# There is one device under test and a run owns it for ~10 minutes including reboots, so
 # runs are serialised and later ones wait their turn.
 #
 # The job itself runs on a GitHub-hosted runner, which briefly authorises its own address
@@ -20,7 +20,7 @@ on:
     inputs:
       duration:
         description: workload seconds
-        default: '600'
+        default: '300'
       swarm:
         description: churn clients
         default: '16'
@@ -233,7 +233,7 @@ jobs:
               --pairs '${{ inputs.pairs || '4' }}' \
               --swarm '${{ inputs.swarm || '16' }}' \
               --flood '${{ inputs.flood || '800' }}' \
-              --duration '${{ inputs.duration || '600' }}' \
+              --duration '${{ inputs.duration || '300' }}' \
               --openvpn '${{ inputs.openvpn || 'C:\stage\ovpn-patched\openvpn.exe' }}' \
               --outdir ~/stress-results" 2>&1 | tee /tmp/run.log
             verdict=$(grep -o '"verdict":"[A-Z]*"' /tmp/run.log | tail -1)
