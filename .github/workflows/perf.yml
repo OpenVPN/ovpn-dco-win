@@ -4,9 +4,10 @@ name: Perf (throughput)
 # alongside the stress rig. Stress says the driver stays correct under churn; this says
 # what it costs.
 #
-# It shares the stress rig's machines and its concurrency group, so the two never run at
-# once: perf needs a release driver with Driver Verifier off, stress needs a checked one
-# with Verifier armed, and each would measure the other's setup.
+# It shares the stress rig's machines, so the two never run at once: perf needs a release
+# driver with Driver Verifier off, stress needs a checked one with Verifier armed, and
+# each would measure the other's setup. It waits for the ioctl rig too, because the
+# windows-to-windows test borrows that rig's machine.
 #
 # The gate is a floor, not a target. Throughput on these instances varies by a factor of
 # two between runs, so anything tighter would flap and then be ignored. What the floor
@@ -33,10 +34,22 @@ on:
         default: true
   pull_request:
     branches: [multipeer]
+    # These take tens of minutes on real machines. Documentation cannot change what
+    # they measure, so do not spend a runner and two reboots proving it.
+    paths-ignore: ['**/*.md', 'LICENSE*', '.github/ISSUE_TEMPLATE/**']
 
+
+# Supersede this workflow's own older run on the same branch: a new push makes the
+# previous one obsolete, and without this it does not just linger, it blocks the new run
+# at the wait below. Sharing the machines between *different* rigs is handled there, not
+# here, because a group cancels rather than queues.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
+  actions: read           # to see whether another rig is using the machines
   id-token: write         # OIDC, so no long-lived AWS keys
 
 jobs:
@@ -69,12 +82,6 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 90
-    # The same machines as the stress rig, so the same group: one run at a time across
-    # both workflows, and a run in progress is never cut short. The lock is on this job
-    # rather than the workflow so the build is not queued behind hardware it never touches.
-    concurrency:
-      group: ovpn-dco-stress-hardware
-      cancel-in-progress: false
     env:
       AWS_REGION:  ${{ vars.AWS_REGION }}
       SG:          ${{ vars.STRESS_SECURITY_GROUP }}
@@ -98,6 +105,27 @@ jobs:
         with:
           name: driver-release-x64
           path: driver
+
+      # GitHub keeps only one *pending* run per concurrency group, so a newer run cancels
+      # the older one that is waiting: a shared group does not queue these rigs, it drops
+      # them. Wait explicitly instead, and only for the rigs this one actually collides
+      # with — see tests/INFRASTRUCTURE.md for which machine each uses. The order is by run
+      # id, which is total, so a run only waits for older ones and they cannot deadlock.
+      - name: Wait for the rigs that share these machines
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          me=${{ github.run_id }}
+          for _ in $(seq 1 120); do
+            ahead=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs?per_page=100" \
+                      --jq '.workflow_runs[] | select(.status=="in_progress" or .status=="queued")
+                            | select(.name|test("^(Stress|Ioctl)")) | .id' |
+                    awk -v me="$me" '$1 < me' | wc -l)
+            [ "$ahead" -eq 0 ] && break
+            echo "waiting for $ahead older run(s) using the same machines"
+            sleep 30
+          done
+          [ "$ahead" -eq 0 ] || { echo "still blocked after an hour; refusing to share the machines" >&2; exit 1; }
 
       - name: Open SSH to this runner only
         id: net
