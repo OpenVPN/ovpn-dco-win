@@ -167,6 +167,9 @@ ssh "$DUT" "\$c = 'cmd.exe /c powershell -NoProfile -ExecutionPolicy Bypass -Fil
 ssh "$DUT" "\$c = 'cmd.exe /c powershell -NoProfile -ExecutionPolicy Bypass -File $REMOTE_DIR\\Measure-Throughput.ps1 -Seconds $DURATION -Interval 5 > $REMOTE_DIR\\throughput.csv 2>&1'; Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = \$c } | Out-Null" \
     2>"$OUTDIR/throughput.err" || echo "  note: could not start the throughput sampler"
 
+# when the workload began, so the NIC check below asks about this run and not about
+# whatever happened before it
+run_start=$(date +%s)
 echo "== running workload (${DURATION}s)"
 summary=$("$HERE/linux/swarm.sh" --server "$SERVER_IP" --dut "$DUT" --pairs "$PAIRS" --swarm "$SWARM" \
              --flood "$FLOOD" --duration "$DURATION" --keys "$KEYS" --outdir "$OUTDIR" |
@@ -183,7 +186,10 @@ dut_ps 'Start-Server.ps1' -Down >/dev/null
 # A NIC reset on the device under test presents exactly as a driver stall from here:
 # traffic stops, clients time out, the sampler freezes, CPU sits at zero. Windows logs
 # the reset, so ask rather than guess.
-dut_ps "Get-NicResets.ps1" -Minutes $(( (DURATION + 600) / 60 )) | tr -d '\r' > "$OUTDIR/nic-resets.txt" 2>/dev/null
+# Only this run: a window wide enough for the workload also covers the minutes before
+# it, and then a previous run's resets fail this one.
+run_minutes=$(( ( ($(date +%s) - run_start) + 119 ) / 60 ))
+dut_ps "Get-NicResets.ps1" -Minutes "$run_minutes" | tr -d '\r' > "$OUTDIR/nic-resets.txt" 2>/dev/null
 nic_resets=$(grep -oE "minutes: [0-9]+" "$OUTDIR/nic-resets.txt" 2>/dev/null | grep -oE "[0-9]+$")
 nic_resets=${nic_resets:-0}
 # scp will not take the backslashes, so ask for the same directory with forward slashes
