@@ -109,7 +109,10 @@ jobs:
       # them. Wait explicitly instead, and only for the rigs this one actually collides
       # with — see tests/INFRASTRUCTURE.md for which machine each uses. The order is by run
       # id, which is total, so a run only waits for older ones and they cannot deadlock.
+      # Only while perf measures on the same two machines. Give perf a pair of its own,
+      # named by PERF_DUT_INSTANCE_ID, and this rig waits for nobody.
       - name: Wait for the rigs that share these machines
+        if: vars.PERF_DUT_INSTANCE_ID == ''
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

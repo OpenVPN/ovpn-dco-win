@@ -12,15 +12,26 @@ them. This file describes the shape, and names the variables that hold the value
 
 | role | system | used by |
 | --- | --- | --- |
-| device under test | Windows | stress, `perf-client-*`, `perf-server-udp`, `perf-win-win-udp` |
-| load generator | Linux | every run — it drives the rigs and is one tunnel end |
+| device under test | Windows | `perf-client-*`, `perf-server-udp`, `perf-win-win-udp` |
+| load generator | Linux | perf — it drives the rig and is one tunnel end |
+| stress pair | Windows + Linux | stress, the same two roles on machines of its own |
 | second Windows machine | Windows | `perf-win-win-udp` only |
 | second Linux machine | Linux | `perf-linux-linux-udp` only |
+| ioctl target | Windows | ioctl |
 
 Each is named by an Actions variable: `STRESS_DUT_INSTANCE_ID`,
-`STRESS_CLIENT_INSTANCE_ID`, `PERF_PEER_INSTANCE_ID` and `PERF_LINUX_PEER_INSTANCE_ID`.
-The last two are optional — the tests that need them are skipped when they are unset,
-rather than failing.
+`STRESS_CLIENT_INSTANCE_ID`, `PERF_PEER_INSTANCE_ID`, `PERF_LINUX_PEER_INSTANCE_ID`,
+`IOCTL_TARGET_INSTANCE_ID`, `PERF_DUT_INSTANCE_ID` and `PERF_CLIENT_INSTANCE_ID`.
+
+Only the first two are required. The peers are optional and the tests that need them
+are skipped when they are unset. The last three name the machines that ended the
+queueing: without `IOCTL_TARGET_INSTANCE_ID` the ioctl rig borrows the second Windows
+machine, and without the `PERF_*` pair perf measures on the stress pair. Each rig falls
+back to sharing, and to waiting, exactly as it did before.
+
+Perf keeps the original machines and stress moved to the clones, not the other way
+round: perf's numbers are comparable across weeks only because the hardware under them
+never changes.
 
 They are kept stopped and started per run, because a run owns them for tens of minutes
 and nothing else should be using them.
@@ -67,14 +78,16 @@ Which rig needs what:
 
 | rig | machines | driver it installs |
 | --- | --- | --- |
-| stress | device under test, load generator | checked, Verifier armed |
-| perf | those two, plus both peers | release, Verifier off |
-| ioctl | the Windows peer | checked, Verifier armed |
+| stress | its own Windows and Linux pair | checked, Verifier armed |
+| perf | device under test, load generator, both peers | release, Verifier off |
+| ioctl | its own Windows machine | checked, Verifier armed |
 
-So stress and perf can never overlap: same machines, and they want opposite states on
-the device under test. The ioctl rig uses a different machine and runs alongside stress
-quite happily; it collides with perf only because the windows-to-windows test borrows
-that same peer.
+Nothing overlaps any more, so nothing waits. What it cost to get there is worth stating,
+because the fallbacks still describe it: sharing a device under test means stress and
+perf can never run together - same machines, opposite driver states - and stress waited
+out perf's whole measurement, twenty-six minutes for a seven-minute workload. The ioctl
+rig shares nothing with either, yet waited twenty-five minutes for a ten-minute run,
+because the windows-to-windows test borrows the machine it drives.
 
 Each workflow does keep a group of its own, `workflow + branch`, purely to supersede
 its own older run when a new commit arrives — otherwise an obsolete run does not just
@@ -86,10 +99,18 @@ queueing behind it. Each workflow therefore waits explicitly, and only for the r
 actually collides with. The wait is ordered by run id, which is total, so a run only ever
 waits for older ones and the three cannot deadlock.
 
-The better answer is a machine per run, launched from an image and terminated after. That
-needs an image pipeline, `RunInstances` scoped by tag and instance type rather than the
-current start/stop on named ARNs, and something to reap instances a cancelled run left
-behind. Worth doing; not done.
+Dedicated machines only go so far: they are still one each, so two pull requests at once
+queue exactly as two rigs used to.
+
+The better answer is a machine per run, launched from an image and terminated after. The
+image half now exists - `ovpn-dco-rig-windows`, a snapshot of the second Windows machine
+taken while stopped, which is where the ioctl target came from. What is missing is
+`RunInstances` scoped by tag and instance type rather than the current start/stop on
+named ARNs, and something to reap instances a cancelled run left behind.
+
+The image is deliberately not sysprepped. Generalising regenerates the SID and re-runs
+specialize, which disturbs the one piece of state every rig assumes is already there: an
+existing DCO adapter. These machines join no domain, so duplicate SIDs cost nothing.
 
 ## Adding a machine takes three changes
 

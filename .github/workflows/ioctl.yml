@@ -76,14 +76,14 @@ jobs:
     env:
       AWS_REGION: ${{ vars.AWS_REGION }}
       SG:         ${{ vars.STRESS_SECURITY_GROUP }}
-      TARGET_ID:  ${{ vars.PERF_PEER_INSTANCE_ID }}
+      TARGET_ID:  ${{ vars.IOCTL_TARGET_INSTANCE_ID || vars.PERF_PEER_INSTANCE_ID }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Check a machine is configured
         run: |
           if [ -z "$TARGET_ID" ]; then
-            echo "::notice::PERF_PEER_INSTANCE_ID is not set; nothing to run on"
+            echo "::notice::neither IOCTL_TARGET_INSTANCE_ID nor PERF_PEER_INSTANCE_ID is set; nothing to run on"
             echo "skip=true" >> "$GITHUB_ENV"
           fi
 
@@ -104,7 +104,10 @@ jobs:
       # them. Wait explicitly instead, and only for the rigs this one actually collides
       # with — see tests/INFRASTRUCTURE.md for which machine each uses. The order is by run
       # id, which is total, so a run only waits for older ones and they cannot deadlock.
+      # With a machine of its own this rig shares nothing: it never touched the device
+      # under test, and it collides with perf only while it borrows the Windows peer.
       - name: Wait for the rigs that share these machines
+        if: env.skip != 'true' && vars.IOCTL_TARGET_INSTANCE_ID == ''
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
