@@ -205,10 +205,19 @@ jobs:
           # a pipeline reports tee's status, not ssh's, without this
           set -o pipefail
           rc=0
-          ssh target "powershell -NoProfile -ExecutionPolicy Bypass -File C:\\ovpn-ioctl\\Run-IoctlStress.ps1 -Run -Seconds '${{ inputs.seconds || '120' }}'" 2>&1 | tee /tmp/ioctl.log || rc=$?
+          # The wedge does not always take the machine off the network: the threads caught
+          # in it spin at DISPATCH and hold the CPUs they are on, and a core left over still
+          # answers SSH while the run never returns. The modes take about three minutes at
+          # these settings, so bound the wait rather than trust the machine to disappear.
+          timeout "$(( ${{ inputs.seconds || '120' }} + 420 ))s" \
+            ssh target "powershell -NoProfile -ExecutionPolicy Bypass -File C:\\ovpn-ioctl\\Run-IoctlStress.ps1 -Run -Seconds '${{ inputs.seconds || '120' }}'" 2>&1 | tee /tmp/ioctl.log || rc=$?
           if [ "$rc" -ne 0 ]; then
             if ssh -o BatchMode=yes -o ConnectTimeout=20 target 'echo up' 2>/dev/null | grep -q up; then
-              echo "::error::the rig reported a failure; see the log above"
+              if [ "$rc" -eq 124 ]; then
+                echo "::error::the rig stopped making progress while the machine still answers: the driver deadlocked with a CPU to spare"
+              else
+                echo "::error::the rig reported a failure; see the log above"
+              fi
             else
               echo "::error::the machine stopped answering and did not come back: the driver deadlocked, most likely a send with the device lock held"
             fi
