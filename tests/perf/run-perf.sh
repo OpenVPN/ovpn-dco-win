@@ -289,8 +289,8 @@ median() {
 
 # An adapter that went down mid-measurement drags an average without any other sign.
 nic_resets() {
-    n=$(ps_on "$1" 'Get-NicResets.ps1' -Minutes $(( (SECONDS_PER * RUNS * 4 + 300) / 60 )) 2>/dev/null |
-        tr -d '\r' | grep -oE 'minutes: [0-9]+' | grep -oE '[0-9]+$')
+    n=$(ps_on "$1" 'Get-NicResets.ps1' -Seconds $(( SECONDS_PER * RUNS * 4 + 300 )) 2>/dev/null |
+        tr -d '\r' | grep -oE '^nic resets: [0-9]+' | grep -oE '[0-9]+$')
     echo "${n:-0}"
 }
 resets=0
