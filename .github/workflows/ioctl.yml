@@ -159,6 +159,11 @@ jobs:
             IdentitiesOnly yes
             StrictHostKeyChecking accept-new
             ConnectTimeout 10
+            # A wedged machine answers nothing, and ConnectTimeout only covers opening
+            # the connection: without these an established session waits for TCP to give
+            # up, which is the job timeout away.
+            ServerAliveInterval 15
+            ServerAliveCountMax 4
           EOF
           for _ in $(seq 1 40); do
             ssh -o BatchMode=yes target 'echo up' 2>/dev/null | grep -q up && break
@@ -191,10 +196,24 @@ jobs:
           done
           ssh target 'powershell -NoProfile -ExecutionPolicy Bypass -File C:\ovpn-ioctl\Install-Driver.ps1 -InfPath C:\ovpn-ioctl\ovpn-dco.inf'
 
+      # The last mode drives the driver's own send path back into itself. On a driver
+      # that holds the device lock across a send, the machine stops answering and never
+      # comes back, so treat silence here as the finding rather than as infrastructure.
       - name: Drive the ioctl surface
         if: env.skip != 'true'
         run: |
-          ssh target "powershell -NoProfile -ExecutionPolicy Bypass -File C:\\ovpn-ioctl\\Run-IoctlStress.ps1 -Run -Seconds '${{ inputs.seconds || '120' }}'" 2>&1 | tee /tmp/ioctl.log
+          # a pipeline reports tee's status, not ssh's, without this
+          set -o pipefail
+          rc=0
+          ssh target "powershell -NoProfile -ExecutionPolicy Bypass -File C:\\ovpn-ioctl\\Run-IoctlStress.ps1 -Run -Seconds '${{ inputs.seconds || '120' }}'" 2>&1 | tee /tmp/ioctl.log || rc=$?
+          if [ "$rc" -ne 0 ]; then
+            if ssh -o BatchMode=yes -o ConnectTimeout=20 target 'echo up' 2>/dev/null | grep -q up; then
+              echo "::error::the rig reported a failure; see the log above"
+            else
+              echo "::error::the machine stopped answering and did not come back: the driver deadlocked, most likely a send with the device lock held"
+            fi
+            exit 1
+          fi
 
       # A leak is reported when the driver unloads and at no other time, so force it. If
       # the machine stops answering here, that is the finding.

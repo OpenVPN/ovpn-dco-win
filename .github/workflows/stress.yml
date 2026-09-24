@@ -179,6 +179,8 @@ jobs:
             IdentityFile ~/.ssh/stress
             IdentitiesOnly yes
             StrictHostKeyChecking accept-new
+            ServerAliveInterval 15
+            ServerAliveCountMax 4
             ConnectTimeout 10
           EOF
           for h in dut client; do
