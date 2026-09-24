@@ -248,6 +248,16 @@ if [ "$SRV_OS" = windows ]; then
 else
     on "$SRV_HOST" "iperf3 -s -p 5202 -D"
 fi
+# One queue each way means the datapath is one core's worth of work however many the
+# machine has, so a saturated datapath reads as a few percent of the total - which is
+# the only number this rig used to sample. Watch every core instead.
+cpu_host=''
+[ "$MODE" != baseline ] && cpu_host=$DUT
+if [ -n "$cpu_host" ]; then
+    cpu_secs=$(( (SECONDS_PER + OMIT + 6) * RUNS * 2 * $(echo $STREAMS | wc -w) + 30 ))
+    ssh "$cpu_host" "\$c = 'cmd.exe /c powershell -NoProfile -ExecutionPolicy Bypass -File $REMOTE_DIR\\Sample-Cpu.ps1 -Seconds $cpu_secs -Interval 2 > $REMOTE_DIR\\cpu.csv 2>&1'; Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = \$c } | Out-Null" 2>/dev/null ||
+        echo "  note: could not start the CPU sampler"
+fi
 for p in $STREAMS; do
     for i in $(seq 1 "$RUNS"); do
         for dir in forward reverse; do
@@ -277,6 +287,19 @@ if [ "$SRV_OS" = windows ]; then
     ssh "$SRV_HOST" "taskkill /F /IM iperf3.exe" >/dev/null 2>&1
 else
     on "$SRV_HOST" "pkill -f 'iperf3 -s -p 5202'" >/dev/null 2>&1
+fi
+
+busy_pct=0; busy_core='-'; busy_dpc=0
+if [ -n "$cpu_host" ]; then
+    ssh "$cpu_host" "Get-Content '$REMOTE_DIR\\cpu.csv'" 2>/dev/null |
+        tr -d '\r' > "$OUTDIR/cpu.csv"
+    # the busiest core over the run, and how much of it was DPC: the receive path runs
+    # in a WSK callback at DISPATCH, where the time belongs to no process
+    stats=$(awk -F, 'NR>1 && $4+0 > m { m=$4+0; c=$3; d=$5+0 } END { printf "%d %s %d", m+0, (c==""?"-":c), d+0 }' "$OUTDIR/cpu.csv" 2>/dev/null)
+    busy_pct=$(echo "$stats" | cut -d' ' -f1)
+    busy_core=$(echo "$stats" | cut -d' ' -f2)
+    busy_dpc=$(echo "$stats" | cut -d' ' -f3)
+    echo "  busiest core during the run: ${busy_pct:-0}% (core ${busy_core:--}, ${busy_dpc:-0}% of it DPC), see cpu.csv"
 fi
 
 median() {
@@ -356,4 +379,4 @@ for p in $STREAMS; do
     done
 done
 
-echo "{\"verdict\":\"PASS\",\"test\":\"$TEST\",\"forward_mbit\":$(median forward "$first"),\"reverse_mbit\":$(median reverse "$first"),\"outdir\":\"$OUTDIR\"}"
+echo "{\"verdict\":\"PASS\",\"test\":\"$TEST\",\"forward_mbit\":$(median forward "$first"),\"reverse_mbit\":$(median reverse "$first"),\"busiest_core_pct\":${busy_pct:-0},\"busiest_core_dpc_pct\":${busy_dpc:-0},\"outdir\":\"$OUTDIR\"}"
