@@ -98,6 +98,9 @@ jobs:
 
   analyze:
     name: CodeQL (Windows driver)
+    # Uploading results needs code scanning, which a private repository only has with
+    # Advanced Security. The mirror has neither, so the job would fail on every push.
+    if: github.repository == 'OpenVPN/ovpn-dco-win'
     runs-on: windows-2022
     permissions:
       # required to upload results to GitHub code scanning
