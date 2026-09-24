@@ -324,12 +324,27 @@ jobs:
           MIN='${{ inputs.min_mbit || '1500' }}'
           rig="cd ~/perf/tests/perf && chmod +x run-perf.sh linux/*.sh &&"
           rc=0
+          # A NIC reset on one of these machines is an EC2 fault that takes the adapter
+          # down for about ninety seconds, and the rig says so rather than reporting a
+          # throughput that means nothing. Retry that test alone: re-running the whole
+          # matrix for one flaky minute costs twenty.
           run_one() {   # run_one <label> <extra args...>
             label=$1; shift
             echo "::group::$label"
-            ssh client "$rig ./run-perf.sh --dut dut --seconds $SEC --runs $RUNS \
-              --min-mbit $MIN --markdown ~/perf/table.md --outdir ~/perf-$label $*" 2>&1 |
-              tee /tmp/$label.log
+            for attempt in 1 2 3; do
+              ssh client "$rig ./run-perf.sh --dut dut --seconds $SEC --runs $RUNS \
+                --min-mbit $MIN --markdown ~/perf/table.md --outdir ~/perf-$label $*" 2>&1 |
+                tee /tmp/$label.log
+              if grep -q '"verdict":"PASS"' /tmp/$label.log; then
+                [ "$attempt" -gt 1 ] && echo "$label passed on attempt $attempt"
+                break
+              fi
+              if grep -q 'reset its NIC' /tmp/$label.log; then
+                echo "$label lost attempt $attempt to a NIC reset; retrying"
+                continue
+              fi
+              break   # a real failure stands on the first attempt
+            done
             grep -q '"verdict":"PASS"' /tmp/$label.log || rc=1
             echo "::endgroup::"
           }

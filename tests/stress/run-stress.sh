@@ -176,8 +176,12 @@ summary=$("$HERE/linux/swarm.sh" --server "$SERVER_IP" --dut "$DUT" --pairs "$PA
              tee /dev/stderr | tail -1)
 
 echo "== collecting results"
-# A bugcheck shows up as the DUT no longer answering; that is the primary fault signal.
-wait_for_dut 60 || fail "device under test stopped responding (bugcheck)"
+# A bugcheck shows up as the DUT no longer answering, and so does a NIC reset - the
+# adapter goes away for about ninety seconds and comes back. Wait long enough to tell
+# them apart, then ask the machine which it was.
+if ! wait_for_dut 240; then
+    fail "device under test stopped responding and did not come back (bugcheck)"
+fi
 
 server_status=$(dut_ps 'Start-Server.ps1' -Status | tr -d '\r')
 ssh "$DUT" "Get-Content \$env:TEMP\\ovpn-stress\\server.log" 2>/dev/null | tr -d '\r' > "$OUTDIR/server.log"
