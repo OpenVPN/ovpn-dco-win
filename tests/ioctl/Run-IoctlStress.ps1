@@ -86,6 +86,9 @@ $modes = @(
     @{ Name = 'mutate';      Args = @('--mode', 'mutate') }
     @{ Name = 'mutate-p2p';  Args = @('--mode', 'mutate-p2p') }
     @{ Name = 'churn';       Args = @('--mode', 'churn', '--seconds', "$Seconds", '--port', "$Port") }
+    # Last, because a driver that still sends under the device lock hangs the machine
+    # here rather than failing: the run ends with the box gone, which is the finding.
+    @{ Name = 'selfsend';    Args = @('--mode', 'selfsend', '--seconds', '20', '--port', "$Port") }
 )
 
 $failed = @()
