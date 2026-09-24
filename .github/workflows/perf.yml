@@ -32,6 +32,10 @@ on:
         description: also run windows server against windows client
         type: boolean
         default: true
+      baseline:
+        description: also run the linux-to-linux control
+        type: boolean
+        default: true
   pull_request:
     branches: [multipeer]
     # These take tens of minutes on real machines. Documentation cannot change what
@@ -151,6 +155,12 @@ jobs:
           # every test the rig has is visible on every run. A dispatch says true or false.
           WANT_WINWIN='${{ inputs.win_win }}'
           [ -z "$WANT_WINWIN" ] && WANT_WINWIN=true
+          # The control is the exception: it says what the in-kernel module does on the
+          # same hardware, and a drop in it is news about the instances rather than about
+          # a driver change. So it is off on a pull request and asked for by name when a
+          # number needs a yardstick.
+          WANT_BASELINE='${{ inputs.baseline }}'
+          [ -z "$WANT_BASELINE" ] && WANT_BASELINE=false
           IDS="$DUT_ID $CLIENT_ID"
           if [ "$WANT_WINWIN" = 'true' ] && [ -n "$PEER_ID" ]; then
             IDS="$IDS $PEER_ID"
@@ -160,7 +170,7 @@ jobs:
             [ "$WANT_WINWIN" = 'true' ] &&
               echo "::warning::windows-to-windows asked for but PERF_PEER_INSTANCE_ID is not set; skipping it"
           fi
-          if [ -n "$LPEER_ID" ]; then
+          if [ "$WANT_BASELINE" = 'true' ] && [ -n "$LPEER_ID" ]; then
             IDS="$IDS $LPEER_ID"
             echo "baseline=true" >> "$GITHUB_OUTPUT"
           else
@@ -200,7 +210,7 @@ jobs:
             read -r PEER_PUB PEER_PRIV <<<"$(addr "$PEER_ID")"
             { echo "peer_pub=$PEER_PUB"; echo "peer_priv=$PEER_PRIV"; } >> "$GITHUB_OUTPUT"
           fi
-          if [ -n "$LPEER_ID" ]; then
+          if [ "$WANT_BASELINE" = 'true' ] && [ -n "$LPEER_ID" ]; then
             read -r LPEER_PUB LPEER_PRIV <<<"$(addr "$LPEER_ID")"
             echo "lpeer_priv=$LPEER_PRIV" >> "$GITHUB_OUTPUT"
           fi
