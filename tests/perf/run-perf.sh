@@ -110,6 +110,13 @@ else
 fi
 
 [ -z "$OUTDIR" ] && OUTDIR="$PWD/perf-results/$(date +%Y%m%d-%H%M%S)"
+# A run must not inherit the last one's evidence: the same --outdir is reused by CI,
+# and a file left behind reads as if this run produced it. Keep the previous one next
+# door rather than deleting it.
+if [ -d "$OUTDIR" ] && [ -n "$(ls -A "$OUTDIR" 2>/dev/null)" ]; then
+    rm -rf "$OUTDIR.prev"
+    mv "$OUTDIR" "$OUTDIR.prev"
+fi
 mkdir -p "$OUTDIR"
 HERE=$(cd "$(dirname "$0")" && pwd)
 

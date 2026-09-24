@@ -64,6 +64,13 @@ fi
 HERE=$(cd "$(dirname "$0")" && pwd)
 CLIENTS=$((PAIRS * 2 + SWARM))
 [ -z "$OUTDIR" ] && OUTDIR="$PWD/stress-results/$(date +%Y%m%d-%H%M%S)"
+# A run must not inherit the last one's evidence: the same --outdir is reused by CI,
+# and a file left behind reads as if this run produced it. Keep the previous one next
+# door rather than deleting it.
+if [ -d "$OUTDIR" ] && [ -n "$(ls -A "$OUTDIR" 2>/dev/null)" ]; then
+    sudo rm -rf "$OUTDIR.prev"
+    sudo mv "$OUTDIR" "$OUTDIR.prev"
+fi
 mkdir -p "$OUTDIR"
 LOG="$OUTDIR/run.log"
 exec > >(tee -a "$LOG") 2>&1
