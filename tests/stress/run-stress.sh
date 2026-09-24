@@ -91,12 +91,22 @@ wait_for_dut() {
 json_num() { echo "$1" | grep -o "\"$2\":[0-9.-]*" | head -1 | cut -d: -f2 | grep . || echo 0; }
 
 fail() {
+    # An adapter that went away mid-run usually fails the run for something downstream:
+    # a pair that could not reach its partner, a client that never connected. Name the
+    # resets in the reason or the retry that exists for them never fires, and an EC2
+    # fault costs a red check under a symptom that hides it.
+    why=$1
+    case "$why" in
+    *"reset its NIC"*) ;;
+    *) [ "${nic_resets:-0}" -gt 0 ] &&
+           why="$why; the device under test reset its NIC ${nic_resets} time(s) during this run, see nic-resets.txt" ;;
+    esac
     echo
     echo "-- server log tail --"
     ssh "$DUT" "Get-Content \$env:TEMP\\ovpn-stress\\server.log -Tail 40" 2>/dev/null | tr -d '\r' | tee "$OUTDIR/server.log.tail"
     echo "-- a client log --"
     sudo tail -30 "$OUTDIR"/clients/c5.log 2>/dev/null || sudo tail -30 "$OUTDIR"/clients/c1.log 2>/dev/null
-    echo "{\"verdict\":\"FAIL\",\"reason\":\"$1\",\"outdir\":\"$OUTDIR\"}"
+    echo "{\"verdict\":\"FAIL\",\"reason\":\"$why\",\"outdir\":\"$OUTDIR\"}"
     exit 1
 }
 
@@ -353,8 +363,15 @@ if [ "${nic_resets:-0}" -gt 0 ]; then
     # run that was lost rather than a count, which would mean different things at
     # different durations. Past a third of the run there is too little left to read.
     nic_down=$(( ${nic_resets:-0} * 90 ))
+    # Ninety seconds apiece is a rough figure and resets overlap, so the sum can exceed
+    # the run. Say "most of it" rather than print more seconds lost than the run had.
+    if [ "$nic_down" -ge "$DURATION" ]; then
+        lost="most of the ${DURATION}s run"
+    else
+        lost="about ${nic_down}s of ${DURATION}s"
+    fi
     [ "$(( nic_down * 3 ))" -gt "$DURATION" ] &&
-        fail "the device under test reset its NIC ${nic_resets} time(s), about ${nic_down}s of ${DURATION}s with the adapter down, see nic-resets.txt: too little of the run is left to judge"
+        fail "the device under test reset its NIC ${nic_resets} time(s), ${lost} with the adapter down, see nic-resets.txt: too little of the run is left to judge"
 fi
 
 # Not gated: a multipeer server under this churn logs per-client errors routinely, a key
