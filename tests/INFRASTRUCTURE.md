@@ -82,7 +82,11 @@ Which rig needs what:
 | perf | device under test, load generator, both peers | release, Verifier off |
 | ioctl | its own Windows machine | checked, Verifier armed |
 
-Nothing overlaps any more, so nothing waits. What it cost to get there is worth stating,
+No rig waits for another any more. Each still waits for *itself*: one machine each
+means two pull requests cannot run the same rig at once, and the concurrency group
+only supersedes runs on the same branch - it does nothing across branches. Skipping
+that wait let a second run stop the machine under the first, which reads as a rig
+that cannot reach its own device. What the sharing cost is worth stating,
 because the fallbacks still describe it: sharing a device under test means stress and
 perf can never run together - same machines, opposite driver states - and stress waited
 out perf's whole measurement, twenty-six minutes for a seven-minute workload. The ioctl
@@ -92,6 +96,9 @@ because the windows-to-windows test borrows the machine it drives.
 Each workflow does keep a group of its own, `workflow + branch`, purely to supersede
 its own older run when a new commit arrives — otherwise an obsolete run does not just
 linger, it blocks the new one at the wait.
+
+Per-run instances would end the remaining wait too: it exists only because a rig owns one
+machine, so the second pull request queues behind the first.
 
 A shared group across rigs looks like the answer for the machines and is not: GitHub keeps only
 one *pending* run per group, so a third run cancels the one that was waiting rather than

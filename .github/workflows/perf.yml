@@ -121,12 +121,12 @@ jobs:
           IOCTL_OWN: ${{ vars.IOCTL_TARGET_INSTANCE_ID }}
           PERF_OWN:  ${{ vars.PERF_DUT_INSTANCE_ID }}
         run: |
-          # Name only the rigs still borrowing a machine from this one. Both moved onto
-          # their own, and there is nothing to wait for.
-          rigs=
-          [ -z "$PERF_OWN" ] && rigs=Stress
-          [ -z "$IOCTL_OWN" ] && rigs="${rigs:+$rigs|}Ioctl"
-          if [ -z "$rigs" ]; then echo "no rig shares these machines"; exit 0; fi
+          # Itself always: two runs of this rig on different branches measure on the same
+          # machines, and the concurrency group only supersedes runs on the same branch.
+          # Then whichever rigs are still borrowing a machine from this one.
+          rigs=Perf
+          [ -z "$PERF_OWN" ] && rigs="$rigs|Stress"
+          [ -z "$IOCTL_OWN" ] && rigs="$rigs|Ioctl"
           me=${{ github.run_id }}
           for _ in $(seq 1 120); do
             ahead=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs?per_page=100" \
