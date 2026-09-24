@@ -16,37 +16,58 @@
     it, and NDIS 10400 the reset itself.
 
 .EXAMPLE
-    .\Get-NicResets.ps1 -Minutes 30
+    .\Get-NicResets.ps1 -Seconds 300
 #>
 [CmdletBinding()]
 param(
     [int]$Minutes = 60,
+    [int]$Seconds = 0,
     [switch]$AsJson
 )
 
-$since = (Get-Date).AddMinutes(-$Minutes)
+# -Seconds gives the caller an exact window. Rounded up to whole minutes it reaches back
+# past the start of the run, and the previous run's reset is then reported as this one's.
+$window = if ($Seconds -gt 0) { $Seconds } else { $Minutes * 60 }
+$since = (Get-Date).AddSeconds(-$window)
+# Two minutes before it are listed but not counted: a reset just outside the window says
+# the adapter is unwell, which is worth seeing and is not this run's to answer for.
+$margin = $since.AddSeconds(-120)
 $ids = 56001, 5007, 10400
 
 $events = @(Get-WinEvent -FilterHashtable @{
         LogName      = 'System'
         ProviderName = 'ena', 'Microsoft-Windows-NDIS'
-        StartTime    = $since
+        StartTime    = $margin
     } -ErrorAction SilentlyContinue | Where-Object { $ids -contains $_.Id } | Sort-Object TimeCreated)
 
-$resets = @($events | Where-Object { $_.Id -eq 56001 }).Count
+# NDIS 10400 is the same reset as ena 56001 seen from the other side, so counting both
+# would double it. Count 56001, unless only the NDIS record landed in the window.
+$inWindow = @($events | Where-Object { $_.TimeCreated -ge $since })
+$resets = @($inWindow | Where-Object { $_.Id -eq 56001 }).Count
+$resets += @($inWindow | Where-Object {
+        $e = $_
+        $e.Id -eq 10400 -and -not ($events | Where-Object {
+                $_.Id -eq 56001 -and [Math]::Abs(($_.TimeCreated - $e.TimeCreated).TotalSeconds) -le 10
+            })
+    }).Count
+
+$line = {
+    param($e)
+    '{0:yyyy-MM-dd HH:mm:ss} {1} {2}' -f $e.TimeCreated, $e.Id, $e.Message.Split([char]10)[0].Trim()
+}
 
 if ($AsJson) {
     [pscustomobject]@{
-        NicResets = $resets
-        Window    = $Minutes
-        Events    = @($events | ForEach-Object {
-                '{0:yyyy-MM-dd HH:mm:ss} {1} {2}' -f $_.TimeCreated, $_.Id, $_.Message.Split([char]10)[0].Trim()
-            })
+        NicResets     = $resets
+        WindowSeconds = $window
+        Events        = @($inWindow | ForEach-Object { & $line $_ })
+        Before        = @($events | Where-Object { $_.TimeCreated -lt $since } | ForEach-Object { & $line $_ })
     } | ConvertTo-Json -Compress
     return
 }
 
-"nic resets in the last $Minutes minutes: $resets"
+"nic resets: $resets  (window: the last ${window}s)"
 foreach ($e in $events) {
-    '  {0:HH:mm:ss}  {1,-5}  {2}' -f $e.TimeCreated, $e.Id, $e.Message.Split([char]10)[0].Trim()
+    $tag = if ($e.TimeCreated -lt $since) { '  (before the window, not counted)' } else { '' }
+    '  {0:HH:mm:ss}  {1,-5}  {2}{3}' -f $e.TimeCreated, $e.Id, $e.Message.Split([char]10)[0].Trim(), $tag
 }

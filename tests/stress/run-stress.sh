@@ -198,10 +198,11 @@ dut_ps 'Start-Server.ps1' -Down >/dev/null
 # traffic stops, clients time out, the sampler freezes, CPU sits at zero. Windows logs
 # the reset, so ask rather than guess.
 # Only this run: a window wide enough for the workload also covers the minutes before
-# it, and then a previous run's resets fail this one.
-run_minutes=$(( ( ($(date +%s) - run_start) + 119 ) / 60 ))
-dut_ps "Get-NicResets.ps1" -Minutes "$run_minutes" | tr -d '\r' > "$OUTDIR/nic-resets.txt" 2>/dev/null
-nic_resets=$(grep -oE "minutes: [0-9]+" "$OUTDIR/nic-resets.txt" 2>/dev/null | grep -oE "[0-9]+$")
+# it, and then a previous run's resets fail this one. Ask in seconds - rounding
+# up to whole minutes was enough slack to reach back into the run before.
+run_seconds=$(( $(date +%s) - run_start ))
+dut_ps "Get-NicResets.ps1" -Seconds "$run_seconds" | tr -d '\r' > "$OUTDIR/nic-resets.txt" 2>/dev/null
+nic_resets=$(grep -oE "^nic resets: [0-9]+" "$OUTDIR/nic-resets.txt" 2>/dev/null | grep -oE "[0-9]+$")
 nic_resets=${nic_resets:-0}
 # scp will not take the backslashes, so ask for the same directory with forward slashes
 REMOTE_FWD=$(echo "$REMOTE_DIR" | tr '\\' '/')

@@ -260,7 +260,9 @@ jobs:
         if: always()
         run: |
           mkdir -p stress-results
-          ssh client "sudo tar czf /tmp/stress-results.tgz --exclude='*.conf' -C ~ stress-results && sudo chown \$(id -u):\$(id -g) /tmp/stress-results.tgz" \
+          # A retried run leaves the attempt that failed in stress-results.prev. That
+          # is the attempt with the evidence in it, so pack it too when it is there.
+          ssh client "cd ~ && dirs=stress-results && [ -d stress-results.prev ] && dirs=\"\$dirs stress-results.prev\"; sudo tar czf /tmp/stress-results.tgz --exclude='*.conf' -C ~ \$dirs && sudo chown \$(id -u):\$(id -g) /tmp/stress-results.tgz" \
             || echo "no results to pack"
           scp -q client:/tmp/stress-results.tgz stress-results/ 2>/dev/null \
             || echo "no results to collect"
