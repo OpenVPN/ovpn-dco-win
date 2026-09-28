@@ -52,6 +52,18 @@ OvpnCryptoEncrypt(OvpnCryptoTxContext* tx, PUCHAR buf, SIZE_T len)
 
 _Use_decl_annotations_
 NTSTATUS
+OvpnCryptoAdvanceSendKey(OvpnCryptoTxContext* tx)
+{
+    if (!tx->Options.UseEpoch) {
+        // only epoch keys are ever used up, so only they ask for this
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+
+    return OvpnCryptoEpochAdvanceSendKey(&tx->Primary, &tx->Options);
+}
+
+_Use_decl_annotations_
+NTSTATUS
 OvpnCryptoDecrypt(OvpnCryptoRxContext* rx, UCHAR keyId, PUCHAR cipherText, SIZE_T len, PUCHAR plainText, UINT16* sendEpoch)
 {
     *sendEpoch = 0;

@@ -103,6 +103,14 @@ static VOID OvpnTimerXmit(WDFTIMER timer)
             OvpnBufferPut(buffer, layout.TailLen);
 
             status = OvpnCryptoEncrypt(tx, buffer->Data, buffer->Len);
+
+            // the send key is used up, so move the epoch on and encrypt again
+            if (status == STATUS_RETRY) {
+                status = OvpnCryptoAdvanceSendKey(tx);
+                if (NT_SUCCESS(status)) {
+                    status = OvpnCryptoEncrypt(tx, buffer->Data, buffer->Len);
+                }
+            }
         }
 
         if (NT_SUCCESS(status)) {

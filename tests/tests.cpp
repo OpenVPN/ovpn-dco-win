@@ -285,24 +285,44 @@ TEST_F(CryptoTest, EpochNextPacketId)
     ASSERT_EQ(pid, (1ull << 48) | 2);
     ASSERT_EQ(tx.Key.PlaintextBlocks, 2u * 88);
 
-    /* usage limit reached: next epoch, counter restarts */
+    /* usage limit reached: ask to retry, and leave the key alone until told to move */
     opts.AeadUsageLimit = 100;
+    ASSERT_EQ(OvpnCryptoEpochNextPacketId(&tx, &opts, 1400, &pid), STATUS_RETRY);
+    ASSERT_EQ(tx.Key.Epoch, 1);
+    ASSERT_EQ(tx.Pktid.SeqNum, 2);
+
+    /* advancing moves the epoch on and restarts the counter */
+    ASSERT_EQ(OvpnCryptoEpochAdvanceSendKey(&tx, &opts), STATUS_SUCCESS);
+    ASSERT_EQ(tx.Key.Epoch, 2);
+    ASSERT_EQ(tx.Pktid.SeqNum, 0);
     ASSERT_EQ(OvpnCryptoEpochNextPacketId(&tx, &opts, 1400, &pid), STATUS_SUCCESS);
     ASSERT_EQ(pid, (2ull << 48) | 1);
-    ASSERT_EQ(tx.Key.Epoch, 2);
     ASSERT_EQ(tx.Key.PlaintextBlocks, 88u);
     opts.AeadUsageLimit = 0;
 
-    /* counter exhausted: next epoch, never a wrapped counter */
+    /* a second sender that lost the race finds the key already moved and does nothing */
+    ASSERT_EQ(OvpnCryptoEpochAdvanceSendKey(&tx, &opts), STATUS_SUCCESS);
+    ASSERT_EQ(tx.Key.Epoch, 2);
+    ASSERT_EQ(tx.Pktid.SeqNum, 1);
+
+    /* counter exhausted: never a wrapped counter, the epoch moves instead */
     tx.Pktid.SeqNum = PACKET_ID_EPOCH_MAX;
+    ASSERT_EQ(OvpnCryptoEpochNextPacketId(&tx, &opts, 1400, &pid), STATUS_RETRY);
+    ASSERT_EQ(OvpnCryptoEpochAdvanceSendKey(&tx, &opts), STATUS_SUCCESS);
     ASSERT_EQ(OvpnCryptoEpochNextPacketId(&tx, &opts, 1400, &pid), STATUS_SUCCESS);
     ASSERT_EQ(pid, (3ull << 48) | 1);
+
+    /* the last id of an epoch is still usable */
+    tx.Pktid.SeqNum = PACKET_ID_EPOCH_MAX - 1;
+    ASSERT_EQ(OvpnCryptoEpochNextPacketId(&tx, &opts, 1400, &pid), STATUS_SUCCESS);
+    ASSERT_EQ(pid, (3ull << 48) | PACKET_ID_EPOCH_MAX);
 
     /* last epoch used up: fail, state untouched */
     tx.EpochKey.Epoch = UINT16_MAX;
     tx.Key.Epoch = UINT16_MAX;
     tx.Pktid.SeqNum = PACKET_ID_EPOCH_MAX;
-    ASSERT_EQ(OvpnCryptoEpochNextPacketId(&tx, &opts, 1400, &pid), STATUS_INTEGER_OVERFLOW);
+    ASSERT_EQ(OvpnCryptoEpochNextPacketId(&tx, &opts, 1400, &pid), STATUS_RETRY);
+    ASSERT_EQ(OvpnCryptoEpochAdvanceSendKey(&tx, &opts), STATUS_INTEGER_OVERFLOW);
     ASSERT_EQ(tx.Key.Epoch, UINT16_MAX);
     ASSERT_EQ(tx.Pktid.SeqNum, (LONG64)PACKET_ID_EPOCH_MAX);
 }
