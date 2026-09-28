@@ -265,6 +265,14 @@ OvpnTxProcessPacket(_In_ POVPN_DEVICE device, _In_ OvpnSocketRef* socket, _In_ P
         OvpnBufferPut(buffer, layout.TailLen);
 
         status = OvpnCryptoEncrypt(tx, buffer->Data, buffer->Len);
+
+        // the send key is used up, so move the epoch on and encrypt again
+        if (status == STATUS_RETRY) {
+            status = OvpnCryptoAdvanceSendKey(tx);
+            if (NT_SUCCESS(status)) {
+                status = OvpnCryptoEncrypt(tx, buffer->Data, buffer->Len);
+            }
+        }
     }
     else {
         status = STATUS_INVALID_DEVICE_STATE;
