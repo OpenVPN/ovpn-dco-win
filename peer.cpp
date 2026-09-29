@@ -568,13 +568,15 @@ OvpnPeerNew(POVPN_DEVICE device, WDFREQUEST request)
     // here with its WSK receive callback still pointing at the device. Mirrors
     // OvpnStopVPN's lock-protected swap.
     {
-        KIRQL kirql = ExAcquireSpinLockExclusive(&device->SpinLock);
-        PWSK_SOCKET oldSocket = device->Socket.Socket;
-        device->Socket.Socket = socket;
+        // Detach first: the old socket is only closed once nobody is inside a send.
+        PWSK_SOCKET oldSocket = OvpnSocketDetach(device);
+
+        // No lock: drained, and not published yet. The pointer goes last, with release,
+        // so a sender that sees it also sees Tcp.
         device->Socket.Tcp = proto_tcp;
         RtlZeroMemory(&device->Socket.TcpState, sizeof(OvpnSocketTcpState));
         RtlZeroMemory(&device->Socket.UdpState, sizeof(OvpnSocketUdpState));
-        ExReleaseSpinLockExclusive(&device->SpinLock, kirql);
+        WritePointerRelease((PVOID volatile*)&device->Socket.Socket, socket);
 
         if (oldSocket != NULL) {
             LOG_IF_NOT_NT_SUCCESS(OvpnSocketClose(oldSocket));

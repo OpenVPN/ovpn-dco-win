@@ -234,15 +234,14 @@ OvpnEvtIoWrite(WDFQUEUE queue, WDFREQUEST request, size_t length)
 
     POVPN_DEVICE device = OvpnGetDeviceContext(WdfIoQueueGetDevice(queue));
 
-    // acquire spinlock, since we access device->TransportSocket
-    KIRQL kiqrl = ExAcquireSpinLockShared(&device->SpinLock);
-
     OVPN_TX_BUFFER* txBuf = NULL;
 
-    if (device->Socket.Socket == NULL) {
+    OvpnSocketRef socket;
+    if (!OvpnSocketAcquire(device, &socket)) {
         status = STATUS_INVALID_DEVICE_STATE;
         LOG_ERROR("TransportSocket is not initialized");
-        goto error;
+        WdfRequestCompleteWithInformation(request, status, 0);
+        return;
     }
 
     // get request buffer
@@ -318,17 +317,17 @@ OvpnEvtIoWrite(WDFQUEUE queue, WDFREQUEST request, size_t length)
 
     // TCP is a stream, so keep the request parked: sends stay ordered and the caller
     // still learns how the send went.
-    if (device->Socket.Tcp) {
+    if (socket.Tcp) {
         txBuf->IoQueue = device->PendingWritesQueue;
         GOTO_IF_NOT_NT_SUCCESS(error, status, WdfRequestForwardToIoQueue(request, device->PendingWritesQueue));
 
-        LOG_IF_NOT_NT_SUCCESS(status = OvpnSocketSend(&device->Socket, txBuf, sa));
+        LOG_IF_NOT_NT_SUCCESS(status = OvpnSocketSend(&socket, txBuf, sa));
         goto done_not_complete;
     }
 
     // The payload is copied, so a datagram send completes here, the way a socket does.
     NTSTATUS sendStatus;
-    LOG_IF_NOT_NT_SUCCESS(sendStatus = OvpnSocketSend(&device->Socket, txBuf, sa));
+    LOG_IF_NOT_NT_SUCCESS(sendStatus = OvpnSocketSend(&socket, txBuf, sa));
     txBuf = NULL; // the send owns it now
 
     // STATUS_PENDING would leave the caller's overlapped write looking unfinished
@@ -342,7 +341,7 @@ error:
     WdfRequestCompleteWithInformation(request, status, NT_SUCCESS(status) ? length : 0);
 
 done_not_complete:
-    ExReleaseSpinLockShared(&device->SpinLock, kiqrl);
+    OvpnSocketRelease(device);
 }
 
 NTSTATUS
@@ -418,15 +417,17 @@ OvpnStopVPN(_In_ POVPN_DEVICE device)
     OvpnCleanupPeerTable(device, &device->PeersByVpn4);
     OvpnCleanupPeerTable(device, &device->Peers);
 
-    KIRQL kirql = ExAcquireSpinLockExclusive(&device->SpinLock);
-    PWSK_SOCKET socket = device->Socket.Socket;
-    device->Socket.Socket = NULL;
-    device->Socket.Tcp = FALSE;
-    device->Mode = OVPN_MODE_P2P;
+    // Stops new senders and waits for the ones inside a send, so the state below is
+    // not zeroed under them.
+    PWSK_SOCKET socket = OvpnSocketDetach(device);
 
+    // No lock needed: unpublished and drained, so nothing is reading these.
+    device->Socket.Tcp = FALSE;
     RtlZeroMemory(&device->Socket.TcpState, sizeof(OvpnSocketTcpState));
     RtlZeroMemory(&device->Socket.UdpState, sizeof(OvpnSocketUdpState));
 
+    KIRQL kirql = ExAcquireSpinLockExclusive(&device->SpinLock);
+    device->Mode = OVPN_MODE_P2P;
     ExReleaseSpinLockExclusive(&device->SpinLock, kirql);
 
     if (socket != NULL) {
@@ -953,6 +954,7 @@ OvpnEvtDeviceAdd(WDFDRIVER wdfDriver, PWDFDEVICE_INIT deviceInit) {
 
     POVPN_DEVICE device = OvpnGetDeviceContext(wdfDevice);
     device->WdfDevice = wdfDevice;
+    KeInitializeEvent(&device->SocketDrained, NotificationEvent, FALSE);
 
     // create manual pending queue which handles async reads
     WDF_IO_QUEUE_CONFIG_INIT(&queueConfig, WdfIoQueueDispatchManual);
