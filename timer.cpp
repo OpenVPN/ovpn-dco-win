@@ -117,10 +117,19 @@ static VOID OvpnTimerXmit(WDFTIMER timer)
     KeReleaseSpinLock(&peer->TxLock, irql);
 
     if (NT_SUCCESS(status)) {
-        // start async send, completion handler will return ciphertext buffer to the pool
-        LOG_IF_NOT_NT_SUCCESS(status = OvpnSocketSend(&device->Socket, buffer, (SOCKADDR*)&sa));
-        if (NT_SUCCESS(status)) {
-            LOG_INFO("Ping sent", TraceLoggingValue(peerId, "peer-id"));
+        // A DPC can race a close like any other sender, so take the reference too.
+        OvpnSocketRef socket;
+        if (OvpnSocketAcquire(device, &socket)) {
+            // start async send, completion handler will return ciphertext buffer to the pool
+            LOG_IF_NOT_NT_SUCCESS(status = OvpnSocketSend(&socket, buffer, (SOCKADDR*)&sa));
+            OvpnSocketRelease(device);
+            if (NT_SUCCESS(status)) {
+                LOG_INFO("Ping sent", TraceLoggingValue(peerId, "peer-id"));
+            }
+        }
+        else {
+            status = STATUS_INVALID_DEVICE_STATE;
+            OvpnTxBufferPoolPut(buffer);
         }
     }
     else {

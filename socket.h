@@ -47,6 +47,14 @@ struct OvpnSocketUdpState
 	UCHAR PacketBuf[OVPN_SOCKET_RX_PACKET_BUFFER_SIZE];
 };
 
+// What a send needs. The state buffers below belong to the receive path, and both
+// fields here are fixed for the life of a socket.
+struct OvpnSocketRef
+{
+	PWSK_SOCKET Socket;
+	BOOLEAN Tcp;
+};
+
 struct OvpnSocket
 {
 	BOOLEAN Tcp;
@@ -70,7 +78,23 @@ OvpnSocketClose(_In_opt_ PWSK_SOCKET socket);
 
 _Must_inspect_result_
 NTSTATUS
-OvpnSocketSend(_In_ OvpnSocket* ovpnSocket, _In_ OVPN_TX_BUFFER* buffer, _In_opt_ SOCKADDR* sa);
+OvpnSocketSend(_In_ OvpnSocketRef* socket, _In_ OVPN_TX_BUFFER* buffer, _In_opt_ SOCKADDR* sa);
+
+// Rundown for device->Socket: the reference covers the send call, not its completion,
+// which is what the device lock gave before. Callers may be at DISPATCH_LEVEL.
+struct OVPN_DEVICE;
+
+_Must_inspect_result_
+BOOLEAN
+OvpnSocketAcquire(_In_ OVPN_DEVICE* device, _When_(return != FALSE, _Out_) OvpnSocketRef* socket);
+
+VOID
+OvpnSocketRelease(_In_ OVPN_DEVICE* device);
+
+// Unpublishes the socket, waits for senders already inside one, and returns it to close.
+_IRQL_requires_(PASSIVE_LEVEL)
+PWSK_SOCKET
+OvpnSocketDetach(_In_ OVPN_DEVICE* device);
 
 _Must_inspect_result_
 NTSTATUS

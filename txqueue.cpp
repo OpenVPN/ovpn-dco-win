@@ -152,8 +152,9 @@ OvpnCheckRecursiveRoutingIPv6(SOCKADDR_IN6* transportAddr, UCHAR* buffer, SIZE_T
 _Must_inspect_result_
 static
 NTSTATUS
-OvpnTxProcessPacket(_In_ POVPN_DEVICE device, _In_ POVPN_TXQUEUE queue, _In_ NET_RING_PACKET_ITERATOR *pi,
-    _Inout_ OVPN_TX_BUFFER **head, _Inout_ OVPN_TX_BUFFER** tail, _Inout_ SOCKADDR_STORAGE *headSockaddr)
+OvpnTxProcessPacket(_In_ POVPN_DEVICE device, _In_ OvpnSocketRef* socket, _In_ POVPN_TXQUEUE queue,
+    _In_ NET_RING_PACKET_ITERATOR *pi, _Inout_ OVPN_TX_BUFFER **head, _Inout_ OVPN_TX_BUFFER** tail,
+    _Inout_ SOCKADDR_STORAGE *headSockaddr)
 {
     NET_RING_FRAGMENT_ITERATOR fi = NetPacketIteratorGetFragments(pi);
 
@@ -199,7 +200,7 @@ OvpnTxProcessPacket(_In_ POVPN_DEVICE device, _In_ POVPN_TXQUEUE queue, _In_ NET
             peer = device->IRoutesIPV4.Find(reinterpret_cast<UCHAR*>(&addr));
         }
 
-        if ((device->Mode == OVPN_MODE_P2P) && (peer != nullptr) && (OvpnCheckRecursiveRoutingIPv4(&peer->TransportAddrs.Remote.IPv4, buffer->Data, buffer->Len, device->Socket.Tcp))) {
+        if ((device->Mode == OVPN_MODE_P2P) && (peer != nullptr) && (OvpnCheckRecursiveRoutingIPv4(&peer->TransportAddrs.Remote.IPv4, buffer->Data, buffer->Len, socket->Tcp))) {
             OvpnPeerCtxRelease(peer);
             peer = nullptr;
         }
@@ -215,7 +216,7 @@ OvpnTxProcessPacket(_In_ POVPN_DEVICE device, _In_ POVPN_TXQUEUE queue, _In_ NET
             peer = device->IRoutesIPV6.Find(reinterpret_cast<UCHAR*>(&addr));
         }
 
-        if ((device->Mode == OVPN_MODE_P2P) && (peer != nullptr) && (OvpnCheckRecursiveRoutingIPv6(&peer->TransportAddrs.Remote.IPv6, buffer->Data, buffer->Len, device->Socket.Tcp))) {
+        if ((device->Mode == OVPN_MODE_P2P) && (peer != nullptr) && (OvpnCheckRecursiveRoutingIPv6(&peer->TransportAddrs.Remote.IPv6, buffer->Data, buffer->Len, socket->Tcp))) {
             OvpnPeerCtxRelease(peer);
             peer = nullptr;
         }
@@ -277,8 +278,8 @@ unlock:
         InterlockedExchangeAddNoFence64(&peer->LinkTxBytes, buffer->Len);
 
         // start async send, this will return ciphertext buffer to the pool
-        if (device->Socket.Tcp) {
-            status = OvpnSocketSend(&device->Socket, buffer, NULL);
+        if (socket->Tcp) {
+            status = OvpnSocketSend(socket, buffer, NULL);
         }
         else {
             // for UDP we use SendMessages to send multiple datagrams at once
@@ -293,7 +294,7 @@ unlock:
 
             if ((*head != NULL) && !(OvpnTxAreSockaddrEqual((const SOCKADDR*)headSockaddr, (const SOCKADDR*)&remoteAddr)))
             {
-                LOG_IF_NOT_NT_SUCCESS(OvpnSocketSend(&device->Socket, *head, (SOCKADDR*)headSockaddr));
+                LOG_IF_NOT_NT_SUCCESS(OvpnSocketSend(socket, *head, (SOCKADDR*)headSockaddr));
                 *head = buffer;
                 *tail = buffer;
                 OvpnSocketCopyRemoteToSockaddr(remoteAddr, headSockaddr);
@@ -340,9 +341,12 @@ OvpnEvtTxQueueAdvance(NETPACKETQUEUE netPacketQueue)
     POVPN_DEVICE device = OvpnGetDeviceContext(queue->Adapter->WdfDevice);
     BOOLEAN packetSent = false;
 
-    KIRQL kirql = ExAcquireSpinLockShared(&device->SpinLock);
-    BOOLEAN isTcp = device->Socket.Tcp;
-    ExReleaseSpinLockShared(&device->SpinLock, kirql);
+    // Held for the whole batch, released after the flush at the end.
+    OvpnSocketRef socket;
+    if (!OvpnSocketAcquire(device, &socket)) {
+        return;
+    }
+    BOOLEAN isTcp = socket.Tcp;
 
     OVPN_TX_BUFFER* txBufferHead = NULL;
     OVPN_TX_BUFFER* txBufferTail = NULL;
@@ -352,7 +356,7 @@ OvpnEvtTxQueueAdvance(NETPACKETQUEUE netPacketQueue)
         NET_PACKET* packet = NetPacketIteratorGetPacket(&pi);
         NTSTATUS status = STATUS_SUCCESS;
         if (!packet->Ignore && !packet->Scratch) {
-            status = OvpnTxProcessPacket(device, queue, &pi, &txBufferHead, &txBufferTail, &headSockaddr);
+            status = OvpnTxProcessPacket(device, &socket, queue, &pi, &txBufferHead, &txBufferTail, &headSockaddr);
             if (!NT_SUCCESS(status)) {
                 InterlockedIncrementNoFence(&device->Stats.LostOutDataPackets);
             }
@@ -370,8 +374,10 @@ OvpnEvtTxQueueAdvance(NETPACKETQUEUE netPacketQueue)
 
     if (packetSent && !isTcp && txBufferHead != NULL) {
         // this will use WskSendMessages to send buffers list which we constructed before
-        LOG_IF_NOT_NT_SUCCESS(OvpnSocketSend(&device->Socket, txBufferHead, (SOCKADDR*)&headSockaddr));
+        LOG_IF_NOT_NT_SUCCESS(OvpnSocketSend(&socket, txBufferHead, (SOCKADDR*)&headSockaddr));
     }
+
+    OvpnSocketRelease(device);
 }
 
 _Use_decl_annotations_
