@@ -100,10 +100,17 @@ _Must_inspect_result_
 NTSTATUS
 OvpnSocketTcpConnect(_In_ PWSK_SOCKET socket, _In_ PVOID context, _In_ PSOCKADDR remote);
 
-template<typename T>
-static
+// A peer's remote transport address. It has a name so that the code handling one does
+// not have to be a template over a type it cannot spell.
+union OVPN_REMOTE_ADDR
+{
+    SOCKADDR_IN IPv4;
+    SOCKADDR_IN6 IPv6;
+};
+
+inline
 VOID
-OvpnSocketCopyRemoteToSockaddr(T& remote, SOCKADDR_STORAGE* sockaddr) {
+OvpnSocketCopyRemoteToSockaddr(const OVPN_REMOTE_ADDR& remote, SOCKADDR_STORAGE* sockaddr) {
     // Copy the appropriate address based on the family
     if (remote.IPv4.sin_family == AF_INET) {
         RtlCopyMemory(sockaddr, &remote.IPv4, sizeof(SOCKADDR_IN));
