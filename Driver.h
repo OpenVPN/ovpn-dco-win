@@ -91,8 +91,11 @@ struct OVPN_DEVICE {
     BCRYPT_ALG_HANDLE ChachaAlgHandle;
     BCRYPT_ALG_HANDLE HkdfAlgHandle;
 
-    _Guarded_by_(SpinLock)
+    // Not SpinLock: senders take a reference instead, so a send holds nothing and a
+    // datagram delivered back to us inline cannot deadlock. See OvpnSocketAcquire.
     OvpnSocket Socket;
+    volatile LONG SocketRefs;       // senders inside OvpnSocketSend
+    KEVENT SocketDrained;
 
     _Guarded_by_(SpinLock)
     NETADAPTER Adapter;
