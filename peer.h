@@ -63,11 +63,7 @@ struct OvpnPeerContext
     } VpnAddrs;
 
     struct {
-        union {
-            SOCKADDR_IN IPv4;
-            SOCKADDR_IN6 IPv6;
-        } Remote;
-
+        OVPN_REMOTE_ADDR Remote;
     } TransportAddrs;
 
     LONG RefCounter;
