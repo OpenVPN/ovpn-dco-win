@@ -32,6 +32,9 @@
 // the workers never catch up with.
 #define OVPN_TX_QUEUED_MAX_PER_WORKER 256
 
+// Data buffers allowed in flight before the datapath drops rather than grow the pool.
+#define OVPN_TX_DATA_INFLIGHT_MAX 2048
+
 struct OVPN_DEVICE;
 struct _OVPN_TXQUEUE;
 

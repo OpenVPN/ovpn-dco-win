@@ -56,7 +56,7 @@ WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(OVPN_DRIVER, OvpnGetDriverContext)
 
 // Control writes in flight before a writer is made to wait for its own send. Far
 // below the pool's own ceiling, so the pool never becomes the thing that stops this.
-#define OVPN_CONTROL_TX_MAX 1024
+#define OVPN_TX_CONTROL_INFLIGHT_MAX 1024
 
 struct OVPN_DEVICE {
     EX_SPIN_LOCK SpinLock;
@@ -102,11 +102,15 @@ struct OVPN_DEVICE {
     // throttled by the send any more - the write completes as soon as the payload is
     // copied - so this is what stops a writer outrunning the sends and taking the
     // transmit pool with it.
-    volatile LONG ControlTxOutstanding;
+    volatile LONG TxControlInFlight;
 
     // set while writers are being made to wait, so the log says it once rather than
     // once per write; cleared when the backlog has halved
-    volatile LONG ControlTxWaiting;
+    volatile LONG TxControlWaiting;
+
+    // Data buffers handed to a worker and not yet returned to the pool. A worker buffer
+    // comes back only when its send completes, so this is what the pool cap gates on.
+    volatile LONG TxDataInFlight;
 
     volatile LONG SocketRefs;       // senders inside OvpnSocketSend
     KEVENT SocketDrained;

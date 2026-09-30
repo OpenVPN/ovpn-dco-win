@@ -62,6 +62,9 @@ struct OVPN_TX_BUFFER
     // control channel packet, not data channel
     BOOLEAN ControlChannel;
 
+    // set while this buffer is counted in device->TxDataInFlight (datapath worker path)
+    BOOLEAN CountedInFlight;
+
     // set only when a write request is parked waiting for this send, which is TCP only
     WDFQUEUE IoQueue;
 
@@ -122,7 +125,7 @@ OvpnTxBufferPush(_In_ OVPN_TX_BUFFER* work, SIZE_T len);
 
 _Must_inspect_result_
 NTSTATUS
-OvpnTxBufferPoolCreate(OVPN_TX_BUFFER_POOL* handle, VOID* ctx);
+OvpnTxBufferPoolCreate(OVPN_TX_BUFFER_POOL* handle, VOID* ctx, volatile LONG* inFlight);
 
 VOID*
 OvpnTxBufferPoolGetContext(OVPN_TX_BUFFER_POOL handle);
