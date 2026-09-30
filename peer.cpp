@@ -48,7 +48,7 @@ OvpnPeerCtxAlloc(WDFDEVICE device)
 
     RtlZeroMemory(peer, sizeof(OvpnPeerContext));
     KeInitializeSpinLock(&peer->RxLock);
-    KeInitializeSpinLock(&peer->TxLock);
+    peer->TxLock = 0;
     InitializeListHead(&peer->ListEntry);
     InterlockedIncrement(&peer->RefCounter);
 
@@ -96,10 +96,10 @@ OvpnPeerCtxFreeAtPassive(OvpnPeerContext* peer)
 
     // Detach the timer while holding the lock to prevent new callbacks
     KIRQL irql;
-    KeAcquireSpinLock(&peer->TxLock, &irql);
+    irql = ExAcquireSpinLockExclusive(&peer->TxLock);
     WDFTIMER timer = peer->Timer;
     peer->Timer = WDF_NO_HANDLE;
-    KeReleaseSpinLock(&peer->TxLock, irql);
+    ExReleaseSpinLockExclusive(&peer->TxLock, irql);
 
     // Stop the timer outside the lock and wait: this drains any tick already
     // running on another core, so no callback can deref the peer after we free it
@@ -711,7 +711,7 @@ done:
 VOID OvpnPeerSetDoWork(OvpnPeerContext *peer, LONG keepaliveInterval, LONG keepaliveTimeout, LONG mss)
 {
     KIRQL irql;
-    KeAcquireSpinLock(&peer->TxLock, &irql);
+    irql = ExAcquireSpinLockExclusive(&peer->TxLock);
 
     if (mss != -1) {
         peer->MSS = (UINT16)mss;
@@ -731,7 +731,7 @@ VOID OvpnPeerSetDoWork(OvpnPeerContext *peer, LONG keepaliveInterval, LONG keepa
         OvpnTimerSetRecvTimeout(peer->Timer, peer->KeepaliveTimeout);
     }
 
-    KeReleaseSpinLock(&peer->TxLock, irql);
+    ExReleaseSpinLockExclusive(&peer->TxLock, irql);
 }
 
 _Use_decl_annotations_
@@ -1198,7 +1198,7 @@ OvpnPeerHandleFloat(OVPN_DEVICE* device, OvpnPeerContext *peer, PSOCKADDR sa, BO
     // modify peer's transport address
     {
         KIRQL kirql;
-        KeAcquireSpinLock(&peer->TxLock, &kirql);
+        kirql = ExAcquireSpinLockExclusive(&peer->TxLock);
 
         // update peer's transport address
         if (sa->sa_family == AF_INET)
@@ -1206,7 +1206,7 @@ OvpnPeerHandleFloat(OVPN_DEVICE* device, OvpnPeerContext *peer, PSOCKADDR sa, BO
         else
             RtlCopyMemory(&peer->TransportAddrs.Remote.IPv6, sa, sizeof(SOCKADDR_IN6));
 
-        KeReleaseSpinLock(&peer->TxLock, kirql);
+        ExReleaseSpinLockExclusive(&peer->TxLock, kirql);
     }
 
     // add peer back to by-transport-address hashtable

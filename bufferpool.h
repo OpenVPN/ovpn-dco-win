@@ -54,6 +54,9 @@ struct OVPN_TX_BUFFER
 
     OVPN_TX_BUFFER_POOL Pool;
 
+    // the peer this buffer is being sent to, with a reference held, while a worker has it
+    struct OvpnPeerContext* Peer;
+
     LIST_ENTRY PoolListEntry;
 
     // control channel packet, not data channel

@@ -23,6 +23,36 @@
 
 #include "adapter.h"
 
+// The framework runs its one transmit queue on one thread, so only the copy happens
+// there: the encryption and the send go to a worker per flow, each with its own core.
+#define OVPN_TX_WORKERS_MAX 8
+
+// Buffers a worker may have waiting, per worker. The queue thread stops draining the
+// ring once the workers are this far behind, so the pool cannot grow to hold a backlog
+// the workers never catch up with.
+#define OVPN_TX_QUEUED_MAX_PER_WORKER 256
+
+struct OVPN_DEVICE;
+struct _OVPN_TXQUEUE;
+
+// Cache aligned: the queue thread writes a worker's list head while the others run, so
+// two of them must not share a line.
+typedef struct DECLSPEC_CACHEALIGN _OVPN_TX_WORKER
+{
+    KDPC Dpc;
+
+    // buffers waiting for this worker, threaded through PoolListEntry
+    KSPIN_LOCK Lock;
+    LIST_ENTRY Queue;
+
+    OVPN_DEVICE* Device;
+
+    // the queue this worker belongs to, for the shared depth count
+    struct _OVPN_TXQUEUE* Owner;
+
+    ULONG Index;
+} OVPN_TX_WORKER, * POVPN_TX_WORKER;
+
 typedef struct _OVPN_TXQUEUE
 {
     POVPN_ADAPTER Adapter;
@@ -30,6 +60,17 @@ typedef struct _OVPN_TXQUEUE
     NET_RING_COLLECTION const * Rings;
 
     NET_EXTENSION VirtualAddressExtension;
+
+    // zero encrypts and sends on the queue's own thread, as before
+    ULONG WorkerCount;
+
+    // buffers handed to workers and not yet taken off their queues
+    LONG Queued;
+
+    // set while the framework has stopped polling and waits to be told to resume
+    LONG NotificationEnabled;
+
+    OVPN_TX_WORKER Workers[OVPN_TX_WORKERS_MAX];
 } OVPN_TXQUEUE, * POVPN_TXQUEUE;
 
 WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(OVPN_TXQUEUE, OvpnGetTxQueueContext);
@@ -40,3 +81,5 @@ EVT_PACKET_QUEUE_CANCEL OvpnEvtTxQueueCancel;
 
 VOID
 OvpnTxQueueInitialize(NETPACKETQUEUE txQueue, _In_ POVPN_ADAPTER adapter);
+
+EVT_WDF_OBJECT_CONTEXT_CLEANUP OvpnEvtTxQueueCleanup;
