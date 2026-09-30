@@ -575,8 +575,7 @@ OvpnPeerNew(POVPN_DEVICE device, WDFREQUEST request)
         // so a sender that sees it also sees Tcp.
         device->Socket.Tcp = proto_tcp;
         RtlZeroMemory(&device->Socket.TcpState, sizeof(OvpnSocketTcpState));
-        RtlZeroMemory(&device->Socket.UdpState, sizeof(OvpnSocketUdpState));
-        WritePointerRelease((PVOID volatile*)&device->Socket.Socket, socket);
+            WritePointerRelease((PVOID volatile*)&device->Socket.Socket, socket);
 
         if (oldSocket != NULL) {
             LOG_IF_NOT_NT_SUCCESS(OvpnSocketClose(oldSocket));

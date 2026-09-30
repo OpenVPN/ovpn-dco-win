@@ -392,8 +392,6 @@ OvpnSocketUdpReceiveFromEvent(_In_ PVOID socketContext, ULONG flags, _In_opt_ PW
         return STATUS_SUCCESS;
     }
 
-    PUCHAR packetBuf = device->Socket.UdpState.PacketBuf;
-
     while (dataIndication != NULL) {
         PMDL mdl = dataIndication->Buffer.Mdl;
         ULONG offset = dataIndication->Buffer.Offset;
@@ -401,7 +399,6 @@ OvpnSocketUdpReceiveFromEvent(_In_ PVOID socketContext, ULONG flags, _In_opt_ PW
 
         if (mdl == NULL) {
             LOG_ERROR("WSK_DATAGRAM_INDICATION has NULL MDL");
-            RtlZeroMemory(&device->Socket.UdpState, sizeof(OvpnSocketUdpState));
             dataIndication = dataIndication->Next;
             continue;
         }
@@ -410,24 +407,32 @@ OvpnSocketUdpReceiveFromEvent(_In_ PVOID socketContext, ULONG flags, _In_opt_ PW
             LOG_ERROR("UDP datagram of size <size> is larger than buffer size <buf>",
                 TraceLoggingValue(length, "size"),
                 TraceLoggingValue(OVPN_SOCKET_RX_PACKET_BUFFER_SIZE, "buf"));
-            RtlZeroMemory(&device->Socket.UdpState, sizeof(OvpnSocketUdpState));
             return STATUS_SUCCESS;
         }
 
         PUCHAR buf = NULL;
+        OVPN_RX_BUFFER* scratch = NULL;
 
         if (mdl->Next == NULL) {
             // Fast path: datagram is fully contained in a single MDL
             buf = (PUCHAR)MmGetSystemAddressForMdlSafe(mdl, LowPagePriority | MdlMappingNoExecute);
             if (buf == NULL) {
                 LOG_ERROR("MmGetSystemAddressForMdlSafe failed (non-fragmented)");
-                RtlZeroMemory(&device->Socket.UdpState, sizeof(OvpnSocketUdpState));
                 return STATUS_SUCCESS;
             }
             buf += offset;
         }
         else {
-            // Slow path: reassemble fragmented datagram
+            // Slow path: reassemble a datagram scattered across MDLs. The scratch comes
+            // from the pool, not from the socket: this callback runs on several
+            // processors at once and one buffer between them is a race.
+            if (!NT_SUCCESS(OvpnRxBufferPoolGet(device->RxBufferPool, &scratch))) {
+                LOG_ERROR("RxBufferPool exhausted, dropping fragmented datagram");
+                dataIndication = dataIndication->Next;
+                continue;
+            }
+            PUCHAR const packetBuf = scratch->Head;
+
             SIZE_T bytesRemained = length;
             SIZE_T bytesCopied = 0;
             PMDL currentMdl = mdl;
@@ -437,7 +442,7 @@ OvpnSocketUdpReceiveFromEvent(_In_ PVOID socketContext, ULONG flags, _In_opt_ PW
                 PUCHAR mapped = (PUCHAR)MmGetSystemAddressForMdlSafe(currentMdl, LowPagePriority | MdlMappingNoExecute);
                 if (mapped == NULL) {
                     LOG_ERROR("MmGetSystemAddressForMdlSafe failed (fragmented)");
-                    RtlZeroMemory(&device->Socket.UdpState, sizeof(OvpnSocketUdpState));
+                    OvpnRxBufferPoolPut(scratch);
                     return STATUS_SUCCESS;
                 }
 
@@ -458,6 +463,10 @@ OvpnSocketUdpReceiveFromEvent(_In_ PVOID socketContext, ULONG flags, _In_opt_ PW
         OvpnSocketProcessIncomingPacket(device, buf, length,
             flags & WSK_FLAG_AT_DISPATCH_LEVEL,
             dataIndication->RemoteAddress);
+
+        if (scratch != NULL) {
+            OvpnRxBufferPoolPut(scratch);
+        }
 
         dataIndication = dataIndication->Next;
     }

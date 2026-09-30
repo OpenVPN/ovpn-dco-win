@@ -40,13 +40,6 @@ struct OvpnSocketTcpState
 	UCHAR PacketBuf[OVPN_SOCKET_RX_PACKET_BUFFER_SIZE];
 };
 
-struct OvpnSocketUdpState
-{
-	// packet buffer if datagram scattered across MDLs
-	// this seems to only happen in unlikely case when datagram is fragmented
-	UCHAR PacketBuf[OVPN_SOCKET_RX_PACKET_BUFFER_SIZE];
-};
-
 // What a send needs. The state buffers below belong to the receive path, and both
 // fields here are fixed for the life of a socket.
 struct OvpnSocketRef
@@ -61,7 +54,6 @@ struct OvpnSocket
 	PWSK_SOCKET Socket;
 
 	OvpnSocketTcpState TcpState;
-	OvpnSocketUdpState UdpState;
 };
 
 _Must_inspect_result_
