@@ -39,6 +39,8 @@ struct OVPN_BUFFER_POOL_IMPL
     LONG PoolSize;
     VOID* Context;
     CHAR* Tag;
+    // decremented when a counted datapath buffer returns; NULL for pools that do not count
+    volatile LONG* InFlight;
 };
 
 struct OVPN_BUFFER_QUEUE_IMPL
@@ -110,6 +112,7 @@ OvpnBufferPoolCreate(OVPN_BUFFER_POOL* handle, UINT32 itemSize, CHAR* tag, VOID*
     pool->ItemSize = itemSize;
     pool->Tag = tag;
     pool->Context = ctx;
+    pool->InFlight = NULL;
 
     goto done;
 
@@ -125,9 +128,13 @@ done:
 
 _Use_decl_annotations_
 NTSTATUS
-OvpnTxBufferPoolCreate(OVPN_TX_BUFFER_POOL* handle, VOID* ctx)
+OvpnTxBufferPoolCreate(OVPN_TX_BUFFER_POOL* handle, VOID* ctx, volatile LONG* inFlight)
 {
-    return OvpnBufferPoolCreate((OVPN_BUFFER_POOL*)handle, sizeof(OVPN_TX_BUFFER) + OVPN_DCO_MTU_MAX + OVPN_BUFFER_HEADROOM + OVPN_BUFFER_TAILROOM, "tx", ctx);
+    NTSTATUS status = OvpnBufferPoolCreate((OVPN_BUFFER_POOL*)handle, sizeof(OVPN_TX_BUFFER) + OVPN_DCO_MTU_MAX + OVPN_BUFFER_HEADROOM + OVPN_BUFFER_TAILROOM, "tx", ctx);
+    if (NT_SUCCESS(status)) {
+        ((OVPN_BUFFER_POOL_IMPL*)*handle)->InFlight = inFlight;
+    }
+    return status;
 }
 
 VOID*
@@ -192,6 +199,7 @@ OvpnTxBufferPoolGet(OVPN_TX_BUFFER_POOL handle, OVPN_TX_BUFFER** buffer)
     RtlZeroMemory(&(*buffer)->WskBufList, sizeof(WSK_BUF_LIST));
 
     (*buffer)->ControlChannel = FALSE;
+    (*buffer)->CountedInFlight = FALSE;
     (*buffer)->IoQueue = WDF_NO_HANDLE;
     (*buffer)->Peer = NULL;
 
@@ -230,6 +238,16 @@ OvpnTxBufferPoolPut(OVPN_TX_BUFFER* buffer)
 {
     if (buffer->Mdl)
         IoFreeMdl(buffer->Mdl);
+
+    // The one place every datapath buffer returns, so the count cannot leak down a path
+    // that forgot to decrement it.
+    if (buffer->CountedInFlight) {
+        buffer->CountedInFlight = FALSE;
+        OVPN_BUFFER_POOL_IMPL* pool = (OVPN_BUFFER_POOL_IMPL*)buffer->Pool;
+        if (pool->InFlight != NULL) {
+            InterlockedDecrement(pool->InFlight);
+        }
+    }
 
     OvpnBufferPoolPut(buffer);
 }
