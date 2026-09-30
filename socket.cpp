@@ -809,10 +809,10 @@ OvpnSocketFinalizeTxBuffer(_In_ OVPN_TX_BUFFER* buffer, NTSTATUS ioStatus, ULONG
 
     while (buffer != NULL) {
         OVPN_TX_BUFFER* next = (OVPN_TX_BUFFER*)buffer->WskBufList.Next;
+        OVPN_DEVICE* dev = (OVPN_DEVICE*)OvpnTxBufferPoolGetContext(buffer->Pool);
         if (buffer->ControlChannel) {
-            OVPN_DEVICE* dev = (OVPN_DEVICE*)OvpnTxBufferPoolGetContext(buffer->Pool);
-            if ((InterlockedDecrement(&dev->ControlTxOutstanding) < (OVPN_CONTROL_TX_MAX / 2)) &&
-                (InterlockedExchange(&dev->ControlTxWaiting, 0) == 1)) {
+            if ((InterlockedDecrement(&dev->TxControlInFlight) < (OVPN_TX_CONTROL_INFLIGHT_MAX / 2)) &&
+                (InterlockedExchange(&dev->TxControlWaiting, 0) == 1)) {
                 LOG_INFO("Control writes have caught up with their sends");
             }
         }

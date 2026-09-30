@@ -610,6 +610,17 @@ OvpnTxProcessPacket(_In_ POVPN_DEVICE device, _In_ OvpnSocketRef* socket, _In_ P
 
     // a stream has to leave in the order it was encrypted, so TCP stays on this thread
     if ((workerCount > 0) && !socket->Tcp) {
+        // A worker buffer is not returned to the pool until its send completes, so the
+        // count in flight - and the pool behind it - grows without bound when sends lag.
+        // Over the cap, drop this packet rather than grow.
+        if (InterlockedCompareExchange(&device->TxDataInFlight, 0, 0) >= OVPN_TX_DATA_INFLIGHT_MAX) {
+            OvpnPeerCtxRelease(peer);
+            OvpnTxBufferPoolPut(buffer);
+            status = STATUS_INSUFFICIENT_RESOURCES;
+            goto out;
+        }
+        InterlockedIncrement(&device->TxDataInFlight);
+        buffer->CountedInFlight = TRUE;
         // the reference goes with the buffer
         OvpnTxToWorker(queue, peer, buffer, OvpnTxFlowHash(buffer->Data, buffer->Len), workerCount);
         goto out;

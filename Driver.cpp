@@ -329,17 +329,17 @@ OvpnEvtIoWrite(WDFQUEUE queue, WDFREQUEST request, size_t length)
     // until too many are in flight. Then the request is parked on its own send the way
     // a TCP write is, which is the only thing that makes a writer wait: without it a
     // caller outruns the completions and the buffers pile up in the transmit pool.
-    BOOLEAN const park = InterlockedCompareExchange(&device->ControlTxOutstanding, 0, 0) >= OVPN_CONTROL_TX_MAX;
+    BOOLEAN const park = InterlockedCompareExchange(&device->TxControlInFlight, 0, 0) >= OVPN_TX_CONTROL_INFLIGHT_MAX;
     if (park) {
-        if (InterlockedExchange(&device->ControlTxWaiting, 1) == 0) {
+        if (InterlockedExchange(&device->TxControlWaiting, 1) == 0) {
             LOG_WARN("Control writes are outrunning their sends, so writers now wait",
-                     TraceLoggingValue(OVPN_CONTROL_TX_MAX, "limit"));
+                     TraceLoggingValue(OVPN_TX_CONTROL_INFLIGHT_MAX, "limit"));
         }
         txBuf->IoQueue = device->PendingWritesQueue;
         GOTO_IF_NOT_NT_SUCCESS(error, status, WdfRequestForwardToIoQueue(request, device->PendingWritesQueue));
     }
 
-    InterlockedIncrement(&device->ControlTxOutstanding);
+    InterlockedIncrement(&device->TxControlInFlight);
 
     NTSTATUS sendStatus;
     LOG_IF_NOT_NT_SUCCESS(sendStatus = OvpnSocketSend(&socket, txBuf, sa));
@@ -990,7 +990,7 @@ OvpnEvtDeviceAdd(WDFDRIVER wdfDriver, PWDFDEVICE_INIT deviceInit) {
     WDF_IO_QUEUE_CONFIG_INIT(&queueConfig, WdfIoQueueDispatchManual);
     GOTO_IF_NOT_NT_SUCCESS(done, status, WdfIoQueueCreate(wdfDevice, &queueConfig, WDF_NO_OBJECT_ATTRIBUTES, &device->PendingNotificationRequestsQueue));
 
-    GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnTxBufferPoolCreate(&device->TxBufferPool, device));
+    GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnTxBufferPoolCreate(&device->TxBufferPool, device, &device->TxDataInFlight));
     GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnRxBufferPoolCreate(&device->RxBufferPool));
 
     GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnBufferQueueCreate(&device->ControlRxBufferQueue));
