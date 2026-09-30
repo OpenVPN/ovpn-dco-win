@@ -279,6 +279,15 @@ jobs:
               ssh -o BatchMode=yes $h 'echo up' 2>/dev/null | grep -q up && break
               sleep 10
             done
+            # The disarm above only takes effect on the reboot, and a verified driver
+            # measures a factor low - which reads as a regression rather than as a
+            # machine left armed by whatever ran here last. So prove it, do not assume.
+            vq=$(ssh $h 'verifier /query 2>&1 | Out-String')
+            if ! echo "$vq" | grep -q 'No drivers are currently verified'; then
+              echo "::error::$h still has Driver Verifier armed after disarm and reboot; these numbers would not mean anything"
+              echo "$vq" | head -20
+              exit 1
+            fi
             ssh $h 'powershell -NoProfile -ExecutionPolicy Bypass -File C:\stage\Install-Driver.ps1 -InfPath C:\stage\ovpn-dco.inf'
           done
 
