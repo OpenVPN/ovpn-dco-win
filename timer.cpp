@@ -78,7 +78,7 @@ static VOID OvpnTimerXmit(WDFTIMER timer)
     OvpnPeerContext* peer = timerCtx->Peer;
 
     KIRQL irql;
-    KeAcquireSpinLock(&peer->TxLock, &irql);
+    irql = ExAcquireSpinLockExclusive(&peer->TxLock);
 
     auto peerId = peer->PeerId;
     SOCKADDR_STORAGE sa = {0};
@@ -104,7 +104,7 @@ static VOID OvpnTimerXmit(WDFTIMER timer)
 
             status = OvpnCryptoEncrypt(tx, buffer->Data, buffer->Len);
 
-            // the send key is used up, so move the epoch on and encrypt again
+            // the lock is already held exclusive here, so the epoch can move in place
             if (status == STATUS_RETRY) {
                 status = OvpnCryptoAdvanceSendKey(tx);
                 if (NT_SUCCESS(status)) {
@@ -122,7 +122,7 @@ static VOID OvpnTimerXmit(WDFTIMER timer)
         // LOG_WARN("CryptoContext not initialized");
     }
 
-    KeReleaseSpinLock(&peer->TxLock, irql);
+    ExReleaseSpinLockExclusive(&peer->TxLock, irql);
 
     if (NT_SUCCESS(status)) {
         // A DPC can race a close like any other sender, so take the reference too.

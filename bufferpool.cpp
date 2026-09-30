@@ -193,6 +193,7 @@ OvpnTxBufferPoolGet(OVPN_TX_BUFFER_POOL handle, OVPN_TX_BUFFER** buffer)
 
     (*buffer)->ControlChannel = FALSE;
     (*buffer)->IoQueue = WDF_NO_HANDLE;
+    (*buffer)->Peer = NULL;
 
     return STATUS_SUCCESS;
 }

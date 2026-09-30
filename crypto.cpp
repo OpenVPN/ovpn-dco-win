@@ -156,9 +156,10 @@ OvpnCryptoEncryptNone(OvpnCryptoTxState* tx, UCHAR* buf, SIZE_T len, OvpnCryptoO
     op = RtlUlongByteSwap(op);
     *(UINT32*)(buf) = op;
 
-    // prepend with pktid
-    static ULONG pktid;
-    ULONG pktidNetwork = RtlUlongByteSwap(pktid++);
+    // prepend with pktid. Atomic because senders now share the key under TxLock held
+    // shared, so several of them reach this at once.
+    static LONG pktid;
+    ULONG pktidNetwork = RtlUlongByteSwap((ULONG)InterlockedIncrement(&pktid) - 1);
     *(UINT32*)(buf + OVPN_DATA_V2_LEN) = pktidNetwork;
 
     return STATUS_SUCCESS;
@@ -424,7 +425,8 @@ OvpnCryptoEncryptAEAD(OvpnCryptoTxState* tx, UCHAR* buf, SIZE_T len, OvpnCryptoO
     auto payloadOffset = OVPN_DATA_V2_LEN + pktidLen + (authTagEnd ? 0 : AEAD_AUTH_TAG_LEN);
     buf += payloadOffset;
 
-    // non-chaining mode
+    // Not chained, so the per-call state lives in this thread's own authInfo, which is the
+    // one thing CNG says not to share. That is what lets senders share the key.
     ULONG bytesDone = 0;
     GOTO_IF_NOT_NT_SUCCESS(done, status, BCryptEncrypt(tx->Key.Key, buf, (ULONG)len, &authInfo, NULL, 0, buf, (ULONG)len, &bytesDone, 0));
 
@@ -546,7 +548,7 @@ OvpnCryptoNewKey(OvpnPeerContext* peer, POVPN_CRYPTO_DATA_V2 cryptoDataV2, BCRYP
     KIRQL irql;
 
     // install the send side
-    KeAcquireSpinLock(&peer->TxLock, &irql);
+    irql = ExAcquireSpinLockExclusive(&peer->TxLock);
     {
         OvpnCryptoTxState* slot = primary ? &cryptoContext->Tx.Primary : &cryptoContext->Tx.Secondary;
         OvpnCryptoEpochUninitTx(slot);
@@ -556,7 +558,7 @@ OvpnCryptoNewKey(OvpnPeerContext* peer, POVPN_CRYPTO_DATA_V2 cryptoDataV2, BCRYP
         cryptoContext->Tx.Options = options;
         cryptoContext->Tx.Layout = layout;
     }
-    KeReleaseSpinLock(&peer->TxLock, irql);
+    ExReleaseSpinLockExclusive(&peer->TxLock, irql);
 
     // install the receive side; UninitRx also drops the old future and retiring keys
     KeAcquireSpinLock(&peer->RxLock, &irql);
@@ -591,14 +593,14 @@ OvpnCryptoSwapKeys(OvpnPeerContext* peer)
     KIRQL irql;
 
     // one direction at a time; the receive path looks keys up by id, so the gap does not matter
-    KeAcquireSpinLock(&peer->TxLock, &irql);
+    irql = ExAcquireSpinLockExclusive(&peer->TxLock);
     {
         OvpnCryptoTxState tmp = cryptoContext->Tx.Primary;
         cryptoContext->Tx.Primary = cryptoContext->Tx.Secondary;
         cryptoContext->Tx.Secondary = tmp;
         RtlSecureZeroMemory(&tmp, sizeof(tmp));
     }
-    KeReleaseSpinLock(&peer->TxLock, irql);
+    ExReleaseSpinLockExclusive(&peer->TxLock, irql);
 
     KeAcquireSpinLock(&peer->RxLock, &irql);
     {
