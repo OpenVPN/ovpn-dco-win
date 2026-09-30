@@ -443,7 +443,6 @@ OvpnStopVPN(_In_ POVPN_DEVICE device)
     // No lock needed: unpublished and drained, so nothing is reading these.
     device->Socket.Tcp = FALSE;
     RtlZeroMemory(&device->Socket.TcpState, sizeof(OvpnSocketTcpState));
-    RtlZeroMemory(&device->Socket.UdpState, sizeof(OvpnSocketUdpState));
 
     KIRQL kirql = ExAcquireSpinLockExclusive(&device->SpinLock);
     device->Mode = OVPN_MODE_P2P;
