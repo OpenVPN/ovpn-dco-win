@@ -102,15 +102,15 @@ struct OvpnCryptoContext
     OvpnCryptoRxContext Rx;
 };
 
-// Encrypts in place with the primary key. Caller holds peer->TxLock. Nothing here
-// writes the key and the packet id is claimed atomically. STATUS_RETRY means the send
-// key is used up - call OvpnCryptoAdvanceSendKey, then encrypt again.
+// Encrypts in place with the primary key. Caller holds peer->TxLock shared: several cores
+// may encrypt with one key at once. STATUS_RETRY means the send key is used up - call
+// OvpnCryptoAdvanceSendKey under the lock held exclusive, then encrypt again.
 _Must_inspect_result_
 _IRQL_requires_(DISPATCH_LEVEL)
 NTSTATUS
 OvpnCryptoEncrypt(_Inout_ OvpnCryptoTxContext* tx, _Inout_ PUCHAR buf, _In_ SIZE_T len);
 
-// Moves the send key to the next epoch. Caller holds peer->TxLock.
+// Moves the send key to the next epoch. Caller holds peer->TxLock exclusive.
 _Must_inspect_result_
 _IRQL_requires_(DISPATCH_LEVEL)
 NTSTATUS

@@ -280,9 +280,9 @@ VOID OvpnSocketDataPacketReceived(_In_ POVPN_DEVICE device, UCHAR op, UINT32 pee
 
     if (peerEpoch != 0) {
         // the peer moved to a newer epoch; follow with our send key, after RxLock is released
-        KeAcquireSpinLock(&peer->TxLock, &kirql);
+        kirql = ExAcquireSpinLockExclusive(&peer->TxLock);
         OvpnCryptoFollowPeerEpoch(&peer->CryptoContext.Tx, keyId, peerEpoch);
-        KeReleaseSpinLock(&peer->TxLock, kirql);
+        ExReleaseSpinLockExclusive(&peer->TxLock, kirql);
     }
 
     // decrypt failed - don't proceed
