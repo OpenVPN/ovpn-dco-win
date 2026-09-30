@@ -15,6 +15,11 @@
     Event 56001 is the reset request, 5007 the operation timeout that usually precedes
     it, and NDIS 10400 the reset itself.
 
+    Event 5207 is the adapter holding a packet it cannot send. That is the same
+    illness short of a reset: the machine goes off the network for a minute and comes
+    back with no reset ever recorded, which reads as a driver that hung and recovered.
+    Counted separately, because a stall is not a reset and the two say different things.
+
 .EXAMPLE
     .\Get-NicResets.ps1 -Seconds 300
 #>
@@ -33,16 +38,18 @@ $since = (Get-Date).AddSeconds(-$window)
 # the adapter is unwell, which is worth seeing and is not this run's to answer for.
 $margin = $since.AddSeconds(-120)
 $ids = 56001, 5007, 10400
+$stallIds = 5207
 
 $events = @(Get-WinEvent -FilterHashtable @{
         LogName      = 'System'
         ProviderName = 'ena', 'Microsoft-Windows-NDIS'
         StartTime    = $margin
-    } -ErrorAction SilentlyContinue | Where-Object { $ids -contains $_.Id } | Sort-Object TimeCreated)
+    } -ErrorAction SilentlyContinue | Where-Object { ($ids + $stallIds) -contains $_.Id } | Sort-Object TimeCreated)
 
 # NDIS 10400 is the same reset as ena 56001 seen from the other side, so counting both
 # would double it. Count 56001, unless only the NDIS record landed in the window.
 $inWindow = @($events | Where-Object { $_.TimeCreated -ge $since })
+$stalls = @($inWindow | Where-Object { $stallIds -contains $_.Id }).Count
 $resets = @($inWindow | Where-Object { $_.Id -eq 56001 }).Count
 $resets += @($inWindow | Where-Object {
         $e = $_
@@ -59,6 +66,7 @@ $line = {
 if ($AsJson) {
     [pscustomobject]@{
         NicResets     = $resets
+        NicStalls     = $stalls
         WindowSeconds = $window
         Events        = @($inWindow | ForEach-Object { & $line $_ })
         Before        = @($events | Where-Object { $_.TimeCreated -lt $since } | ForEach-Object { & $line $_ })
@@ -66,7 +74,7 @@ if ($AsJson) {
     return
 }
 
-"nic resets: $resets  (window: the last ${window}s)"
+"nic resets: $resets, held packets: $stalls  (window: the last ${window}s)"
 foreach ($e in $events) {
     $tag = if ($e.TimeCreated -lt $since) { '  (before the window, not counted)' } else { '' }
     '  {0:HH:mm:ss}  {1,-5}  {2}{3}' -f $e.TimeCreated, $e.Id, $e.Message.Split([char]10)[0].Trim(), $tag
