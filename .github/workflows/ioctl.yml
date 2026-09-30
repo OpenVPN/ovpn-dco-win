@@ -190,6 +190,7 @@ jobs:
           find bits -type f -exec cp {} stage/ \;
           cp tests/ioctl/Run-IoctlStress.ps1 \
              tests/stress/windows/Trust-DriverCert.ps1 \
+             tests/stress/windows/Get-NicResets.ps1 \
              tests/stress/windows/Install-Driver.ps1 stage/
           ls -l stage/
           scp -q stage/* target:'C:\ovpn-ioctl\'
@@ -219,6 +220,16 @@ jobs:
           timeout "$(( ${{ inputs.seconds || '120' }} + 420 ))s" \
             ssh target "powershell -NoProfile -ExecutionPolicy Bypass -File C:\\ovpn-ioctl\\Run-IoctlStress.ps1 -Run -Seconds '${{ inputs.seconds || '120' }}'" 2>&1 | tee /tmp/ioctl.log || rc=$?
           if [ "$rc" -ne 0 ]; then
+            # The machine's own adapter stalling looks exactly like a driver that hung and
+            # then recovered: ssh dies, the run stops, and the box answers again moments
+            # later. Ask the event log before blaming the driver.
+            nic=$(ssh -o BatchMode=yes -o ConnectTimeout=20 target \
+                    'powershell -NoProfile -ExecutionPolicy Bypass -File C:\ovpn-ioctl\Get-NicResets.ps1 -Seconds 900' 2>/dev/null || true)
+            [ -n "$nic" ] && echo "$nic"
+            if echo "$nic" | grep -qE 'nic resets: [1-9]|held packets: [1-9]'; then
+              echo "::error::the machine's network adapter reset or held packets during this run, which stops the rig the same way a driver hang does; rerun before reading anything into it"
+              exit 1
+            fi
             if ssh -o BatchMode=yes -o ConnectTimeout=20 target 'echo up' 2>/dev/null | grep -q up; then
               if [ "$rc" -eq 124 ]; then
                 echo "::error::the rig stopped making progress while the machine still answers: the driver deadlocked with a CPU to spare"

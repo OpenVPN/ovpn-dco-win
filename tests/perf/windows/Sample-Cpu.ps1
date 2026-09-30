@@ -8,11 +8,15 @@
     datapath reads as six percent of the total, which is indistinguishable from an idle
     machine - and the total is all the rigs have ever sampled.
 
-    So sample per core and report the busiest one, with its DPC share alongside: the
-    receive path runs in a WSK callback at DISPATCH, where the time belongs to no process
-    and shows up as DPC rather than as anything a task manager attributes.
+    So sample per core, and keep every core rather than only the busiest: with the
+    transmit fan-out the question is no longer how hot one core is but how many are
+    working at all, which a single busiest-core column cannot answer. The DPC share
+    comes with each, because the receive path runs in a WSK callback at DISPATCH, where
+    the time belongs to no process and shows up as DPC rather than as anything a task
+    manager attributes.
 
-    One CSV line per interval to stdout, so a run that ends badly still leaves its samples.
+    One CSV line per core per interval to stdout, including the _Total pseudo-core, so a
+    run that ends badly still leaves its samples.
 
 .EXAMPLE
     .\Sample-Cpu.ps1 -Seconds 120 -Interval 2
@@ -29,17 +33,15 @@ $ErrorActionPreference = 'Stop'
 # Get-Counter's paths are localised, this class is not
 function Cores { Get-CimInstance Win32_PerfFormattedData_PerfOS_Processor }
 
-'elapsed,total_pct,busy_core,busy_pct,busy_dpc_pct'
+'elapsed,core,pct,dpc_pct'
 $start = Get-Date
 $deadline = $start.AddSeconds($Seconds)
 
 while ((Get-Date) -lt $deadline) {
-    $all = Cores
-    $total = ($all | Where-Object Name -eq '_Total').PercentProcessorTime
-    $busy = $all | Where-Object Name -ne '_Total' |
-        Sort-Object PercentProcessorTime -Descending | Select-Object -First 1
-    '{0:F0},{1:F0},{2},{3:F0},{4:F0}' -f ((Get-Date) - $start).TotalSeconds,
-        $total, $busy.Name, $busy.PercentProcessorTime, $busy.PercentDPCTime
+    $elapsed = ((Get-Date) - $start).TotalSeconds
+    foreach ($c in Cores) {
+        '{0:F0},{1},{2:F0},{3:F0}' -f $elapsed, $c.Name, $c.PercentProcessorTime, $c.PercentDPCTime
+    }
     [Console]::Out.Flush()
     Start-Sleep -Seconds $Interval
 }
