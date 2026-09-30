@@ -325,10 +325,29 @@ OvpnEvtIoWrite(WDFQUEUE queue, WDFREQUEST request, size_t length)
         goto done_not_complete;
     }
 
-    // The payload is copied, so a datagram send completes here, the way a socket does.
+    // The payload is copied, so a datagram send completes here, the way a socket does -
+    // until too many are in flight. Then the request is parked on its own send the way
+    // a TCP write is, which is the only thing that makes a writer wait: without it a
+    // caller outruns the completions and the buffers pile up in the transmit pool.
+    BOOLEAN const park = InterlockedCompareExchange(&device->ControlTxOutstanding, 0, 0) >= OVPN_CONTROL_TX_MAX;
+    if (park) {
+        if (InterlockedExchange(&device->ControlTxWaiting, 1) == 0) {
+            LOG_WARN("Control writes are outrunning their sends, so writers now wait",
+                     TraceLoggingValue(OVPN_CONTROL_TX_MAX, "limit"));
+        }
+        txBuf->IoQueue = device->PendingWritesQueue;
+        GOTO_IF_NOT_NT_SUCCESS(error, status, WdfRequestForwardToIoQueue(request, device->PendingWritesQueue));
+    }
+
+    InterlockedIncrement(&device->ControlTxOutstanding);
+
     NTSTATUS sendStatus;
     LOG_IF_NOT_NT_SUCCESS(sendStatus = OvpnSocketSend(&socket, txBuf, sa));
     txBuf = NULL; // the send owns it now
+
+    if (park) {
+        goto done_not_complete;
+    }
 
     // STATUS_PENDING would leave the caller's overlapped write looking unfinished
     status = NT_SUCCESS(sendStatus) ? STATUS_SUCCESS : sendStatus;
