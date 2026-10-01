@@ -154,19 +154,23 @@ OvpnBufferPoolGet(OVPN_BUFFER_POOL handle, POOL_ENTRY** entry) {
     if (slist_entry) {
         *entry = CONTAINING_RECORD(slist_entry, POOL_ENTRY, PoolListEntry);
     } else {
-        if (pool->PoolSize > MAX_POOL_SIZE)
+        // Claim the slot before allocating: reading the size, allocating, then bumping it
+        // let concurrent producers all pass the test and overshoot the cap by their count.
+        LONG const size = InterlockedIncrement(&pool->PoolSize);
+        if (size > MAX_POOL_SIZE)
         {
+            InterlockedDecrement(&pool->PoolSize);
             *entry = NULL;
-            LOG_ERROR("Pool size is too large", TraceLoggingValue(pool->Tag, "tag"), TraceLoggingValue(pool->PoolSize, "size"));
+            LOG_ERROR("Pool size is too large", TraceLoggingValue(pool->Tag, "tag"), TraceLoggingValue(size, "size"));
             return;
         }
         *entry = (POOL_ENTRY*)ExAllocatePool2(POOL_FLAG_NON_PAGED, pool->ItemSize, 'ovpn');
-        if (*entry)
+        if (*entry == NULL)
         {
-            InterlockedIncrement(&pool->PoolSize);
-            if ((pool->PoolSize % 256) == 0) {
-                LOG_INFO("Pool size", TraceLoggingValue(pool->Tag, "tag"), TraceLoggingValue(pool->PoolSize, "size"));
-            }
+            InterlockedDecrement(&pool->PoolSize);
+        }
+        else if ((size % 256) == 0) {
+            LOG_INFO("Pool size", TraceLoggingValue(pool->Tag, "tag"), TraceLoggingValue(size, "size"));
         }
     }
 }
