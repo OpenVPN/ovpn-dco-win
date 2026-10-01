@@ -498,6 +498,10 @@ OvpnTxWorkersInitialize(_In_ POVPN_TXQUEUE queue, _In_ POVPN_DEVICE device)
         InitializeListHead(&worker->Queue);
         KeInitializeDpc(&worker->Dpc, OvpnTxWorkerDpc, worker);
 
+        // At medium importance a busy target runs it at its next clock tick, so the
+        // flow's ACKs leave in clumps and the sender bursts past the receiver's queue.
+        KeSetImportanceDpc(&worker->Dpc, MediumHighImportance);
+
         // Spread out, so hyperthread siblings do not get two workers. The index counts
         // across every processor group, so it needs the Ex form, which carries the group.
         PROCESSOR_NUMBER target;
