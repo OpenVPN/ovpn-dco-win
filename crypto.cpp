@@ -615,7 +615,7 @@ OvpnCryptoNewKey(OvpnPeerContext* peer, POVPN_CRYPTO_DATA_V2 cryptoDataV2, BCRYP
     ExReleaseSpinLockExclusive(&peer->TxLock, irql);
 
     // install the receive side; UninitRx also drops the old future and retiring keys
-    KeAcquireSpinLock(&peer->RxLock, &irql);
+    irql = ExAcquireSpinLockExclusive(&peer->RxLock);
     {
         OvpnCryptoRxState* slot = primary ? &cryptoContext->Rx.Primary : &cryptoContext->Rx.Secondary;
         OvpnCryptoEpochUninitRx(slot);
@@ -625,7 +625,7 @@ OvpnCryptoNewKey(OvpnPeerContext* peer, POVPN_CRYPTO_DATA_V2 cryptoDataV2, BCRYP
         cryptoContext->Rx.Options = options;
         cryptoContext->Rx.Layout = layout;
     }
-    KeReleaseSpinLock(&peer->RxLock, irql);
+    ExReleaseSpinLockExclusive(&peer->RxLock, irql);
 
     // scrub the local key material; the handles now belong to the peer
     RtlSecureZeroMemory(&tx, sizeof(tx));
@@ -656,14 +656,14 @@ OvpnCryptoSwapKeys(OvpnPeerContext* peer)
     }
     ExReleaseSpinLockExclusive(&peer->TxLock, irql);
 
-    KeAcquireSpinLock(&peer->RxLock, &irql);
+    irql = ExAcquireSpinLockExclusive(&peer->RxLock);
     {
         OvpnCryptoRxState tmp = cryptoContext->Rx.Primary;
         cryptoContext->Rx.Primary = cryptoContext->Rx.Secondary;
         cryptoContext->Rx.Secondary = tmp;
         RtlSecureZeroMemory(&tmp, sizeof(tmp));
     }
-    KeReleaseSpinLock(&peer->RxLock, irql);
+    ExReleaseSpinLockExclusive(&peer->RxLock, irql);
 
     LOG_INFO("Key swapped", TraceLoggingValue(cryptoContext->Tx.Primary.KeyId, "key1"), TraceLoggingValue(cryptoContext->Tx.Secondary.KeyId, "key2"));
 }

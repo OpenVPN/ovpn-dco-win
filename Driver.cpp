@@ -452,6 +452,9 @@ OvpnStopVPN(_In_ POVPN_DEVICE device)
         LOG_IF_NOT_NT_SUCCESS(OvpnSocketClose(socket));
     }
 
+    // no receive callbacks after the close; let the packets they handed off land first
+    OvpnRxWorkersFlush(&device->RxWorkers);
+
     // flush buffers in control queue so that client won't get control channel messages from previous session.
     // under ControlRxLock: else a reader's put-back re-fills the queue after the drain
     KIRQL controlRxIrql = ExAcquireSpinLockExclusive(&device->ControlRxLock);
@@ -806,6 +809,8 @@ VOID OvpnEvtDeviceCleanup(WDFOBJECT obj) {
 
     OVPN_DEVICE* device = OvpnGetDeviceContext(obj);
 
+    OvpnRxWorkersStop(&device->RxWorkers);
+
     OvpnTxBufferPoolDelete((OVPN_BUFFER_POOL)device->TxBufferPool);
     OvpnRxBufferPoolDelete((OVPN_BUFFER_POOL)device->RxBufferPool);
 
@@ -995,6 +1000,8 @@ OvpnEvtDeviceAdd(WDFDRIVER wdfDriver, PWDFDEVICE_INIT deviceInit) {
 
     GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnBufferQueueCreate(&device->ControlRxBufferQueue));
     GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnBufferQueueCreate(&device->DataRxBufferQueue));
+
+    OvpnRxWorkersInitialize(&device->RxWorkers, device);
 
     // constructors are not called for the members of WDF object context, so we use Init() method
     device->PendingNotificationsQueue.Init();
