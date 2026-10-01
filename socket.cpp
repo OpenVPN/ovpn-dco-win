@@ -230,6 +230,21 @@ VOID OvpnSocketDataPacketReceived(_In_ POVPN_DEVICE device, UINT32 peerId, _In_r
 
     InterlockedExchangeAddNoFence64(&peer->LinkRxBytes, len);
 
+    // written only when it moves, so the transmit side reading it keeps its copy
+    ULONG const processor = KeGetCurrentProcessorNumberEx(NULL);
+    ULONG const was = ReadULongNoFence(&peer->RxProcessor);
+    if (processor != was) {
+        WriteULongNoFence(&peer->RxProcessor, processor);
+
+        // on the 1st, 2nd, 4th... move, so a peer that flaps cannot flood the log; a lost
+        // count from two cores racing only shifts which moves are logged
+        ULONG const moves = ++peer->RxProcessorMoves;
+        if ((moves & (moves - 1)) == 0) {
+            LOG_INFO("Peer receive core", TraceLoggingValue(peerId, "peerId"), TraceLoggingValue(was, "was"),
+                     TraceLoggingValue(processor, "now"), TraceLoggingValue(moves, "moves"));
+        }
+    }
+
     OVPN_RX_BUFFER* buffer;
 
     // fetch buffer, decrypted in place

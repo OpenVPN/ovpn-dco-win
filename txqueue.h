@@ -54,6 +54,9 @@ typedef struct DECLSPEC_CACHEALIGN _OVPN_TX_WORKER
     struct _OVPN_TXQUEUE* Owner;
 
     ULONG Index;
+
+    // the processor its dpc runs on
+    ULONG Processor;
 } OVPN_TX_WORKER, * POVPN_TX_WORKER;
 
 typedef struct _OVPN_TXQUEUE

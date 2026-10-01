@@ -447,7 +447,13 @@ VOID
 OvpnTxToWorker(_In_ POVPN_TXQUEUE queue, _In_ OvpnPeerContext* peer, _In_ OVPN_TX_BUFFER* buffer, ULONG hash,
     ULONG workerCount)
 {
-    POVPN_TX_WORKER worker = &queue->Workers[hash % workerCount];
+    // Not on the core that receives the tunnel, the busiest one: a flow whose ACKs
+    // are encrypted there too saturates it, and the whole tunnel slows down.
+    ULONG index = hash % workerCount;
+    if (queue->Workers[index].Processor == ReadULongNoFence(&peer->RxProcessor)) {
+        index = (index + 1) % workerCount;
+    }
+    POVPN_TX_WORKER worker = &queue->Workers[index];
 
     buffer->Peer = peer;
 
@@ -505,7 +511,8 @@ OvpnTxWorkersInitialize(_In_ POVPN_TXQUEUE queue, _In_ POVPN_DEVICE device)
         // Spread out, so hyperthread siblings do not get two workers. The index counts
         // across every processor group, so it needs the Ex form, which carries the group.
         PROCESSOR_NUMBER target;
-        if (NT_SUCCESS(KeGetProcessorNumberFromIndex((i * processors) / count, &target))) {
+        worker->Processor = (i * processors) / count;
+        if (NT_SUCCESS(KeGetProcessorNumberFromIndex(worker->Processor, &target))) {
             LOG_IF_NOT_NT_SUCCESS(KeSetTargetProcessorDpcEx(&worker->Dpc, &target));
         }
     }

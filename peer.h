@@ -72,6 +72,12 @@ struct OvpnPeerContext
 
     LONG RefCounter;
 
+    // the core its packets arrive on, MAXULONG before the first; transmit workers stay off it
+    ULONG RxProcessor;
+
+    // times RxProcessor changed; paces its log line
+    ULONG RxProcessorMoves;
+
     LONG64 LinkRxBytes;
     LONG64 LinkTxBytes;
     LONG64 VpnRxBytes;

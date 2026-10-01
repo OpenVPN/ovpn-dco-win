@@ -50,6 +50,7 @@ OvpnPeerCtxAlloc(WDFDEVICE device)
     peer->RxLock = 0;
     peer->TxLock = 0;
     InitializeListHead(&peer->ListEntry);
+    peer->RxProcessor = MAXULONG;
     InterlockedIncrement(&peer->RefCounter);
 
     // Pre-create the work item OvpnPeerCtxFree() uses to defer teardown to
