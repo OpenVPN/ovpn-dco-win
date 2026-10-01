@@ -32,6 +32,7 @@
 #include "bufferpool.h"
 #include "crypto.h"
 #include "notifyqueue.h"
+#include "rxworkers.h"
 #include "socket.h"
 #include "trie.h"
 #include "uapi\ovpn-dco.h"
@@ -114,6 +115,9 @@ struct OVPN_DEVICE {
 
     volatile LONG SocketRefs;       // senders inside OvpnSocketSend
     KEVENT SocketDrained;
+
+    // decrypt received data packets on several cores, deliver them in order
+    OVPN_RX_WORKERS RxWorkers;
 
     _Guarded_by_(SpinLock)
     NETADAPTER Adapter;

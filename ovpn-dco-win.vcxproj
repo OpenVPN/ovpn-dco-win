@@ -78,6 +78,7 @@
     <ClCompile Include="peer.cpp" />
     <ClCompile Include="pktid.cpp" />
     <ClCompile Include="rxqueue.cpp" />
+    <ClCompile Include="rxworkers.cpp" />
     <ClCompile Include="timer.cpp" />
     <ClCompile Include="trie.cpp" />
     <ClCompile Include="txqueue.cpp" />
@@ -97,6 +98,7 @@
     <ClInclude Include="peer.h" />
     <ClInclude Include="pktid.h" />
     <ClInclude Include="rxqueue.h" />
+    <ClInclude Include="rxworkers.h" />
     <ClInclude Include="timer.h" />
     <ClInclude Include="trace.h" />
     <ClInclude Include="txqueue.h" />
