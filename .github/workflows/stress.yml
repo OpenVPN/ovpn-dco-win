@@ -232,7 +232,10 @@ jobs:
           # Into a file of its own, pulled in with Include: ~/.ssh/config is how anyone running
           # a rig by hand reaches these hosts, and overwriting it broke the next manual run.
           ssh client "printf 'Host dut\n  HostName $DUT_PRIV\n  User Administrator\n  IdentityFile ~/.ssh/dut_key\n  IdentitiesOnly yes\n  StrictHostKeyChecking accept-new\n' > ~/.ssh/config.stress"
-          ssh client 'touch ~/.ssh/config; grep -q "^Include config.stress" ~/.ssh/config || sed -i "1i Include config.stress" ~/.ssh/config'
+          # First, always, for the same reason as in perf: ssh takes the first match.
+          ssh client 'touch ~/.ssh/config;
+                      { echo "Include config.stress"; grep -vx "Include config.stress" ~/.ssh/config || true; } > ~/.ssh/config.new &&
+                        chmod 600 ~/.ssh/config.new && mv ~/.ssh/config.new ~/.ssh/config'
           # A NIC reset on the device under test is an EC2 fault that takes the adapter
           # down for about ninety seconds. The rig fails a run that lost too much of
           # itself that way, and there is nothing to fix from here, so try again. Any
