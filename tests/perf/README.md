@@ -90,7 +90,8 @@ quicker.
 Everything the stress rig needs, on every Windows machine involved, and in addition:
 
 * a **release** build of the driver, test-signed like any other — the build signs itself,
-  so this is `/p:Configuration=Release` and nothing more;
+  so this is `/p:Configuration=Release-Win11` and nothing more. The `-Win11` build, because
+  it is what the installer picks on Server 2022 and later;
 * Driver Verifier disarmed and the machine rebooted (`Set-TestMode.ps1 -Disarm`);
 * `iperf3.exe`, since one end of the tunnel has to be there. `--iperf3` says where it is;
   the default is `C:\stage\iperf3.exe`.
