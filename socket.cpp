@@ -242,6 +242,7 @@ VOID OvpnSocketDataPacketReceived(_In_ POVPN_DEVICE device, UCHAR op, UINT32 pee
 
     UCHAR keyId = OvpnCryptoKeyIdExtract(op);
     UINT16 peerEpoch = 0;
+    OvpnCryptoRxResult result;
 
     KIRQL kirql;
     KeAcquireSpinLock(&peer->RxLock, &kirql);
@@ -252,7 +253,10 @@ VOID OvpnSocketDataPacketReceived(_In_ POVPN_DEVICE device, UCHAR op, UINT32 pee
         // extend data area in the buffer for plaintext and crypto overhead
         OvpnBufferPut(buffer, len);
 
-        status = OvpnCryptoDecrypt(rx, keyId, cipherTextBuf, len, buffer->Data, &peerEpoch);
+        status = OvpnCryptoDecrypt(rx, keyId, cipherTextBuf, len, buffer->Data, &result);
+        if (NT_SUCCESS(status)) {
+            status = OvpnCryptoDecryptAccept(rx, &result, TRUE, &peerEpoch);
+        }
 
         if (NT_SUCCESS(status)) {
             const OvpnCryptoPacketLayout layout = rx->Layout;

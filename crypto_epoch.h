@@ -147,6 +147,9 @@ struct OvpnCryptoRxState
     OvpnCryptoKeyContext RetiringKey;
     OvpnPktidRecv PktidRetiring;
 
+    // new for every installed key, so a replay check can tell its key was replaced
+    LONG Generation;
+
     UCHAR KeyId;
 };
 
