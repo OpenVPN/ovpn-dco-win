@@ -27,9 +27,9 @@ them, so a driver number can be read as a fraction of what was achievable rather
 as a bare figure. It never says anything about the driver, and a drop in it is news
 about the instances rather than about this repository.
 
-For that reason it does not run on a pull request: it gates nothing there and costs
-a machine and four minutes. Ask for it by name - the `baseline` input on a dispatch -
-when a driver number needs a yardstick.
+It gates nothing, but it runs on every pull request anyway, last, because a driver
+number without it cannot say how much room is left. A dispatch can turn it off with the
+`baseline` input.
 
 There is no `perf-server-tcp`. The driver's socket, its `Tcp` flag and its stream
 reassembly state are one per device, so a multipeer server has nowhere to keep a second

@@ -16,7 +16,7 @@ them. This file describes the shape, and names the variables that hold the value
 | load generator | Linux | perf — it drives the rig and is one tunnel end |
 | stress pair | Windows + Linux | stress, the same two roles on machines of its own |
 | second Windows machine | Windows | `perf-win-win-udp` only |
-| second Linux machine | Linux | `perf-linux-linux-udp` only, and only on a dispatch |
+| second Linux machine | Linux | `perf-linux-linux-udp` only |
 | ioctl target | Windows | ioctl |
 
 Each is named by an Actions variable: `STRESS_DUT_INSTANCE_ID`,

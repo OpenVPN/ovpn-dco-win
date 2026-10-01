@@ -155,12 +155,10 @@ jobs:
           # every test the rig has is visible on every run. A dispatch says true or false.
           WANT_WINWIN='${{ inputs.win_win }}'
           [ -z "$WANT_WINWIN" ] && WANT_WINWIN=true
-          # The control is the exception: it says what the in-kernel module does on the
-          # same hardware, and a drop in it is news about the instances rather than about
-          # a driver change. So it is off on a pull request and asked for by name when a
-          # number needs a yardstick.
+          # The control too: it gates nothing, but it is what says how far a driver number
+          # is from what the same hardware and the in-kernel module can do.
           WANT_BASELINE='${{ inputs.baseline }}'
-          [ -z "$WANT_BASELINE" ] && WANT_BASELINE=false
+          [ -z "$WANT_BASELINE" ] && WANT_BASELINE=true
           IDS="$DUT_ID $CLIENT_ID"
           if [ "$WANT_WINWIN" = 'true' ] && [ -n "$PEER_ID" ]; then
             IDS="$IDS $PEER_ID"
