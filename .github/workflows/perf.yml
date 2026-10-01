@@ -324,10 +324,12 @@ jobs:
           # ~/.ssh/config: that file is how anyone running the rig by hand reaches these
           # hosts, and a run that overwrote it broke the next manual one. Include goes
           # first, so a run's addresses win while everything else on the machine survives.
-          ssh client 'chmod 600 ~/.ssh/config.perf;
-                      touch ~/.ssh/config;
-                      grep -q "^Include config.perf" ~/.ssh/config ||
-                        sed -i "1i Include config.perf" ~/.ssh/config'
+          # First, always: ssh takes the first match, so an include another rig left above
+          # this one would decide where "dut" goes. Rewritten rather than sed'ed, because
+          # "sed 1i" adds nothing to an empty file.
+          ssh client 'chmod 600 ~/.ssh/config.perf; touch ~/.ssh/config;
+                      { echo "Include config.perf"; grep -vx "Include config.perf" ~/.ssh/config || true; } > ~/.ssh/config.new &&
+                        chmod 600 ~/.ssh/config.new && mv ~/.ssh/config.new ~/.ssh/config'
 
           # The control run reaches the second Linux machine from the load generator, not
           # from here, so wait on that path. Starting an instance only means AWS has it
