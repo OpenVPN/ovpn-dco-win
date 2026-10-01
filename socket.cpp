@@ -29,6 +29,7 @@
 #include "mss.h"
 #include "trace.h"
 #include "rxqueue.h"
+#include "rxworkers.h"
 #include "timer.h"
 #include "socket.h"
 #include "peer.h"
@@ -216,7 +217,7 @@ OvpnSocketControlPacketReceived(_In_ POVPN_DEVICE device, _In_reads_(len) PUCHAR
 }
 
 static
-VOID OvpnSocketDataPacketReceived(_In_ POVPN_DEVICE device, UCHAR op, UINT32 peerId, _In_reads_(len) PUCHAR cipherTextBuf, SIZE_T len, BOOLEAN dpc, _In_opt_ PSOCKADDR remoteAddr)
+VOID OvpnSocketDataPacketReceived(_In_ POVPN_DEVICE device, UINT32 peerId, _In_reads_(len) PUCHAR cipherTextBuf, SIZE_T len, BOOLEAN dpc, _In_opt_ PSOCKADDR remoteAddr)
 {
     InterlockedExchangeAddNoFence64(&device->Stats.TransportBytesReceived, len);
 
@@ -231,7 +232,7 @@ VOID OvpnSocketDataPacketReceived(_In_ POVPN_DEVICE device, UCHAR op, UINT32 pee
 
     OVPN_RX_BUFFER* buffer;
 
-    // fetch buffer for plaintext
+    // fetch buffer, decrypted in place
     NTSTATUS status = OvpnRxBufferPoolGet(device->RxBufferPool, &buffer);
     if (!NT_SUCCESS(status)) {
         LOG_ERROR("RxBufferPool exhausted");
@@ -240,64 +241,102 @@ VOID OvpnSocketDataPacketReceived(_In_ POVPN_DEVICE device, UCHAR op, UINT32 pee
         return;
     }
 
-    UCHAR keyId = OvpnCryptoKeyIdExtract(op);
-    UINT16 peerEpoch = 0;
-    OvpnCryptoRxResult result;
+    // the indication is gone when this returns, so the ciphertext and address are copied
+    RtlCopyMemory(OvpnBufferPut(buffer, len), cipherTextBuf, len);
+    buffer->Peer = peer;
 
-    KIRQL kirql;
-    KeAcquireSpinLock(&peer->RxLock, &kirql);
+    buffer->Remote.si_family = AF_UNSPEC;
+    if ((remoteAddr != nullptr) && (device->Mode == OVPN_MODE_MP)) {
+        if (remoteAddr->sa_family == AF_INET) {
+            RtlCopyMemory(&buffer->Remote, remoteAddr, sizeof(SOCKADDR_IN));
+        }
+        else if (remoteAddr->sa_family == AF_INET6) {
+            RtlCopyMemory(&buffer->Remote, remoteAddr, sizeof(SOCKADDR_IN6));
+        }
+    }
+
+    if (!OvpnRxWorkersSubmit(&device->RxWorkers, buffer)) {
+        InterlockedIncrementNoFence(&device->Stats.LostInDataPackets);
+        buffer->Peer = NULL;
+        OvpnRxBufferPoolPut(buffer);
+        OvpnPeerCtxRelease(peer);
+    }
+}
+
+_Use_decl_annotations_
+VOID
+OvpnSocketDataPacketDecrypt(OVPN_RX_BUFFER* buffer)
+{
+    OvpnPeerContext* peer = buffer->Peer;
+    UCHAR keyId = OvpnCryptoKeyIdExtract(buffer->Data[0]);
+
+    // shared: workers decrypt with one key at once
+    KIRQL kirql = ExAcquireSpinLockShared(&peer->RxLock);
 
     OvpnCryptoRxContext* rx = &peer->CryptoContext.Rx;
+    SIZE_T len = buffer->Len;
 
-    if (rx->Decrypt) {
-        // extend data area in the buffer for plaintext and crypto overhead
-        OvpnBufferPut(buffer, len);
+    NTSTATUS status = OvpnCryptoDecrypt(rx, keyId, buffer->Data, len, buffer->Data, &buffer->CryptoResult);
+    if (NT_SUCCESS(status)) {
+        const OvpnCryptoPacketLayout layout = rx->Layout;
 
-        status = OvpnCryptoDecrypt(rx, keyId, cipherTextBuf, len, buffer->Data, &result);
-        if (NT_SUCCESS(status)) {
-            status = OvpnCryptoDecryptAccept(rx, &result, TRUE, &peerEpoch);
-        }
-
-        if (NT_SUCCESS(status)) {
-            const OvpnCryptoPacketLayout layout = rx->Layout;
-
-            OvpnBufferTrim(buffer, len - layout.TailLen);
-            OvpnBufferPull(buffer, layout.FrontLen);
-        }
+        OvpnBufferTrim(buffer, len - layout.TailLen);
+        OvpnBufferPull(buffer, layout.FrontLen);
     }
-    else {
-        status = STATUS_INVALID_DEVICE_STATE;
 
-        // LOG_WARN("CryptoContext not yet initialized");
-    }
+    ExReleaseSpinLockShared(&peer->RxLock, kirql);
+
+    buffer->DecryptStatus = status;
+}
+
+_Use_decl_annotations_
+VOID
+OvpnSocketDataPacketDeliver(OVPN_DEVICE* device, OVPN_RX_BUFFER* buffer)
+{
+    OvpnPeerContext* peer = buffer->Peer;
+    buffer->Peer = NULL;
+
+    NTSTATUS status = buffer->DecryptStatus;
+    UINT16 peerEpoch = 0;
+    UINT16 mss = 0;
+    KIRQL kirql;
 
     if (NT_SUCCESS(status)) {
-        OvpnTimerResetRecv(peer->Timer);
-    }
-    else {
-        OvpnRxBufferPoolPut(buffer);
-    }
+        OvpnCryptoRxContext* rx = &peer->CryptoContext.Rx;
 
-    auto mss = peer->MSS;
+        // Shared is enough for the replay window: deliveries are one at a time. Moving to
+        // a newer epoch replaces keys that workers may be decrypting with, so it is not.
+        kirql = ExAcquireSpinLockShared(&peer->RxLock);
+        status = OvpnCryptoDecryptAccept(rx, &buffer->CryptoResult, FALSE, &peerEpoch);
+        mss = peer->MSS;
+        ExReleaseSpinLockShared(&peer->RxLock, kirql);
 
-    KeReleaseSpinLock(&peer->RxLock, kirql);
+        if (status == STATUS_RETRY) {
+            kirql = ExAcquireSpinLockExclusive(&peer->RxLock);
+            status = OvpnCryptoDecryptAccept(rx, &buffer->CryptoResult, TRUE, &peerEpoch);
+            ExReleaseSpinLockExclusive(&peer->RxLock, kirql);
+        }
+    }
 
     if (peerEpoch != 0) {
         // the peer moved to a newer epoch; follow with our send key, after RxLock is released
         kirql = ExAcquireSpinLockExclusive(&peer->TxLock);
-        OvpnCryptoFollowPeerEpoch(&peer->CryptoContext.Tx, keyId, peerEpoch);
+        OvpnCryptoFollowPeerEpoch(&peer->CryptoContext.Tx, buffer->CryptoResult.KeyId, peerEpoch);
         ExReleaseSpinLockExclusive(&peer->TxLock, kirql);
     }
 
-    // decrypt failed - don't proceed
+    // decrypt or replay check failed - don't proceed
     if (!NT_SUCCESS(status)) {
+        OvpnRxBufferPoolPut(buffer);
         OvpnPeerCtxRelease(peer);
         return;
     }
 
+    OvpnTimerResetRecv(peer->Timer);
+
     // check if peer has floated
-    if ((remoteAddr != nullptr) && (device->Mode == OVPN_MODE_MP)) {
-        LOG_IF_NOT_NT_SUCCESS(status = OvpnPeerHandleFloat(device, peer, remoteAddr, dpc));
+    if ((buffer->Remote.si_family != AF_UNSPEC) && (device->Mode == OVPN_MODE_MP)) {
+        LOG_IF_NOT_NT_SUCCESS(status = OvpnPeerHandleFloat(device, peer, (PSOCKADDR)&buffer->Remote, TRUE));
 
         // don't inject packet into OS if float denied
         if (!NT_SUCCESS(status)) {
@@ -312,7 +351,7 @@ VOID OvpnSocketDataPacketReceived(_In_ POVPN_DEVICE device, UCHAR op, UINT32 pee
 
     // ping packet?
     if (OvpnTimerIsKeepaliveMessage(buffer->Data, buffer->Len)) {
-        LOG_INFO("Ping received", TraceLoggingValue(peerId, "peer-id"));
+        LOG_INFO("Ping received", TraceLoggingValue(peer->PeerId, "peer-id"));
 
         // no need to inject ping packet into OS, return buffer to the pool
         OvpnRxBufferPoolPut(buffer);
@@ -324,7 +363,7 @@ VOID OvpnSocketDataPacketReceived(_In_ POVPN_DEVICE device, UCHAR op, UINT32 pee
         if (OvpnMssIsIPv4(buffer->Data, buffer->Len)) {
             // perform Reverse Path Filtering
             auto addr = ((IPV4_HEADER*)(buffer->Data))->SourceAddress;
-            lookup_peer = OvpnFindPeerVPN4(device, addr, dpc);
+            lookup_peer = OvpnFindPeerVPN4(device, addr, TRUE);
             if (lookup_peer == nullptr) {
                 lookup_peer = device->IRoutesIPV4.Find(reinterpret_cast<UCHAR*>(&addr));
             }
@@ -336,7 +375,7 @@ VOID OvpnSocketDataPacketReceived(_In_ POVPN_DEVICE device, UCHAR op, UINT32 pee
         else if (OvpnMssIsIPv6(buffer->Data, buffer->Len)) {
             // perform Reverse Path Filtering
             auto addr = ((IPV6_HEADER*)(buffer->Data))->SourceAddress;
-            lookup_peer = OvpnFindPeerVPN6(device, addr, dpc);
+            lookup_peer = OvpnFindPeerVPN6(device, addr, TRUE);
             if (lookup_peer == nullptr) {
                 lookup_peer = device->IRoutesIPV6.Find(reinterpret_cast<UCHAR*>(&addr));
             }
@@ -377,7 +416,7 @@ OvpnSocketProcessIncomingPacket(_In_ POVPN_DEVICE device, _In_reads_(packetLengt
     UCHAR op = RtlUlongByteSwap(*(ULONG*)(buf)) >> 24;
     if (OvpnCryptoOpcodeExtract(op) == OVPN_OP_DATA_V2) {
         UINT32 peerId = RtlUlongByteSwap(*(ULONG*)(buf)) & OVPN_PEER_ID_MASK;
-        OvpnSocketDataPacketReceived(device, op, peerId, buf, packetLength, irqlDispatch, remoteAddr);
+        OvpnSocketDataPacketReceived(device, peerId, buf, packetLength, irqlDispatch, remoteAddr);
     }
     else {
         OvpnSocketControlPacketReceived(device, buf, packetLength, remoteAddr);

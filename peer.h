@@ -36,7 +36,9 @@ struct OvpnPeerContext
     // on TX. Never held together; cache-aligned so the two CPUs share no line.
     // Transmit takes TxLock shared: encryption only reads the key and the packet id is
     // claimed atomically. Changing a key, the address or the timer takes it exclusive.
-    DECLSPEC_CACHEALIGN KSPIN_LOCK RxLock;
+    // Receive takes RxLock shared to decrypt, and to check replay, which is safe because
+    // deliveries are one at a time. Changing or moving a receive key takes it exclusive.
+    DECLSPEC_CACHEALIGN EX_SPIN_LOCK RxLock;
     DECLSPEC_CACHEALIGN EX_SPIN_LOCK TxLock;
 
     OvpnCryptoContext CryptoContext;

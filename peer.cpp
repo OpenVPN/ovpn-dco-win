@@ -47,7 +47,7 @@ OvpnPeerCtxAlloc(WDFDEVICE device)
     }
 
     RtlZeroMemory(peer, sizeof(OvpnPeerContext));
-    KeInitializeSpinLock(&peer->RxLock);
+    peer->RxLock = 0;
     peer->TxLock = 0;
     InitializeListHead(&peer->ListEntry);
     InterlockedIncrement(&peer->RefCounter);

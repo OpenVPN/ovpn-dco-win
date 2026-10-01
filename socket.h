@@ -88,6 +88,17 @@ _IRQL_requires_(PASSIVE_LEVEL)
 PWSK_SOCKET
 OvpnSocketDetach(_In_ OVPN_DEVICE* device);
 
+// Decrypts a received data packet in place. Called by OvpnRxWorkersSubmit's worker.
+_IRQL_requires_max_(DISPATCH_LEVEL)
+VOID
+OvpnSocketDataPacketDecrypt(_Inout_ OVPN_RX_BUFFER* buffer);
+
+// The replay check and the rest of receive, for decrypted packets in arrival order, one
+// at a time. Takes the buffer and its peer reference.
+_IRQL_requires_(DISPATCH_LEVEL)
+VOID
+OvpnSocketDataPacketDeliver(_In_ OVPN_DEVICE* device, _In_ OVPN_RX_BUFFER* buffer);
+
 _Must_inspect_result_
 NTSTATUS
 OvpnSocketTcpConnect(_In_ PWSK_SOCKET socket, _In_ PVOID context, _In_ PSOCKADDR remote);
