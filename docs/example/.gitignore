@@ -1,0 +1,5 @@
+# A CMake build run inside this folder leaves its files here; keep only the sources.
+*
+!.gitignore
+!CMakeLists.txt
+!example-client.c
