@@ -58,6 +58,15 @@ struct OvpnPktidRecv
 	UINT64 IdFloor;
 };
 
+// What a decryption hands to the replay check, which may run later and on another core.
+struct OvpnCryptoRxResult
+{
+	UINT64 PacketId;
+	LONG Generation;
+	UINT16 Epoch;
+	UCHAR KeyId;
+};
+
 /* Get the next packet ID for xmit. Used only for non-epoch crypto. */
 NTSTATUS OvpnPktidXmitNext(_In_ OvpnPktidXmit* px, _Out_ VOID* pktId);
 

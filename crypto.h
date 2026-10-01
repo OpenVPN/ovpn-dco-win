@@ -61,7 +61,7 @@ _IRQL_requires_max_(DISPATCH_LEVEL)
 _Must_inspect_result_
 typedef
 NTSTATUS
-OVPN_CRYPTO_DECRYPT(_Inout_ OvpnCryptoRxState* rx, _In_ UCHAR* bufIn, _In_ SIZE_T len, _In_ UCHAR* bufOut, _In_ OvpnCryptoOptions* opts, _Out_ UINT16* sendEpoch);
+OVPN_CRYPTO_DECRYPT(_In_ OvpnCryptoRxState* rx, _In_ UCHAR* bufIn, _In_ SIZE_T len, _In_ UCHAR* bufOut, _In_ OvpnCryptoOptions* opts, _Out_ UINT64* packetId, _Out_ UINT16* epoch);
 typedef OVPN_CRYPTO_DECRYPT* POVPN_CRYPTO_DECRYPT;
 
 struct OvpnCryptoPacketLayout
@@ -116,13 +116,21 @@ _IRQL_requires_(DISPATCH_LEVEL)
 NTSTATUS
 OvpnCryptoAdvanceSendKey(_Inout_ OvpnCryptoTxContext* tx);
 
-// Decrypts with the key that has keyId. Caller holds peer->RxLock. A non-zero
-// *sendEpoch asks the caller to call OvpnCryptoFollowPeerEpoch under TxLock
-// once RxLock is released.
+// Decrypts and authenticates with the key that has keyId, without the replay check.
+// Caller holds peer->RxLock. plainText may be cipherText.
 _Must_inspect_result_
 _IRQL_requires_(DISPATCH_LEVEL)
 NTSTATUS
-OvpnCryptoDecrypt(_Inout_ OvpnCryptoRxContext* rx, _In_ UCHAR keyId, _In_reads_bytes_(len) PUCHAR cipherText, _In_ SIZE_T len, _Inout_updates_bytes_(len) PUCHAR plainText, _Out_ UINT16* sendEpoch);
+OvpnCryptoDecrypt(_In_ OvpnCryptoRxContext* rx, _In_ UCHAR keyId, _In_reads_bytes_(len) PUCHAR cipherText, _In_ SIZE_T len, _Inout_updates_bytes_(len) PUCHAR plainText, _Out_ OvpnCryptoRxResult* result);
+
+// The replay check for a packet OvpnCryptoDecrypt authenticated; it may move the receive
+// key to a newer epoch. STATUS_RETRY means it has to and !exclusive: call again with
+// peer->RxLock held exclusive. A non-zero *sendEpoch asks the caller to call
+// OvpnCryptoFollowPeerEpoch under TxLock once RxLock is released.
+_Must_inspect_result_
+_IRQL_requires_(DISPATCH_LEVEL)
+NTSTATUS
+OvpnCryptoDecryptAccept(_Inout_ OvpnCryptoRxContext* rx, _In_ const OvpnCryptoRxResult* result, BOOLEAN exclusive, _Out_ UINT16* sendEpoch);
 
 // Moves the send key with keyId forward to epoch. Caller holds peer->TxLock.
 _IRQL_requires_(DISPATCH_LEVEL)
