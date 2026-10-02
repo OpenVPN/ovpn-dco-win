@@ -32,6 +32,10 @@
 // the workers never catch up with.
 #define OVPN_TX_QUEUED_MAX_PER_WORKER 256
 
+// Datagrams a worker encrypts before it sends them; see OvpnTxWorkerDpc. With eight
+// workers that keeps reordering well inside a 2048-packet replay window.
+#define OVPN_TX_SEND_BATCH 128
+
 // Data buffers allowed in flight before the datapath drops rather than grow the pool.
 #define OVPN_TX_DATA_INFLIGHT_MAX 2048
 

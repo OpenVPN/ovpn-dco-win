@@ -401,6 +401,7 @@ OvpnTxWorkerDpc(KDPC* dpc, PVOID context, PVOID arg1, PVOID arg2)
     OVPN_TX_BUFFER* head = NULL;
     OVPN_TX_BUFFER* tail = NULL;
     SOCKADDR_STORAGE headSockaddr = { 0 };
+    ULONG chained = 0;
 
     while (!IsListEmpty(&work)) {
         OVPN_TX_BUFFER* buffer = CONTAINING_RECORD(RemoveHeadList(&work), OVPN_TX_BUFFER, PoolListEntry);
@@ -421,6 +422,15 @@ OvpnTxWorkerDpc(KDPC* dpc, PVOID context, PVOID arg1, PVOID arg2)
         }
 
         OvpnPeerCtxRelease(peer);
+
+        // Send as we go: packet IDs are assigned at encryption, so a batch held back while
+        // other workers send can fall behind the receiver's replay window.
+        if (haveSocket && (head != NULL) && (++chained >= OVPN_TX_SEND_BATCH)) {
+            LOG_IF_NOT_NT_SUCCESS(OvpnSocketSend(&socket, head, (SOCKADDR*)&headSockaddr));
+            head = NULL;
+            tail = NULL;
+            chained = 0;
+        }
     }
 
     if (haveSocket) {
