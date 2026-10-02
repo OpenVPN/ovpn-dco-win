@@ -104,6 +104,10 @@ in the kernel from 6.16, and OpenVPN uses it when it is there. The Linux scripts
 whether offload actually happened and fail if it did not, rather than quietly measuring a
 userspace tunnel.
 
+Both Linux scripts turn on RPS for the tunnel device once it is up. A tunnel arrives as one
+outer flow, so without it every decrypted packet, and every send its ACKs trigger, runs on
+the one Linux core that received it, and that core, not the driver, sets the number.
+
 ## The ceiling
 
 AWS limits a single network flow to 5 Gbps inside a VPC, and a tunnel is exactly one
