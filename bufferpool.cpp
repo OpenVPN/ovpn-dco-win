@@ -185,15 +185,20 @@ OvpnTxBufferPoolGet(OVPN_TX_BUFFER_POOL handle, OVPN_TX_BUFFER** buffer)
 
     (*buffer)->Pool = handle;
 
-    (*buffer)->Mdl = IoAllocateMdl(*buffer, ((OVPN_BUFFER_POOL_IMPL*)handle)->ItemSize, FALSE, FALSE, NULL);
+    // An MDL lives as long as its buffer: allocating one per packet sent every core
+    // through the same lookaside lists. A new buffer comes zeroed, so NULL means new.
+    if ((*buffer)->Mdl == NULL) {
+        (*buffer)->Mdl = IoAllocateMdl(*buffer, ((OVPN_BUFFER_POOL_IMPL*)handle)->ItemSize, FALSE, FALSE, NULL);
+        if ((*buffer)->Mdl != NULL) {
+            MmBuildMdlForNonPagedPool((*buffer)->Mdl);
+        }
+    }
     if (((*buffer)->Mdl) == NULL)
     {
         OvpnTxBufferPoolPut(*buffer);
         *buffer = NULL;
         return STATUS_INSUFFICIENT_RESOURCES;
     }
-
-    MmBuildMdlForNonPagedPool((*buffer)->Mdl);
 
     (*buffer)->Data = (*buffer)->Head + OVPN_BUFFER_HEADROOM;
     (*buffer)->Tail = (*buffer)->Data;
@@ -240,9 +245,6 @@ _Use_decl_annotations_
 VOID
 OvpnTxBufferPoolPut(OVPN_TX_BUFFER* buffer)
 {
-    if (buffer->Mdl)
-        IoFreeMdl(buffer->Mdl);
-
     // The one place every datapath buffer returns, so the count cannot leak down a path
     // that forgot to decrement it.
     if (buffer->CountedInFlight) {
@@ -292,6 +294,19 @@ OvpnRxBufferPoolDelete(OVPN_BUFFER_POOL handle)
 VOID
 OvpnTxBufferPoolDelete(OVPN_BUFFER_POOL handle)
 {
+    if (handle == NULL)
+        return;
+
+    // device cleanup: the socket is closed and the transmit queue gone, so no buffer
+    // can be returned while this walks the list
+    OVPN_BUFFER_POOL_IMPL* pool = (OVPN_BUFFER_POOL_IMPL*)handle;
+    for (LIST_ENTRY* entry = pool->ListHead.Flink; entry != &pool->ListHead; entry = entry->Flink) {
+        OVPN_TX_BUFFER* buffer = CONTAINING_RECORD(entry, OVPN_TX_BUFFER, PoolListEntry);
+        if (buffer->Mdl != NULL) {
+            IoFreeMdl(buffer->Mdl);
+        }
+    }
+
     OvpnBufferPoolDelete<OVPN_TX_BUFFER>(handle);
 }
 
