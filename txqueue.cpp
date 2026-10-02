@@ -385,17 +385,10 @@ OvpnTxWorkerDpc(KDPC* dpc, PVOID context, PVOID arg1, PVOID arg2)
     POVPN_TX_WORKER worker = (POVPN_TX_WORKER)context;
     POVPN_DEVICE device = worker->Device;
 
+    // take the whole queue in one go, so the work runs without the lock
     LIST_ENTRY work;
-    InitializeListHead(&work);
-
     KeAcquireSpinLockAtDpcLevel(&worker->Lock);
-    if (!IsListEmpty(&worker->Queue)) {
-        work.Flink = worker->Queue.Flink;
-        work.Blink = worker->Queue.Blink;
-        work.Flink->Blink = &work;
-        work.Blink->Flink = &work;
-        InitializeListHead(&worker->Queue);
-    }
+    OvpnListMoveAll(&worker->Queue, &work);
     KeReleaseSpinLockFromDpcLevel(&worker->Lock);
 
     if (IsListEmpty(&work)) {
