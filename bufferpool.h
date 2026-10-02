@@ -167,6 +167,22 @@ OvpnBufferQueueEnqueue(OVPN_BUFFER_QUEUE handle, PLIST_ENTRY listEntry);
 VOID
 OvpnBufferQueueEnqueueHead(OVPN_BUFFER_QUEUE handle, PLIST_ENTRY listEntry);
 
+// Moves every entry of from onto the empty list to without walking it; from is left empty.
+static inline
+VOID
+OvpnListMoveAll(_Inout_ PLIST_ENTRY from, _Out_ PLIST_ENTRY to)
+{
+    if (IsListEmpty(from)) {
+        InitializeListHead(to);
+        return;
+    }
+    to->Flink = from->Flink;
+    to->Blink = from->Blink;
+    to->Flink->Blink = to;
+    to->Blink->Flink = to;
+    InitializeListHead(from);
+}
+
 LIST_ENTRY*
 OvpnBufferQueueDequeue(OVPN_BUFFER_QUEUE handle);
 
