@@ -26,22 +26,21 @@ To see which version you have, run `openvpn --version` and look for the line
 
 Measured on our test rig: cloud machines (AWS c6i.4xlarge, 16 cores), Windows Server 2025
 at one end and Linux with its built-in OpenVPN driver at the other — or Windows at both
-ends for the last two rows — over one VPN tunnel with AES-256-GCM. Each figure is the
-average of two full runs.
+ends for the last two rows — over one VPN tunnel with AES-256-GCM, with four connections
+at once. Each figure is the median of three runs.
 
-| What you are doing | 1 connection | 4 connections at once |
-| --- | --- | --- |
-| Downloading over a UDP tunnel | **5.3 Gbit/s** | **5.5 Gbit/s** |
-| Uploading over a UDP tunnel | **5.1 Gbit/s** | **6.0 Gbit/s** |
-| Downloading over a TCP tunnel | 4.4 Gbit/s | 4.5 Gbit/s |
-| Uploading over a TCP tunnel | 2.7 Gbit/s | 2.7 Gbit/s |
-| Windows to Windows, one way | 4.2 Gbit/s | **6.6 Gbit/s** |
-| Windows to Windows, the other way | 4.9 Gbit/s | **6.4 Gbit/s** |
+| What you are doing | Speed |
+| --- | --- |
+| Downloading over a UDP tunnel | **7.4 Gbit/s** |
+| Uploading over a UDP tunnel | **7.3 Gbit/s** |
+| Downloading over a TCP tunnel | 5.1 Gbit/s |
+| Uploading over a TCP tunnel | 2.8 Gbit/s |
+| Windows to Windows, one way | **6.7 Gbit/s** |
+| Windows to Windows, the other way | **6.0 Gbit/s** |
 
-For comparison, two Linux machines on the same hardware reach about 5.8 Gbit/s. So a
-Windows machine with ovpn-dco-win keeps up with Linux — and with ovpn-dco-win at **both**
-ends, four connections go faster than between two Linux machines, because both sides
-spread the work over several processor cores.
+For comparison, two Linux machines on the same hardware reach 5.5 to 7.4 Gbit/s, depending
+on the direction. So over a UDP tunnel a Windows machine with ovpn-dco-win is as fast as
+Linux, at about what the cloud network gives one tunnel.
 
 ### It uses all your processor cores
 
