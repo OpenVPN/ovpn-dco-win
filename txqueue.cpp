@@ -239,9 +239,26 @@ NTSTATUS
 OvpnTxSubmit(_In_ OvpnSocketRef* socket, _In_ OVPN_TX_BUFFER* buffer, _In_ const OVPN_REMOTE_ADDR& remoteAddr,
     _Inout_ OVPN_TX_BUFFER** head, _Inout_ OVPN_TX_BUFFER** tail, _Inout_ SOCKADDR_STORAGE* headSockaddr)
 {
-    // start async send, this will return ciphertext buffer to the pool
+    // TCP: chain the buffers too, and send up to OVPN_TX_TCP_BATCH_MAX as one stream write. The
+    // head keeps the chain's length in WskBufList.Buffer.Length: only the UDP path reads that field,
+    // and the pool clears it for the buffer's next use.
     if (socket->Tcp) {
-        return OvpnSocketSend(socket, buffer, NULL);
+        SIZE_T const len = 2 + buffer->Len;
+        buffer->WskBufList.Next = NULL;
+        if ((*head != NULL) && ((*head)->WskBufList.Buffer.Length + len > OVPN_TX_TCP_BATCH_MAX)) {
+            OvpnSocketSendTcpBatch(socket, *head);
+            *head = NULL;
+        }
+        if (*head == NULL) {
+            *head = buffer;
+            buffer->WskBufList.Buffer.Length = len;
+        }
+        else {
+            (*tail)->WskBufList.Next = &buffer->WskBufList;
+            (*head)->WskBufList.Buffer.Length += len;
+        }
+        *tail = buffer;
+        return STATUS_SUCCESS;
     }
 
     // for UDP we use SendMessages to send multiple datagrams at once
@@ -756,6 +773,9 @@ OvpnEvtTxQueueAdvance(NETPACKETQUEUE netPacketQueue)
     if (packetSent && !isTcp && txBufferHead != NULL) {
         // this will use WskSendMessages to send buffers list which we constructed before
         LOG_IF_NOT_NT_SUCCESS(OvpnSocketSend(&socket, txBufferHead, (SOCKADDR*)&headSockaddr));
+    }
+    else if (isTcp && (txBufferHead != NULL)) {
+        OvpnSocketSendTcpBatch(&socket, txBufferHead);
     }
 
     OvpnSocketRelease(device);
