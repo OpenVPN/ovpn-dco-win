@@ -1,7 +1,7 @@
 #!/bin/bash
 # run-perf.sh --dut <ssh-target> [--mode client|server] [--proto udp|tcp]
 #             [--peer linux|<ssh-target>] [--server-ip <ip>] [--seconds 30] [--runs 3]
-#             [--streams "1 4"] [--min-mbit 1500] [--markdown <file>]
+#             [--streams "1 4"] [--min-mbit 3500] [--markdown <file>]
 #             [--keys <dir>] [--iperf3 <path on Windows>] [--outdir <dir>]
 #
 # Throughput of the driver under test, in both directions.
@@ -33,7 +33,7 @@ MARKDOWN=''
 # Not a performance target: a floor that catches a halving rather than a wobble. The
 # lowest median measured across the tests is about 2100 Mbit/s, so this leaves room for
 # the run-to-run spread these instances have and still fails a real collapse.
-MIN_MBIT=1500
+MIN_MBIT=3500
 SERVER_TUN=10.88.0.1
 
 while [ $# -gt 0 ]; do
