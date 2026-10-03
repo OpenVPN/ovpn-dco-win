@@ -27,7 +27,7 @@ on:
         default: '3'
       min_mbit:
         description: floor below which a run fails
-        default: '1500'
+        default: '3500'
       win_win:
         description: also run windows server against windows client
         type: boolean
@@ -350,7 +350,7 @@ jobs:
           # stressor here and not only a throughput diagnostic.
           SEC='${{ inputs.seconds || '15' }}'
           RUNS='${{ inputs.runs || '3' }}'
-          MIN='${{ inputs.min_mbit || '1500' }}'
+          MIN='${{ inputs.min_mbit || '3500' }}'
           rig="cd ~/perf/tests/perf && chmod +x run-perf.sh linux/*.sh &&"
           rc=0
           # A NIC reset on one of these machines is an EC2 fault that takes the adapter
@@ -395,7 +395,7 @@ jobs:
             ssh client 'cat ~/perf/table.md' 2>/dev/null || echo '_no results_'
             echo
             echo "Medians of \`${{ inputs.runs || '3' }}\` runs of \`${{ inputs.seconds || '30' }}\`s"
-            echo "per direction. Floor for a pass: \`${{ inputs.min_mbit || '1500' }}\` Mbit/s."
+            echo "per direction. Floor for a pass: \`${{ inputs.min_mbit || '3500' }}\` Mbit/s."
             echo
             echo "Which machine each column means flips with the test, so the ends column"
             echo "says which is which."
