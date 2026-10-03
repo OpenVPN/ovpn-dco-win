@@ -92,6 +92,17 @@ struct OVPN_DEVICE {
 
     OVPN_STATS Stats;
 
+    // 1 + the processor the NIC's receive thread hands us the tunnel on; 0 before any
+    volatile LONG NicRxCpuPlus1;
+
+    // the home core of our queue threads (see OvpnRxQueueChooseHome): as processor indices, for
+    // transmit workers to keep off, and as a group affinity, for the transmit queue thread
+    volatile ULONG64 RxHomeIndexMask;
+    volatile ULONG64 RxHomeAffinity;
+    volatile LONG RxHomeGroup;
+    // 1 + the NIC receive processor the home core was chosen for; written by the receive queue thread
+    ULONG RxHomeForNicPlus1;
+
     BCRYPT_ALG_HANDLE AesAlgHandle;
     BCRYPT_ALG_HANDLE ChachaAlgHandle;
     BCRYPT_ALG_HANDLE HkdfAlgHandle;

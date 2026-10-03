@@ -438,6 +438,18 @@ OvpnSocketProcessIncomingPacket(_In_ POVPN_DEVICE device, _In_reads_(packetLengt
     }
 }
 
+// Our receive callbacks run on the NIC's receive thread: note its processor, so our queue threads
+// can be kept off it (OvpnRxQueueHoldHome). Written only when it changes, as this runs per receive.
+static
+VOID
+OvpnSocketNoteNicCpu(_In_ POVPN_DEVICE device)
+{
+    LONG const plus1 = (LONG)KeGetCurrentProcessorNumberEx(NULL) + 1;
+    if (ReadNoFence(&device->NicRxCpuPlus1) != plus1) {
+        WriteNoFence(&device->NicRxCpuPlus1, plus1);
+    }
+}
+
 _Must_inspect_result_
 static
 NTSTATUS
@@ -449,6 +461,8 @@ OvpnSocketUdpReceiveFromEvent(_In_ PVOID socketContext, ULONG flags, _In_opt_ PW
         LOG_ERROR("TransportSocket is not initialized");
         return STATUS_SUCCESS;
     }
+
+    OvpnSocketNoteNicCpu(device);
 
     while (dataIndication != NULL) {
         PMDL mdl = dataIndication->Buffer.Mdl;
@@ -542,6 +556,8 @@ OvpnSocketTcpReceiveEvent(_In_opt_ PVOID socketContext, _In_ ULONG flags, _In_op
     POVPN_DEVICE device = (POVPN_DEVICE)socketContext;
 
     OvpnSocketTcpState* tcpState = &device->Socket.TcpState;
+
+    OvpnSocketNoteNicCpu(device);
 
     // iterate over data indications
     while (dataIndication != NULL) {
