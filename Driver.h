@@ -102,6 +102,9 @@ struct OVPN_DEVICE {
     volatile LONG RxHomeGroup;
     // 1 + the NIC receive processor the home core was chosen for; written by the receive queue thread
     ULONG RxHomeForNicPlus1;
+    // the receive queue thread's view of the dominant NIC receive core (see OvpnRxQueueHoldHome)
+    ULONG RxNicSamplePlus1;
+    LONG RxNicScore;
 
     BCRYPT_ALG_HANDLE AesAlgHandle;
     BCRYPT_ALG_HANDLE ChachaAlgHandle;

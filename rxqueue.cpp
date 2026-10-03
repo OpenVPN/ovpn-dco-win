@@ -179,9 +179,14 @@ OvpnRxQueueChooseHome(_Inout_ OVPN_DEVICE* device, ULONG rxIndex)
         TraceLoggingValue(home.Number, "home"), TraceLoggingNTStatus(status, "status"));
 }
 
+// Steer only while one NIC receive core carries most of the traffic, as it does for a client or a
+// server with one busy peer; a server's peers spread over many cores, and there is no core to avoid.
+// Samples the core once per Advance: +1 when it repeats, -4 when it changes, so it must be about 80%.
+#define OVPN_RX_HOME_SCORE_MAX 32
+#define OVPN_RX_HOME_SCORE_ON 16
+
 // Holds this thread to the home core for one Advance, choosing a new home first if the NIC's receive
 // core moved; the thread is not ours, so the caller reverts it before returning.
-// Point to point only: a server's peers arrive on many receive cores.
 static
 BOOLEAN
 OvpnRxQueueHoldHome(_Inout_ OVPN_DEVICE* device, _Out_ PGROUP_AFFINITY previous)
@@ -190,7 +195,7 @@ OvpnRxQueueHoldHome(_Inout_ OVPN_DEVICE* device, _Out_ PGROUP_AFFINITY previous)
 
     // NetAdapterCx may run the queue in a DPC (Server 2022 does), where the current thread is
     // whichever one it interrupted: nothing to hold, and the thread calls are not allowed there
-    if ((KeGetCurrentIrql() != PASSIVE_LEVEL) || (device->Mode != OVPN_MODE_P2P)) {
+    if (KeGetCurrentIrql() != PASSIVE_LEVEL) {
         return FALSE;
     }
 
@@ -198,9 +203,25 @@ OvpnRxQueueHoldHome(_Inout_ OVPN_DEVICE* device, _Out_ PGROUP_AFFINITY previous)
     if (rxPlus1 == 0) {
         return FALSE;
     }
-    if ((ULONG)rxPlus1 != device->RxHomeForNicPlus1) {
-        device->RxHomeForNicPlus1 = (ULONG)rxPlus1;
-        OvpnRxQueueChooseHome(device, (ULONG)rxPlus1 - 1);
+    if ((ULONG)rxPlus1 == device->RxNicSamplePlus1) {
+        device->RxNicScore = min(device->RxNicScore + 1, OVPN_RX_HOME_SCORE_MAX);
+    }
+    else if ((device->RxNicScore -= 4) <= 0) {
+        device->RxNicSamplePlus1 = (ULONG)rxPlus1;
+        device->RxNicScore = 1;
+    }
+    if (device->RxNicScore < OVPN_RX_HOME_SCORE_ON) {
+        // no dominant core: drop the home, so transmit workers and the transmit queue thread go anywhere
+        if (device->RxHomeForNicPlus1 != 0) {
+            device->RxHomeForNicPlus1 = 0;
+            WriteULong64NoFence(&device->RxHomeIndexMask, 0);
+            WriteULong64NoFence(&device->RxHomeAffinity, 0);
+        }
+        return FALSE;
+    }
+    if (device->RxNicSamplePlus1 != device->RxHomeForNicPlus1) {
+        device->RxHomeForNicPlus1 = device->RxNicSamplePlus1;
+        OvpnRxQueueChooseHome(device, device->RxNicSamplePlus1 - 1);
     }
     USHORT const group = (USHORT)ReadNoFence(&device->RxHomeGroup);
     KAFFINITY const home = (KAFFINITY)ReadULong64NoFence((volatile DWORD64*)&device->RxHomeAffinity);
