@@ -172,7 +172,9 @@ OvpnRxQueueChooseHome(_Inout_ OVPN_DEVICE* device, ULONG rxIndex)
     WriteNoFence(&device->RxHomeGroup, (LONG)home.Group);
     WriteULong64NoFence(&device->RxHomeAffinity, (ULONG64)homeMask);
 
-    NTSTATUS const status = ZwSetInformationThread(ZwCurrentThread(), ThreadIdealProcessorEx, &home, sizeof(home));
+    // the call returns the previous ideal processor in its buffer, so give it a copy
+    PROCESSOR_NUMBER ideal = home;
+    NTSTATUS const status = ZwSetInformationThread(ZwCurrentThread(), ThreadIdealProcessorEx, &ideal, sizeof(ideal));
     LOG_INFO("Rx queue thread given a home core", TraceLoggingValue(rxIndex, "rxCpu"),
         TraceLoggingValue(home.Number, "home"), TraceLoggingNTStatus(status, "status"));
 }
