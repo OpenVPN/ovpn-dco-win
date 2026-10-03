@@ -372,6 +372,42 @@ OvpnTxQueueResume(_In_ POVPN_TXQUEUE queue)
     }
 }
 
+// The transmit queue thread copies every packet, and on a worker's core it slows the flow that
+// worker encrypts; workers keep off the receive queue thread's home core, so this thread is held
+// there for one Advance and reverted after, as that thread is. Point to point only.
+static
+BOOLEAN
+OvpnTxQueueHoldHome(_In_ POVPN_DEVICE device, _Out_ PGROUP_AFFINITY previous)
+{
+    RtlZeroMemory(previous, sizeof(*previous));
+
+    // not in a DPC: see OvpnRxQueueHoldHome
+    if ((KeGetCurrentIrql() != PASSIVE_LEVEL) || (device->Mode != OVPN_MODE_P2P)) {
+        return FALSE;
+    }
+
+    // group and mask are read apart, so a home that moves between them gives a stale pairing;
+    // keeping to the group's active processors makes that harmless
+    USHORT const group = (USHORT)ReadNoFence(&device->RxHomeGroup);
+    KAFFINITY const home = (KAFFINITY)ReadULong64NoFence((volatile DWORD64*)&device->RxHomeAffinity) &
+        KeQueryGroupAffinity(group);
+    if (home == 0) {
+        return FALSE;
+    }
+
+    PROCESSOR_NUMBER here;
+    KeGetCurrentProcessorNumberEx(&here);
+    if ((here.Group == group) && (home & ((KAFFINITY)1 << here.Number))) {
+        return FALSE;
+    }
+
+    GROUP_AFFINITY homeAffinity = {};
+    homeAffinity.Group = group;
+    homeAffinity.Mask = home;
+    KeSetSystemGroupAffinityThread(&homeAffinity, previous);
+    return TRUE;
+}
+
 KDEFERRED_ROUTINE OvpnTxWorkerDpc;
 
 _Use_decl_annotations_
@@ -451,9 +487,16 @@ OvpnTxToWorker(_In_ POVPN_TXQUEUE queue, _In_ OvpnPeerContext* peer, _In_ OVPN_T
     ULONG workerCount)
 {
     // Not on the core that receives the tunnel, the busiest one: a flow whose ACKs
-    // are encrypted there too saturates it, and the whole tunnel slows down.
+    // are encrypted there too saturates it, and the whole tunnel slows down. Nor on the
+    // receive queue thread's home core: see OvpnRxQueueChooseHome.
+    ULONG const rxCpu = ReadULongNoFence(&peer->RxProcessor);
+    ULONG64 const home = ReadULong64NoFence((volatile DWORD64*)&queue->Workers[0].Device->RxHomeIndexMask);
     ULONG index = hash % workerCount;
-    if (queue->Workers[index].Processor == ReadULongNoFence(&peer->RxProcessor)) {
+    for (ULONG tries = 0; tries < workerCount; ++tries) {
+        ULONG const p = queue->Workers[index].Processor;
+        if ((p != rxCpu) && !((p < 64) && (home & (1ULL << p)))) {
+            break;
+        }
         index = (index + 1) % workerCount;
     }
     POVPN_TX_WORKER worker = &queue->Workers[index];
@@ -673,6 +716,9 @@ OvpnEvtTxQueueAdvance(NETPACKETQUEUE netPacketQueue)
     }
     BOOLEAN isTcp = socket.Tcp;
 
+    GROUP_AFFINITY previous;
+    BOOLEAN const moved = OvpnTxQueueHoldHome(device, &previous);
+
     OVPN_TX_BUFFER* txBufferHead = NULL;
     OVPN_TX_BUFFER* txBufferTail = NULL;
     SOCKADDR_STORAGE headSockaddr = {0};
@@ -716,6 +762,10 @@ OvpnEvtTxQueueAdvance(NETPACKETQUEUE netPacketQueue)
 
     if (queue->WorkerCount > 0) {
         OvpnTxWakeWorkers(queue);
+    }
+
+    if (moved) {
+        KeRevertToUserGroupAffinityThread(&previous);
     }
 }
 
