@@ -72,6 +72,10 @@ _Must_inspect_result_
 NTSTATUS
 OvpnSocketSend(_In_ OvpnSocketRef* socket, _In_ OVPN_TX_BUFFER* buffer, _In_opt_ SOCKADDR* sa);
 
+// TCP data: sends a chain of encrypted buffers, linked by WskBufList.Next, as one stream write
+VOID
+OvpnSocketSendTcpBatch(_In_ OvpnSocketRef* socket, _In_ OVPN_TX_BUFFER* head);
+
 // Rundown for device->Socket: the reference covers the send call, not its completion,
 // which is what the device lock gave before. Callers may be at DISPATCH_LEVEL.
 struct OVPN_DEVICE;

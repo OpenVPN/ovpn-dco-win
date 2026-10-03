@@ -986,8 +986,100 @@ OvpnSocketDetach(POVPN_DEVICE device)
     return socket;
 }
 
-NTSTATUS
+// Data packets of one transmit pass over TCP, copied back to back behind their length prefixes so
+// the stream gets one send instead of one per packet.
+struct OVPN_TCP_BATCH
+{
+    OVPN_DEVICE* Device;
+    PMDL Mdl;
+    ULONG Packets;
+    ULONG Len;
+#pragma warning(suppress:4200) //nonstandard extension used: zero-sized array in struct/union
+    UCHAR Data[];
+};
+
+IO_COMPLETION_ROUTINE OvpnSocketSendTcpBatchComplete;
+
 _Use_decl_annotations_
+NTSTATUS
+OvpnSocketSendTcpBatchComplete(PDEVICE_OBJECT deviceObj, PIRP irp, PVOID ctx)
+{
+    UNREFERENCED_PARAMETER(deviceObj);
+
+    OVPN_TCP_BATCH* batch = (OVPN_TCP_BATCH*)ctx;
+
+    if (irp->IoStatus.Status != STATUS_SUCCESS) {
+        LOG_ERROR("Send failed", TraceLoggingNTStatus(irp->IoStatus.Status, "status"));
+        InterlockedExchangeAddNoFence(&batch->Device->Stats.LostOutDataPackets, (LONG)batch->Packets);
+    }
+    else {
+        InterlockedExchangeAddNoFence64(&batch->Device->Stats.TransportBytesSent, irp->IoStatus.Information);
+    }
+
+    IoFreeMdl(batch->Mdl);
+    ExFreePoolWithTag(batch, 'tbvo');
+    IoFreeIrp(irp);
+
+    return STATUS_MORE_PROCESSING_REQUIRED;
+}
+
+_Use_decl_annotations_
+VOID
+OvpnSocketSendTcpBatch(OvpnSocketRef* ovpnSocket, OVPN_TX_BUFFER* head)
+{
+    OVPN_DEVICE* device = (OVPN_DEVICE*)OvpnTxBufferPoolGetContext(head->Pool);
+
+    ULONG len = 0;
+    ULONG packets = 0;
+    for (OVPN_TX_BUFFER* b = head; b != NULL; b = (OVPN_TX_BUFFER*)b->WskBufList.Next) {
+        len += 2 + (ULONG)b->Len;
+        ++packets;
+    }
+
+    OVPN_TCP_BATCH* batch = (OVPN_TCP_BATCH*)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(OVPN_TCP_BATCH) + len, 'tbvo');
+    PMDL mdl = (batch != NULL) ? IoAllocateMdl(batch->Data, len, FALSE, FALSE, NULL) : NULL;
+    PIRP irp = (mdl != NULL) ? IoAllocateIrp(1, FALSE) : NULL;
+    if ((irp == NULL) || (ovpnSocket->Socket == NULL)) {
+        if (irp != NULL) {
+            IoFreeIrp(irp);
+        }
+        if (mdl != NULL) {
+            IoFreeMdl(mdl);
+        }
+        if (batch != NULL) {
+            ExFreePoolWithTag(batch, 'tbvo');
+        }
+        InterlockedExchangeAddNoFence(&device->Stats.LostOutDataPackets, (LONG)packets);
+        OvpnSocketFinalizeTxBuffer(head, STATUS_INSUFFICIENT_RESOURCES, 0);
+        return;
+    }
+    MmBuildMdlForNonPagedPool(mdl);
+
+    batch->Device = device;
+    batch->Mdl = mdl;
+    batch->Packets = packets;
+    batch->Len = len;
+
+    // the length prefix is the OpenVPN protocol's framing over TCP
+    PUCHAR p = batch->Data;
+    for (OVPN_TX_BUFFER* b = head; b != NULL; b = (OVPN_TX_BUFFER*)b->WskBufList.Next) {
+        *(UINT16 UNALIGNED*)p = RtlUshortByteSwap((USHORT)b->Len);
+        RtlCopyMemory(p + 2, b->Data, b->Len);
+        p += 2 + b->Len;
+    }
+
+    // copied, so the buffers go back now rather than at completion
+    OvpnSocketFinalizeTxBuffer(head, STATUS_SUCCESS, 0);
+
+    IoSetCompletionRoutine(irp, OvpnSocketSendTcpBatchComplete, batch, TRUE, TRUE, TRUE);
+
+    WSK_BUF wskBuf{ mdl, 0, len };
+    PWSK_PROVIDER_CONNECTION_DISPATCH connectionDispatch = (PWSK_PROVIDER_CONNECTION_DISPATCH)ovpnSocket->Socket->Dispatch;
+    LOG_IF_NOT_NT_SUCCESS(connectionDispatch->WskSend(ovpnSocket->Socket, &wskBuf, WSK_FLAG_NODELAY, irp));
+}
+
+_Use_decl_annotations_
+NTSTATUS
 OvpnSocketSend(OvpnSocketRef* ovpnSocket, OVPN_TX_BUFFER* buffer, SOCKADDR* sa) {
     OVPN_DEVICE* device = (OVPN_DEVICE*)OvpnTxBufferPoolGetContext(buffer->Pool);
 
