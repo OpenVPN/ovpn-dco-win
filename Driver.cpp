@@ -448,6 +448,12 @@ OvpnStopVPN(_In_ POVPN_DEVICE device)
     device->Mode = OVPN_MODE_P2P;
     ExReleaseSpinLockExclusive(&device->SpinLock, kirql);
 
+    // the next session, client or server, chooses its own home core, if any
+    WriteNoFence(&device->NicRxCpuPlus1, 0);
+    WriteULong64NoFence((volatile DWORD64*)&device->RxHomeIndexMask, 0);
+    WriteULong64NoFence((volatile DWORD64*)&device->RxHomeAffinity, 0);
+    device->RxHomeForNicPlus1 = 0;
+
     if (socket != NULL) {
         LOG_IF_NOT_NT_SUCCESS(OvpnSocketClose(socket));
     }
