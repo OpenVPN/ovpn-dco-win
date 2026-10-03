@@ -31,16 +31,16 @@ at once. Each figure is the median of three runs.
 
 | What you are doing | Speed |
 | --- | --- |
-| Downloading over a UDP tunnel | **7.4 Gbit/s** |
-| Uploading over a UDP tunnel | **7.3 Gbit/s** |
-| Downloading over a TCP tunnel | 5.1 Gbit/s |
-| Uploading over a TCP tunnel | 2.8 Gbit/s |
-| Windows to Windows, one way | **6.7 Gbit/s** |
+| Downloading over a UDP tunnel | **7.0 Gbit/s** |
+| Uploading over a UDP tunnel | **7.1 Gbit/s** |
+| Downloading over a TCP tunnel | 6.0 Gbit/s |
+| Uploading over a TCP tunnel | 4.5 Gbit/s |
+| Windows to Windows, one way | **6.3 Gbit/s** |
 | Windows to Windows, the other way | **6.0 Gbit/s** |
 
-For comparison, two Linux machines on the same hardware reach 5.5 to 7.4 Gbit/s, depending
-on the direction. So over a UDP tunnel a Windows machine with ovpn-dco-win is as fast as
-Linux, at about what the cloud network gives one tunnel.
+For comparison, two Linux machines on the same hardware reach 7.4 Gbit/s in either direction,
+about what the cloud network gives one tunnel. Over a UDP tunnel a Windows machine with
+ovpn-dco-win comes about 5% short of that.
 
 ### It uses all your processor cores
 
