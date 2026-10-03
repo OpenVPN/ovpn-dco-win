@@ -34,8 +34,12 @@ struct OvpnPeerContext
     // TxLock is the peer lock: CryptoContext.Tx, Remote, Timer, keepalive. The
     // receive path's crypto state is carved out under RxLock so RX never waits
     // on TX. Never held together; cache-aligned so the two CPUs share no line.
-    DECLSPEC_CACHEALIGN KSPIN_LOCK RxLock;
-    DECLSPEC_CACHEALIGN KSPIN_LOCK TxLock;
+    // Transmit takes TxLock shared: encryption only reads the key and the packet id is
+    // claimed atomically. Changing a key, the address or the timer takes it exclusive.
+    // Receive takes RxLock shared to decrypt, and to check replay, which is safe because
+    // deliveries are one at a time. Changing or moving a receive key takes it exclusive.
+    DECLSPEC_CACHEALIGN EX_SPIN_LOCK RxLock;
+    DECLSPEC_CACHEALIGN EX_SPIN_LOCK TxLock;
 
     OvpnCryptoContext CryptoContext;
 
@@ -63,14 +67,16 @@ struct OvpnPeerContext
     } VpnAddrs;
 
     struct {
-        union {
-            SOCKADDR_IN IPv4;
-            SOCKADDR_IN6 IPv6;
-        } Remote;
-
+        OVPN_REMOTE_ADDR Remote;
     } TransportAddrs;
 
     LONG RefCounter;
+
+    // the core its packets arrive on, MAXULONG before the first; transmit workers stay off it
+    ULONG RxProcessor;
+
+    // times RxProcessor changed; paces its log line
+    ULONG RxProcessorMoves;
 
     LONG64 LinkRxBytes;
     LONG64 LinkTxBytes;

@@ -52,27 +52,50 @@ OvpnCryptoEncrypt(OvpnCryptoTxContext* tx, PUCHAR buf, SIZE_T len)
 
 _Use_decl_annotations_
 NTSTATUS
-OvpnCryptoDecrypt(OvpnCryptoRxContext* rx, UCHAR keyId, PUCHAR cipherText, SIZE_T len, PUCHAR plainText, UINT16* sendEpoch)
+OvpnCryptoAdvanceSendKey(OvpnCryptoTxContext* tx)
 {
-    *sendEpoch = 0;
+    if (!tx->Options.UseEpoch) {
+        // only epoch keys are ever used up, so only they ask for this
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+
+    return OvpnCryptoEpochAdvanceSendKey(&tx->Primary, &tx->Options);
+}
+
+static
+OvpnCryptoRxState*
+OvpnCryptoRxStateByKeyId(OvpnCryptoRxContext* rx, UCHAR keyId)
+{
+    if (rx->Primary.KeyId == keyId) {
+        return &rx->Primary;
+    }
+    else if (rx->Secondary.KeyId == keyId) {
+        return &rx->Secondary;
+    }
+
+    return NULL;
+}
+
+_Use_decl_annotations_
+NTSTATUS
+OvpnCryptoDecrypt(OvpnCryptoRxContext* rx, UCHAR keyId, PUCHAR cipherText, SIZE_T len, PUCHAR plainText, OvpnCryptoRxResult* result)
+{
+    RtlZeroMemory(result, sizeof(*result));
 
     if (rx->Decrypt == nullptr) {
         return STATUS_INVALID_DEVICE_STATE;
     }
 
-    OvpnCryptoRxState* state = NULL;
-    if (rx->Primary.KeyId == keyId) {
-        state = &rx->Primary;
-    }
-    else if (rx->Secondary.KeyId == keyId) {
-        state = &rx->Secondary;
-    }
-    else {
+    OvpnCryptoRxState* state = OvpnCryptoRxStateByKeyId(rx, keyId);
+    if (state == NULL) {
         LOG_ERROR("No key for KeyId", TraceLoggingValue(keyId, "KeyId"));
         return STATUS_INVALID_DEVICE_STATE;
     }
 
-    return rx->Decrypt(state, cipherText, len, plainText, &rx->Options, sendEpoch);
+    result->KeyId = keyId;
+    result->Generation = state->Generation;
+
+    return rx->Decrypt(state, cipherText, len, plainText, &rx->Options, &result->PacketId, &result->Epoch);
 }
 
 _Use_decl_annotations_
@@ -108,11 +131,12 @@ OvpnProtoOp32Compose(UINT opcode, UINT keyId, UINT opPeerId)
 OVPN_CRYPTO_DECRYPT OvpnCryptoDecryptNone;
 
 _Use_decl_annotations_
-NTSTATUS OvpnCryptoDecryptNone(OvpnCryptoRxState* rx, UCHAR* bufIn, SIZE_T len, UCHAR* bufOut, OvpnCryptoOptions* opts, UINT16* sendEpoch)
+NTSTATUS OvpnCryptoDecryptNone(OvpnCryptoRxState* rx, UCHAR* bufIn, SIZE_T len, UCHAR* bufOut, OvpnCryptoOptions* opts, UINT64* packetId, UINT16* epoch)
 {
     UNREFERENCED_PARAMETER(rx);
 
-    *sendEpoch = 0;
+    *packetId = 0;
+    *epoch = 0;
 
     BOOLEAN useEpoch = (opts != NULL) && opts->UseEpoch;
     SIZE_T pktIdLen = useEpoch ? 8 : 4;
@@ -124,7 +148,9 @@ NTSTATUS OvpnCryptoDecryptNone(OvpnCryptoRxState* rx, UCHAR* bufIn, SIZE_T len, 
         return STATUS_DATA_ERROR;
     }
 
-    RtlCopyMemory(bufOut, bufIn, len);
+    if (bufOut != bufIn) {
+        RtlCopyMemory(bufOut, bufIn, len);
+    }
 
     return STATUS_SUCCESS;
 }
@@ -144,9 +170,10 @@ OvpnCryptoEncryptNone(OvpnCryptoTxState* tx, UCHAR* buf, SIZE_T len, OvpnCryptoO
     op = RtlUlongByteSwap(op);
     *(UINT32*)(buf) = op;
 
-    // prepend with pktid
-    static ULONG pktid;
-    ULONG pktidNetwork = RtlUlongByteSwap(pktid++);
+    // prepend with pktid. Atomic because senders now share the key under TxLock held
+    // shared, so several of them reach this at once.
+    static LONG pktid;
+    ULONG pktidNetwork = RtlUlongByteSwap((ULONG)InterlockedIncrement(&pktid) - 1);
     *(UINT32*)(buf + OVPN_DATA_V2_LEN) = pktidNetwork;
 
     return STATUS_SUCCESS;
@@ -194,8 +221,9 @@ OvpnCryptoUninitAlgHandles(_In_ BCRYPT_ALG_HANDLE aesAlgHandle, BCRYPT_ALG_HANDL
     } \
 }
 
+static
 NTSTATUS
-OvpnCryptoCheckReplay(OvpnCryptoRxState* rx, ULONG64 packet_id_net, UINT16 epoch, OvpnCryptoOptions *opts, UINT16* sendEpoch)
+OvpnCryptoCheckReplay(OvpnCryptoRxState* rx, ULONG64 packet_id_net, UINT16 epoch, OvpnCryptoOptions *opts, BOOLEAN exclusive, UINT16* sendEpoch)
 {
     OvpnPktidRecv* recv = NULL;
 
@@ -207,14 +235,22 @@ OvpnCryptoCheckReplay(OvpnCryptoRxState* rx, ULONG64 packet_id_net, UINT16 epoch
     else if (epoch == rx->RetiringKey.Epoch) {
         recv = &rx->PktidRetiring;
     }
-    else {
+    else if ((epoch > rx->Key.Epoch) && (OvpnCryptoEpochLookupDecryptKey(rx, epoch) != NULL)) {
+        if (!exclusive) {
+            return STATUS_RETRY;
+        }
+
         /* We have an epoch that is neither current or old recv key but
          * is authenticated, ie we need to move to a new current recv key.
-         * The send key follows in OvpnCryptoDecrypt, under TxLock. */
+         * The send key follows in the caller, under TxLock. */
         LOG_INFO("Received data packet with new epoch. Updating receive key", TraceLoggingValue(epoch, "epoch"));
         OvpnCryptoEpochReplaceUpdateRecvKey(rx, epoch, opts);
         recv = &rx->Pktid;
         *sendEpoch = epoch;
+    }
+    else {
+        // the receive key moved past this epoch after the packet was decrypted
+        return STATUS_DATA_ERROR;
     }
 
     return OvpnPktidRecvVerify(recv, packet_id_net);
@@ -257,11 +293,12 @@ OVPN_CRYPTO_DECRYPT OvpnCryptoDecryptAEAD;
 
 _Use_decl_annotations_
 NTSTATUS
-OvpnCryptoDecryptAEAD(OvpnCryptoRxState* rx, UCHAR* bufIn, SIZE_T len, UCHAR* bufOut, OvpnCryptoOptions* opts, UINT16* sendEpoch)
+OvpnCryptoDecryptAEAD(OvpnCryptoRxState* rx, UCHAR* bufIn, SIZE_T len, UCHAR* bufOut, OvpnCryptoOptions* opts, UINT64* packetId, UINT16* epoch)
 {
     NTSTATUS status = STATUS_SUCCESS;
 
-    *sendEpoch = 0;
+    *packetId = 0;
+    *epoch = 0;
 
     BOOLEAN authTagEnd = opts->UseEpoch;
     ULONG pktidLen = opts->UseEpoch ? 8 : 4;
@@ -325,7 +362,7 @@ OvpnCryptoDecryptAEAD(OvpnCryptoRxState* rx, UCHAR* bufIn, SIZE_T len, UCHAR* bu
     bufOut += payloadOffset;
     bufIn += payloadOffset;
 
-    // non-chaining mode
+    // non-chaining mode; in place when bufOut is bufIn
     ULONG bytesDone = 0;
     // A key was found but the tag does not verify. Distinct from an unknown epoch, and
     // common when a peer id is reused and a packet from the previous session lands
@@ -338,14 +375,41 @@ OvpnCryptoDecryptAEAD(OvpnCryptoRxState* rx, UCHAR* bufIn, SIZE_T len, UCHAR* bu
         goto done;
     }
 
-    status = OvpnCryptoCheckReplay(rx, packet_id, rx_epoch, opts, sendEpoch);
-    if (!NT_SUCCESS(status)) {
-        LOG_ERROR("Invalid packet_id", TraceLoggingUInt64(packet_id, "packet_id"));
-        return STATUS_DATA_ERROR;
-    }
+    *packetId = packet_id;
+    *epoch = rx_epoch;
 
 done:
     return status;
+}
+
+_Use_decl_annotations_
+NTSTATUS
+OvpnCryptoDecryptAccept(OvpnCryptoRxContext* rx, const OvpnCryptoRxResult* result, BOOLEAN exclusive, UINT16* sendEpoch)
+{
+    *sendEpoch = 0;
+
+    // cipher none has no replay protection
+    if (rx->Decrypt != OvpnCryptoDecryptAEAD) {
+        return STATUS_SUCCESS;
+    }
+
+    OvpnCryptoRxState* state = OvpnCryptoRxStateByKeyId(rx, result->KeyId);
+    if ((state == NULL) || (state->Generation != result->Generation)) {
+        LOG_ERROR("Key replaced while decrypting", TraceLoggingValue(result->KeyId, "KeyId"));
+        return STATUS_DATA_ERROR;
+    }
+
+    NTSTATUS status = OvpnCryptoCheckReplay(state, result->PacketId, result->Epoch, &rx->Options, exclusive, sendEpoch);
+    if (status == STATUS_RETRY) {
+        return status;
+    }
+
+    if (!NT_SUCCESS(status)) {
+        LOG_ERROR("Invalid packet_id", TraceLoggingUInt64(result->PacketId, "packet_id"));
+        return STATUS_DATA_ERROR;
+    }
+
+    return STATUS_SUCCESS;
 }
 
 OVPN_CRYPTO_ENCRYPT OvpnCryptoEncryptAEAD;
@@ -412,7 +476,8 @@ OvpnCryptoEncryptAEAD(OvpnCryptoTxState* tx, UCHAR* buf, SIZE_T len, OvpnCryptoO
     auto payloadOffset = OVPN_DATA_V2_LEN + pktidLen + (authTagEnd ? 0 : AEAD_AUTH_TAG_LEN);
     buf += payloadOffset;
 
-    // non-chaining mode
+    // Not chained, so the per-call state lives in this thread's own authInfo, which is the
+    // one thing CNG says not to share. That is what lets senders share the key.
     ULONG bytesDone = 0;
     GOTO_IF_NOT_NT_SUCCESS(done, status, BCryptEncrypt(tx->Key.Key, buf, (ULONG)len, &authInfo, NULL, 0, buf, (ULONG)len, &bytesDone, 0));
 
@@ -528,13 +593,16 @@ OvpnCryptoNewKey(OvpnPeerContext* peer, POVPN_CRYPTO_DATA_V2 cryptoDataV2, BCRYP
     tx.PeerId = cryptoData->PeerId;
     rx.KeyId = cryptoData->KeyId;
 
+    static LONG generation;
+    rx.Generation = InterlockedIncrement(&generation);
+
     OvpnCryptoDescribeLayout(aead, options.UseEpoch, &layout);
 
     OvpnCryptoContext* cryptoContext = &peer->CryptoContext;
     KIRQL irql;
 
     // install the send side
-    KeAcquireSpinLock(&peer->TxLock, &irql);
+    irql = ExAcquireSpinLockExclusive(&peer->TxLock);
     {
         OvpnCryptoTxState* slot = primary ? &cryptoContext->Tx.Primary : &cryptoContext->Tx.Secondary;
         OvpnCryptoEpochUninitTx(slot);
@@ -544,10 +612,10 @@ OvpnCryptoNewKey(OvpnPeerContext* peer, POVPN_CRYPTO_DATA_V2 cryptoDataV2, BCRYP
         cryptoContext->Tx.Options = options;
         cryptoContext->Tx.Layout = layout;
     }
-    KeReleaseSpinLock(&peer->TxLock, irql);
+    ExReleaseSpinLockExclusive(&peer->TxLock, irql);
 
     // install the receive side; UninitRx also drops the old future and retiring keys
-    KeAcquireSpinLock(&peer->RxLock, &irql);
+    irql = ExAcquireSpinLockExclusive(&peer->RxLock);
     {
         OvpnCryptoRxState* slot = primary ? &cryptoContext->Rx.Primary : &cryptoContext->Rx.Secondary;
         OvpnCryptoEpochUninitRx(slot);
@@ -557,7 +625,7 @@ OvpnCryptoNewKey(OvpnPeerContext* peer, POVPN_CRYPTO_DATA_V2 cryptoDataV2, BCRYP
         cryptoContext->Rx.Options = options;
         cryptoContext->Rx.Layout = layout;
     }
-    KeReleaseSpinLock(&peer->RxLock, irql);
+    ExReleaseSpinLockExclusive(&peer->RxLock, irql);
 
     // scrub the local key material; the handles now belong to the peer
     RtlSecureZeroMemory(&tx, sizeof(tx));
@@ -579,23 +647,23 @@ OvpnCryptoSwapKeys(OvpnPeerContext* peer)
     KIRQL irql;
 
     // one direction at a time; the receive path looks keys up by id, so the gap does not matter
-    KeAcquireSpinLock(&peer->TxLock, &irql);
+    irql = ExAcquireSpinLockExclusive(&peer->TxLock);
     {
         OvpnCryptoTxState tmp = cryptoContext->Tx.Primary;
         cryptoContext->Tx.Primary = cryptoContext->Tx.Secondary;
         cryptoContext->Tx.Secondary = tmp;
         RtlSecureZeroMemory(&tmp, sizeof(tmp));
     }
-    KeReleaseSpinLock(&peer->TxLock, irql);
+    ExReleaseSpinLockExclusive(&peer->TxLock, irql);
 
-    KeAcquireSpinLock(&peer->RxLock, &irql);
+    irql = ExAcquireSpinLockExclusive(&peer->RxLock);
     {
         OvpnCryptoRxState tmp = cryptoContext->Rx.Primary;
         cryptoContext->Rx.Primary = cryptoContext->Rx.Secondary;
         cryptoContext->Rx.Secondary = tmp;
         RtlSecureZeroMemory(&tmp, sizeof(tmp));
     }
-    KeReleaseSpinLock(&peer->RxLock, irql);
+    ExReleaseSpinLockExclusive(&peer->RxLock, irql);
 
     LOG_INFO("Key swapped", TraceLoggingValue(cryptoContext->Tx.Primary.KeyId, "key1"), TraceLoggingValue(cryptoContext->Tx.Secondary.KeyId, "key2"));
 }

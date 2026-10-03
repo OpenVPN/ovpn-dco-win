@@ -53,8 +53,10 @@ jobs:
       - uses: microsoft/setup-msbuild@v2
         with:
           msbuild-architecture: x64
-      - name: Build the driver (Debug x64)
-        run: msbuild /m /p:Configuration=Debug /p:Platform=x64 ovpn-dco-win.vcxproj
+      # The NetAdapterCx 2.1 build: what the installer picks on Server 2022 and later and
+      # on Windows 11, so what the rig machines run in the field.
+      - name: Build the driver (Debug-Win11 x64)
+        run: msbuild /m /p:Configuration=Debug-Win11 /p:Platform=x64 ovpn-dco-win.vcxproj
       # Built by path rather than through the solution: it is a user-mode tool and has no
       # business in the driver's build matrix.
       - name: Build the harness (Release x64)
@@ -63,9 +65,9 @@ jobs:
         with:
           name: ioctl-bits
           path: |
-            x64/Debug/ovpn-dco/ovpn-dco.sys
-            x64/Debug/ovpn-dco/ovpn-dco.inf
-            x64/Debug/ovpn-dco/ovpn-dco.cat
+            x64/Debug-Win11/ovpn-dco/ovpn-dco.sys
+            x64/Debug-Win11/ovpn-dco/ovpn-dco.inf
+            x64/Debug-Win11/ovpn-dco/ovpn-dco.cat
             tests/ioctl/x64/Release/ovpn-ioctl-test.exe
           if-no-files-found: error
 
@@ -190,6 +192,7 @@ jobs:
           find bits -type f -exec cp {} stage/ \;
           cp tests/ioctl/Run-IoctlStress.ps1 \
              tests/stress/windows/Trust-DriverCert.ps1 \
+             tests/stress/windows/Get-NicResets.ps1 \
              tests/stress/windows/Install-Driver.ps1 stage/
           ls -l stage/
           scp -q stage/* target:'C:\ovpn-ioctl\'
@@ -219,6 +222,16 @@ jobs:
           timeout "$(( ${{ inputs.seconds || '120' }} + 420 ))s" \
             ssh target "powershell -NoProfile -ExecutionPolicy Bypass -File C:\\ovpn-ioctl\\Run-IoctlStress.ps1 -Run -Seconds '${{ inputs.seconds || '120' }}'" 2>&1 | tee /tmp/ioctl.log || rc=$?
           if [ "$rc" -ne 0 ]; then
+            # The machine's own adapter stalling looks exactly like a driver that hung and
+            # then recovered: ssh dies, the run stops, and the box answers again moments
+            # later. Ask the event log before blaming the driver.
+            nic=$(ssh -o BatchMode=yes -o ConnectTimeout=20 target \
+                    'powershell -NoProfile -ExecutionPolicy Bypass -File C:\ovpn-ioctl\Get-NicResets.ps1 -Seconds 900' 2>/dev/null || true)
+            [ -n "$nic" ] && echo "$nic"
+            if echo "$nic" | grep -qE 'nic resets: [1-9]|held packets: [1-9]'; then
+              echo "::error::the machine's network adapter reset or held packets during this run, which stops the rig the same way a driver hang does; rerun before reading anything into it"
+              exit 1
+            fi
             if ssh -o BatchMode=yes -o ConnectTimeout=20 target 'echo up' 2>/dev/null | grep -q up; then
               if [ "$rc" -eq 124 ]; then
                 echo "::error::the rig stopped making progress while the machine still answers: the driver deadlocked with a CPU to spare"

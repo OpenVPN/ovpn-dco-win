@@ -96,6 +96,13 @@ jobs:
     - name: Run CMake tests
       run: ctest --test-dir tests/build --build-config Release --output-on-failure
 
+    # docs/INTEGRATION.md points vendors at this code, so a change to uapi/ovpn-dco.h that
+    # breaks it should fail here. Built only: a runner has no driver to run it against.
+    - name: Build the integration guide's example
+      run: |
+        cmake -S docs/example -B docs/example/build -A x64
+        cmake --build docs/example/build --config Release
+
   analyze:
     name: CodeQL (Windows driver)
     # Uploading results needs code scanning, which a private repository only has with

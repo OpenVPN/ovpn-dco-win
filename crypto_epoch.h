@@ -65,8 +65,8 @@ struct OvpnCryptoKeyContext
     BCRYPT_KEY_HANDLE Key;
     UCHAR ImplicitIV[12];
 
-    // number of plaintext blocks encrypted using this key
-    UINT64 PlaintextBlocks;
+    // number of plaintext blocks encrypted using this key, accumulated atomically
+    LONG64 PlaintextBlocks;
     UINT16 Epoch;
 };
 
@@ -147,6 +147,9 @@ struct OvpnCryptoRxState
     OvpnCryptoKeyContext RetiringKey;
     OvpnPktidRecv PktidRetiring;
 
+    // new for every installed key, so a replay check can tell its key was replaced
+    LONG Generation;
+
     UCHAR KeyId;
 };
 
@@ -190,11 +193,16 @@ OvpnCryptoMakeEpochNonce(UCHAR* epochIv, UINT64 packet_id_net, UCHAR* nonce);
 VOID
 OvpnCryptoEpochIterateSendKey(OvpnCryptoTxState* tx, OvpnCryptoOptions* opts);
 
-// Accounts one outgoing packet of len plaintext bytes against the send key,
-// moving to the next epoch first if the key is used up, and returns the
-// packet id to put on the wire. Fails only when the last epoch is used up.
+// Accounts one outgoing packet of len plaintext bytes against the send key and returns
+// the packet id for the wire. The id is claimed atomically. STATUS_RETRY means the key
+// is used up: call OvpnCryptoEpochAdvanceSendKey, then try again.
 NTSTATUS
 OvpnCryptoEpochNextPacketId(OvpnCryptoTxState* tx, OvpnCryptoOptions* opts, SIZE_T len, UINT64* packetId);
+
+// Moves the send key to the next epoch if it is still used up. Caller holds the peer's
+// TxLock so that no sender is claiming ids. Fails only when the last epoch is used up.
+NTSTATUS
+OvpnCryptoEpochAdvanceSendKey(OvpnCryptoTxState* tx, OvpnCryptoOptions* opts);
 
 // Destroy every key handle a state holds and scrub it.
 VOID

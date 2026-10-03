@@ -16,8 +16,13 @@ them. This file describes the shape, and names the variables that hold the value
 | load generator | Linux | perf — it drives the rig and is one tunnel end |
 | stress pair | Windows + Linux | stress, the same two roles on machines of its own |
 | second Windows machine | Windows | `perf-win-win-udp` only |
-| second Linux machine | Linux | `perf-linux-linux-udp` only, and only on a dispatch |
+| second Linux machine | Linux | `perf-linux-linux-udp` only |
 | ioctl target | Windows | ioctl |
+
+Every Windows machine runs Windows Server 2025, the same kernel base as Windows 11 24H2,
+and the rigs deploy the `-Win11` build of the driver, which is what the installer picks
+there. Until October 2026 they ran Server 2022; those machines are kept, stopped, as the
+way back.
 
 Each is named by an Actions variable: `STRESS_DUT_INSTANCE_ID`,
 `STRESS_CLIENT_INSTANCE_ID`, `PERF_PEER_INSTANCE_ID`, `PERF_LINUX_PEER_INSTANCE_ID`,
@@ -54,9 +59,12 @@ variables above.
 * a **cluster placement group** holding all of them, for the reason in `perf/README.md`:
   a tunnel is a single network flow, and outside such a group a single flow is capped
   near 5 Gbps, which is close enough to what the driver achieves to hide the difference;
-* the machines themselves, including hand-made state — a test-signed driver, a trusted
-  signing certificate, an existing DCO adapter, `iperf3`, an OpenVPN build, and the
-  authorised keys that let the load generator reach the others.
+* the machines themselves, including hand-made state — test signing, an existing DCO
+  adapter, `iperf3` (with its cygwin DLLs) in `C:\stage`, an OpenVPN build, the
+  authorised keys that let the load generator reach the others, and inbound firewall
+  rules for UDP 11197, ICMPv4 echo and TCP 5001. A fresh image has none of the rules, and
+  the first thing to fail is stress, whose client namespaces ping the DUT before
+  anything else.
 
 ## What the role may do
 
@@ -136,6 +144,6 @@ the rigs under their own credentials rather than the role.
 
 There is no infrastructure as code yet, and that is the largest gap here. The AWS side —
 role, policy, security group, placement group — is small and entirely amenable to it. The
-machines are harder, because they carry state built by hand: Windows test signing, a
-trusted certificate, an existing adapter, a patched OpenVPN build. Those are documented as
+machines are harder, because they carry state built by hand: Windows test signing, an
+existing adapter, a patched OpenVPN build, the firewall rules above. Those are documented as
 prerequisites in each rig's README but nothing provisions them.

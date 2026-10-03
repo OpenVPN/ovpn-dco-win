@@ -29,6 +29,7 @@
 #include "mss.h"
 #include "trace.h"
 #include "rxqueue.h"
+#include "rxworkers.h"
 #include "timer.h"
 #include "socket.h"
 #include "peer.h"
@@ -216,7 +217,7 @@ OvpnSocketControlPacketReceived(_In_ POVPN_DEVICE device, _In_reads_(len) PUCHAR
 }
 
 static
-VOID OvpnSocketDataPacketReceived(_In_ POVPN_DEVICE device, UCHAR op, UINT32 peerId, _In_reads_(len) PUCHAR cipherTextBuf, SIZE_T len, BOOLEAN dpc, _In_opt_ PSOCKADDR remoteAddr)
+VOID OvpnSocketDataPacketReceived(_In_ POVPN_DEVICE device, UINT32 peerId, _In_reads_(len) PUCHAR cipherTextBuf, SIZE_T len, BOOLEAN dpc, _In_opt_ PSOCKADDR remoteAddr)
 {
     InterlockedExchangeAddNoFence64(&device->Stats.TransportBytesReceived, len);
 
@@ -229,9 +230,24 @@ VOID OvpnSocketDataPacketReceived(_In_ POVPN_DEVICE device, UCHAR op, UINT32 pee
 
     InterlockedExchangeAddNoFence64(&peer->LinkRxBytes, len);
 
+    // written only when it moves, so the transmit side reading it keeps its copy
+    ULONG const processor = KeGetCurrentProcessorNumberEx(NULL);
+    ULONG const was = ReadULongNoFence(&peer->RxProcessor);
+    if (processor != was) {
+        WriteULongNoFence(&peer->RxProcessor, processor);
+
+        // on the 1st, 2nd, 4th... move, so a peer that flaps cannot flood the log; a lost
+        // count from two cores racing only shifts which moves are logged
+        ULONG const moves = ++peer->RxProcessorMoves;
+        if ((moves & (moves - 1)) == 0) {
+            LOG_INFO("Peer receive core", TraceLoggingValue(peerId, "peerId"), TraceLoggingValue(was, "was"),
+                     TraceLoggingValue(processor, "now"), TraceLoggingValue(moves, "moves"));
+        }
+    }
+
     OVPN_RX_BUFFER* buffer;
 
-    // fetch buffer for plaintext
+    // fetch buffer, decrypted in place
     NTSTATUS status = OvpnRxBufferPoolGet(device->RxBufferPool, &buffer);
     if (!NT_SUCCESS(status)) {
         LOG_ERROR("RxBufferPool exhausted");
@@ -240,60 +256,102 @@ VOID OvpnSocketDataPacketReceived(_In_ POVPN_DEVICE device, UCHAR op, UINT32 pee
         return;
     }
 
-    UCHAR keyId = OvpnCryptoKeyIdExtract(op);
-    UINT16 peerEpoch = 0;
+    // the indication is gone when this returns, so the ciphertext and address are copied
+    RtlCopyMemory(OvpnBufferPut(buffer, len), cipherTextBuf, len);
+    buffer->Peer = peer;
 
-    KIRQL kirql;
-    KeAcquireSpinLock(&peer->RxLock, &kirql);
-
-    OvpnCryptoRxContext* rx = &peer->CryptoContext.Rx;
-
-    if (rx->Decrypt) {
-        // extend data area in the buffer for plaintext and crypto overhead
-        OvpnBufferPut(buffer, len);
-
-        status = OvpnCryptoDecrypt(rx, keyId, cipherTextBuf, len, buffer->Data, &peerEpoch);
-
-        if (NT_SUCCESS(status)) {
-            const OvpnCryptoPacketLayout layout = rx->Layout;
-
-            OvpnBufferTrim(buffer, len - layout.TailLen);
-            OvpnBufferPull(buffer, layout.FrontLen);
+    buffer->Remote.si_family = AF_UNSPEC;
+    if ((remoteAddr != nullptr) && (device->Mode == OVPN_MODE_MP)) {
+        if (remoteAddr->sa_family == AF_INET) {
+            RtlCopyMemory(&buffer->Remote, remoteAddr, sizeof(SOCKADDR_IN));
+        }
+        else if (remoteAddr->sa_family == AF_INET6) {
+            RtlCopyMemory(&buffer->Remote, remoteAddr, sizeof(SOCKADDR_IN6));
         }
     }
-    else {
-        status = STATUS_INVALID_DEVICE_STATE;
 
-        // LOG_WARN("CryptoContext not yet initialized");
+    if (!OvpnRxWorkersSubmit(&device->RxWorkers, buffer)) {
+        InterlockedIncrementNoFence(&device->Stats.LostInDataPackets);
+        buffer->Peer = NULL;
+        OvpnRxBufferPoolPut(buffer);
+        OvpnPeerCtxRelease(peer);
     }
+}
+
+_Use_decl_annotations_
+VOID
+OvpnSocketDataPacketDecrypt(OVPN_RX_BUFFER* buffer)
+{
+    OvpnPeerContext* peer = buffer->Peer;
+    UCHAR keyId = OvpnCryptoKeyIdExtract(buffer->Data[0]);
+
+    // shared: workers decrypt with one key at once
+    KIRQL kirql = ExAcquireSpinLockShared(&peer->RxLock);
+
+    OvpnCryptoRxContext* rx = &peer->CryptoContext.Rx;
+    SIZE_T len = buffer->Len;
+
+    NTSTATUS status = OvpnCryptoDecrypt(rx, keyId, buffer->Data, len, buffer->Data, &buffer->CryptoResult);
+    if (NT_SUCCESS(status)) {
+        const OvpnCryptoPacketLayout layout = rx->Layout;
+
+        OvpnBufferTrim(buffer, len - layout.TailLen);
+        OvpnBufferPull(buffer, layout.FrontLen);
+    }
+
+    ExReleaseSpinLockShared(&peer->RxLock, kirql);
+
+    buffer->DecryptStatus = status;
+}
+
+_Use_decl_annotations_
+VOID
+OvpnSocketDataPacketDeliver(OVPN_DEVICE* device, OVPN_RX_BUFFER* buffer)
+{
+    OvpnPeerContext* peer = buffer->Peer;
+    buffer->Peer = NULL;
+
+    NTSTATUS status = buffer->DecryptStatus;
+    UINT16 peerEpoch = 0;
+    UINT16 mss = 0;
+    KIRQL kirql;
 
     if (NT_SUCCESS(status)) {
-        OvpnTimerResetRecv(peer->Timer);
-    }
-    else {
-        OvpnRxBufferPoolPut(buffer);
-    }
+        OvpnCryptoRxContext* rx = &peer->CryptoContext.Rx;
 
-    auto mss = peer->MSS;
+        // Shared is enough for the replay window: deliveries are one at a time. Moving to
+        // a newer epoch replaces keys that workers may be decrypting with, so it is not.
+        kirql = ExAcquireSpinLockShared(&peer->RxLock);
+        status = OvpnCryptoDecryptAccept(rx, &buffer->CryptoResult, FALSE, &peerEpoch);
+        mss = peer->MSS;
+        ExReleaseSpinLockShared(&peer->RxLock, kirql);
 
-    KeReleaseSpinLock(&peer->RxLock, kirql);
+        if (status == STATUS_RETRY) {
+            kirql = ExAcquireSpinLockExclusive(&peer->RxLock);
+            status = OvpnCryptoDecryptAccept(rx, &buffer->CryptoResult, TRUE, &peerEpoch);
+            ExReleaseSpinLockExclusive(&peer->RxLock, kirql);
+        }
+    }
 
     if (peerEpoch != 0) {
         // the peer moved to a newer epoch; follow with our send key, after RxLock is released
-        KeAcquireSpinLock(&peer->TxLock, &kirql);
-        OvpnCryptoFollowPeerEpoch(&peer->CryptoContext.Tx, keyId, peerEpoch);
-        KeReleaseSpinLock(&peer->TxLock, kirql);
+        kirql = ExAcquireSpinLockExclusive(&peer->TxLock);
+        OvpnCryptoFollowPeerEpoch(&peer->CryptoContext.Tx, buffer->CryptoResult.KeyId, peerEpoch);
+        ExReleaseSpinLockExclusive(&peer->TxLock, kirql);
     }
 
-    // decrypt failed - don't proceed
+    // decrypt or replay check failed - don't proceed
     if (!NT_SUCCESS(status)) {
+        OvpnRxBufferPoolPut(buffer);
         OvpnPeerCtxRelease(peer);
         return;
     }
 
+    OvpnTimerResetRecv(peer->Timer);
+
     // check if peer has floated
-    if ((remoteAddr != nullptr) && (device->Mode == OVPN_MODE_MP)) {
-        LOG_IF_NOT_NT_SUCCESS(status = OvpnPeerHandleFloat(device, peer, remoteAddr, dpc));
+    if ((buffer->Remote.si_family != AF_UNSPEC) && (device->Mode == OVPN_MODE_MP)) {
+        LOG_IF_NOT_NT_SUCCESS(status = OvpnPeerHandleFloat(device, peer, (PSOCKADDR)&buffer->Remote, TRUE));
 
         // don't inject packet into OS if float denied
         if (!NT_SUCCESS(status)) {
@@ -308,7 +366,7 @@ VOID OvpnSocketDataPacketReceived(_In_ POVPN_DEVICE device, UCHAR op, UINT32 pee
 
     // ping packet?
     if (OvpnTimerIsKeepaliveMessage(buffer->Data, buffer->Len)) {
-        LOG_INFO("Ping received", TraceLoggingValue(peerId, "peer-id"));
+        LOG_INFO("Ping received", TraceLoggingValue(peer->PeerId, "peer-id"));
 
         // no need to inject ping packet into OS, return buffer to the pool
         OvpnRxBufferPoolPut(buffer);
@@ -320,7 +378,7 @@ VOID OvpnSocketDataPacketReceived(_In_ POVPN_DEVICE device, UCHAR op, UINT32 pee
         if (OvpnMssIsIPv4(buffer->Data, buffer->Len)) {
             // perform Reverse Path Filtering
             auto addr = ((IPV4_HEADER*)(buffer->Data))->SourceAddress;
-            lookup_peer = OvpnFindPeerVPN4(device, addr, dpc);
+            lookup_peer = OvpnFindPeerVPN4(device, addr, TRUE);
             if (lookup_peer == nullptr) {
                 lookup_peer = device->IRoutesIPV4.Find(reinterpret_cast<UCHAR*>(&addr));
             }
@@ -332,7 +390,7 @@ VOID OvpnSocketDataPacketReceived(_In_ POVPN_DEVICE device, UCHAR op, UINT32 pee
         else if (OvpnMssIsIPv6(buffer->Data, buffer->Len)) {
             // perform Reverse Path Filtering
             auto addr = ((IPV6_HEADER*)(buffer->Data))->SourceAddress;
-            lookup_peer = OvpnFindPeerVPN6(device, addr, dpc);
+            lookup_peer = OvpnFindPeerVPN6(device, addr, TRUE);
             if (lookup_peer == nullptr) {
                 lookup_peer = device->IRoutesIPV6.Find(reinterpret_cast<UCHAR*>(&addr));
             }
@@ -373,10 +431,22 @@ OvpnSocketProcessIncomingPacket(_In_ POVPN_DEVICE device, _In_reads_(packetLengt
     UCHAR op = RtlUlongByteSwap(*(ULONG*)(buf)) >> 24;
     if (OvpnCryptoOpcodeExtract(op) == OVPN_OP_DATA_V2) {
         UINT32 peerId = RtlUlongByteSwap(*(ULONG*)(buf)) & OVPN_PEER_ID_MASK;
-        OvpnSocketDataPacketReceived(device, op, peerId, buf, packetLength, irqlDispatch, remoteAddr);
+        OvpnSocketDataPacketReceived(device, peerId, buf, packetLength, irqlDispatch, remoteAddr);
     }
     else {
         OvpnSocketControlPacketReceived(device, buf, packetLength, remoteAddr);
+    }
+}
+
+// Our receive callbacks run on the NIC's receive thread: note its processor, so our queue threads
+// can be kept off it (OvpnRxQueueHoldHome). Written only when it changes, as this runs per receive.
+static
+VOID
+OvpnSocketNoteNicCpu(_In_ POVPN_DEVICE device)
+{
+    LONG const plus1 = (LONG)KeGetCurrentProcessorNumberEx(NULL) + 1;
+    if (ReadNoFence(&device->NicRxCpuPlus1) != plus1) {
+        WriteNoFence(&device->NicRxCpuPlus1, plus1);
     }
 }
 
@@ -392,7 +462,7 @@ OvpnSocketUdpReceiveFromEvent(_In_ PVOID socketContext, ULONG flags, _In_opt_ PW
         return STATUS_SUCCESS;
     }
 
-    PUCHAR packetBuf = device->Socket.UdpState.PacketBuf;
+    OvpnSocketNoteNicCpu(device);
 
     while (dataIndication != NULL) {
         PMDL mdl = dataIndication->Buffer.Mdl;
@@ -401,7 +471,6 @@ OvpnSocketUdpReceiveFromEvent(_In_ PVOID socketContext, ULONG flags, _In_opt_ PW
 
         if (mdl == NULL) {
             LOG_ERROR("WSK_DATAGRAM_INDICATION has NULL MDL");
-            RtlZeroMemory(&device->Socket.UdpState, sizeof(OvpnSocketUdpState));
             dataIndication = dataIndication->Next;
             continue;
         }
@@ -410,24 +479,32 @@ OvpnSocketUdpReceiveFromEvent(_In_ PVOID socketContext, ULONG flags, _In_opt_ PW
             LOG_ERROR("UDP datagram of size <size> is larger than buffer size <buf>",
                 TraceLoggingValue(length, "size"),
                 TraceLoggingValue(OVPN_SOCKET_RX_PACKET_BUFFER_SIZE, "buf"));
-            RtlZeroMemory(&device->Socket.UdpState, sizeof(OvpnSocketUdpState));
             return STATUS_SUCCESS;
         }
 
         PUCHAR buf = NULL;
+        OVPN_RX_BUFFER* scratch = NULL;
 
         if (mdl->Next == NULL) {
             // Fast path: datagram is fully contained in a single MDL
             buf = (PUCHAR)MmGetSystemAddressForMdlSafe(mdl, LowPagePriority | MdlMappingNoExecute);
             if (buf == NULL) {
                 LOG_ERROR("MmGetSystemAddressForMdlSafe failed (non-fragmented)");
-                RtlZeroMemory(&device->Socket.UdpState, sizeof(OvpnSocketUdpState));
                 return STATUS_SUCCESS;
             }
             buf += offset;
         }
         else {
-            // Slow path: reassemble fragmented datagram
+            // Slow path: reassemble a datagram scattered across MDLs. The scratch comes
+            // from the pool, not from the socket: this callback runs on several
+            // processors at once and one buffer between them is a race.
+            if (!NT_SUCCESS(OvpnRxBufferPoolGet(device->RxBufferPool, &scratch))) {
+                LOG_ERROR("RxBufferPool exhausted, dropping fragmented datagram");
+                dataIndication = dataIndication->Next;
+                continue;
+            }
+            PUCHAR const packetBuf = scratch->Head;
+
             SIZE_T bytesRemained = length;
             SIZE_T bytesCopied = 0;
             PMDL currentMdl = mdl;
@@ -437,7 +514,7 @@ OvpnSocketUdpReceiveFromEvent(_In_ PVOID socketContext, ULONG flags, _In_opt_ PW
                 PUCHAR mapped = (PUCHAR)MmGetSystemAddressForMdlSafe(currentMdl, LowPagePriority | MdlMappingNoExecute);
                 if (mapped == NULL) {
                     LOG_ERROR("MmGetSystemAddressForMdlSafe failed (fragmented)");
-                    RtlZeroMemory(&device->Socket.UdpState, sizeof(OvpnSocketUdpState));
+                    OvpnRxBufferPoolPut(scratch);
                     return STATUS_SUCCESS;
                 }
 
@@ -459,6 +536,10 @@ OvpnSocketUdpReceiveFromEvent(_In_ PVOID socketContext, ULONG flags, _In_opt_ PW
             flags & WSK_FLAG_AT_DISPATCH_LEVEL,
             dataIndication->RemoteAddress);
 
+        if (scratch != NULL) {
+            OvpnRxBufferPoolPut(scratch);
+        }
+
         dataIndication = dataIndication->Next;
     }
 
@@ -475,6 +556,8 @@ OvpnSocketTcpReceiveEvent(_In_opt_ PVOID socketContext, _In_ ULONG flags, _In_op
     POVPN_DEVICE device = (POVPN_DEVICE)socketContext;
 
     OvpnSocketTcpState* tcpState = &device->Socket.TcpState;
+
+    OvpnSocketNoteNicCpu(device);
 
     // iterate over data indications
     while (dataIndication != NULL) {
@@ -800,6 +883,13 @@ OvpnSocketFinalizeTxBuffer(_In_ OVPN_TX_BUFFER* buffer, NTSTATUS ioStatus, ULONG
 
     while (buffer != NULL) {
         OVPN_TX_BUFFER* next = (OVPN_TX_BUFFER*)buffer->WskBufList.Next;
+        OVPN_DEVICE* dev = (OVPN_DEVICE*)OvpnTxBufferPoolGetContext(buffer->Pool);
+        if (buffer->ControlChannel) {
+            if ((InterlockedDecrement(&dev->TxControlInFlight) < (OVPN_TX_CONTROL_INFLIGHT_MAX / 2)) &&
+                (InterlockedExchange(&dev->TxControlWaiting, 0) == 1)) {
+                LOG_INFO("Control writes have caught up with their sends");
+            }
+        }
         OvpnTxBufferPoolPut(buffer);
         buffer = next;
     }
@@ -896,8 +986,100 @@ OvpnSocketDetach(POVPN_DEVICE device)
     return socket;
 }
 
-NTSTATUS
+// Data packets of one transmit pass over TCP, copied back to back behind their length prefixes so
+// the stream gets one send instead of one per packet.
+struct OVPN_TCP_BATCH
+{
+    OVPN_DEVICE* Device;
+    PMDL Mdl;
+    ULONG Packets;
+    ULONG Len;
+#pragma warning(suppress:4200) //nonstandard extension used: zero-sized array in struct/union
+    UCHAR Data[];
+};
+
+IO_COMPLETION_ROUTINE OvpnSocketSendTcpBatchComplete;
+
 _Use_decl_annotations_
+NTSTATUS
+OvpnSocketSendTcpBatchComplete(PDEVICE_OBJECT deviceObj, PIRP irp, PVOID ctx)
+{
+    UNREFERENCED_PARAMETER(deviceObj);
+
+    OVPN_TCP_BATCH* batch = (OVPN_TCP_BATCH*)ctx;
+
+    if (irp->IoStatus.Status != STATUS_SUCCESS) {
+        LOG_ERROR("Send failed", TraceLoggingNTStatus(irp->IoStatus.Status, "status"));
+        InterlockedExchangeAddNoFence(&batch->Device->Stats.LostOutDataPackets, (LONG)batch->Packets);
+    }
+    else {
+        InterlockedExchangeAddNoFence64(&batch->Device->Stats.TransportBytesSent, irp->IoStatus.Information);
+    }
+
+    IoFreeMdl(batch->Mdl);
+    ExFreePoolWithTag(batch, 'tbvo');
+    IoFreeIrp(irp);
+
+    return STATUS_MORE_PROCESSING_REQUIRED;
+}
+
+_Use_decl_annotations_
+VOID
+OvpnSocketSendTcpBatch(OvpnSocketRef* ovpnSocket, OVPN_TX_BUFFER* head)
+{
+    OVPN_DEVICE* device = (OVPN_DEVICE*)OvpnTxBufferPoolGetContext(head->Pool);
+
+    ULONG len = 0;
+    ULONG packets = 0;
+    for (OVPN_TX_BUFFER* b = head; b != NULL; b = (OVPN_TX_BUFFER*)b->WskBufList.Next) {
+        len += 2 + (ULONG)b->Len;
+        ++packets;
+    }
+
+    OVPN_TCP_BATCH* batch = (OVPN_TCP_BATCH*)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(OVPN_TCP_BATCH) + len, 'tbvo');
+    PMDL mdl = (batch != NULL) ? IoAllocateMdl(batch->Data, len, FALSE, FALSE, NULL) : NULL;
+    PIRP irp = (mdl != NULL) ? IoAllocateIrp(1, FALSE) : NULL;
+    if ((irp == NULL) || (ovpnSocket->Socket == NULL)) {
+        if (irp != NULL) {
+            IoFreeIrp(irp);
+        }
+        if (mdl != NULL) {
+            IoFreeMdl(mdl);
+        }
+        if (batch != NULL) {
+            ExFreePoolWithTag(batch, 'tbvo');
+        }
+        InterlockedExchangeAddNoFence(&device->Stats.LostOutDataPackets, (LONG)packets);
+        OvpnSocketFinalizeTxBuffer(head, STATUS_INSUFFICIENT_RESOURCES, 0);
+        return;
+    }
+    MmBuildMdlForNonPagedPool(mdl);
+
+    batch->Device = device;
+    batch->Mdl = mdl;
+    batch->Packets = packets;
+    batch->Len = len;
+
+    // the length prefix is the OpenVPN protocol's framing over TCP
+    PUCHAR p = batch->Data;
+    for (OVPN_TX_BUFFER* b = head; b != NULL; b = (OVPN_TX_BUFFER*)b->WskBufList.Next) {
+        *(UINT16 UNALIGNED*)p = RtlUshortByteSwap((USHORT)b->Len);
+        RtlCopyMemory(p + 2, b->Data, b->Len);
+        p += 2 + b->Len;
+    }
+
+    // copied, so the buffers go back now rather than at completion
+    OvpnSocketFinalizeTxBuffer(head, STATUS_SUCCESS, 0);
+
+    IoSetCompletionRoutine(irp, OvpnSocketSendTcpBatchComplete, batch, TRUE, TRUE, TRUE);
+
+    WSK_BUF wskBuf{ mdl, 0, len };
+    PWSK_PROVIDER_CONNECTION_DISPATCH connectionDispatch = (PWSK_PROVIDER_CONNECTION_DISPATCH)ovpnSocket->Socket->Dispatch;
+    LOG_IF_NOT_NT_SUCCESS(connectionDispatch->WskSend(ovpnSocket->Socket, &wskBuf, WSK_FLAG_NODELAY, irp));
+}
+
+_Use_decl_annotations_
+NTSTATUS
 OvpnSocketSend(OvpnSocketRef* ovpnSocket, OVPN_TX_BUFFER* buffer, SOCKADDR* sa) {
     OVPN_DEVICE* device = (OVPN_DEVICE*)OvpnTxBufferPoolGetContext(buffer->Pool);
 

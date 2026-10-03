@@ -71,15 +71,17 @@ jobs:
       - uses: microsoft/setup-msbuild@v2
         with:
           msbuild-architecture: x64
-      - name: Build (Debug x64)
-        run: msbuild /m /p:Configuration=Debug /p:Platform=x64 ovpn-dco-win.vcxproj
+      # The NetAdapterCx 2.1 build: what the installer picks on Server 2022 and later and
+      # on Windows 11, so what the rig machines run in the field.
+      - name: Build (Debug-Win11 x64)
+        run: msbuild /m /p:Configuration=Debug-Win11 /p:Platform=x64 ovpn-dco-win.vcxproj
       - uses: actions/upload-artifact@v4
         with:
           name: driver-debug-x64
           path: |
-            x64/Debug/ovpn-dco/ovpn-dco.sys
-            x64/Debug/ovpn-dco/ovpn-dco.inf
-            x64/Debug/ovpn-dco/ovpn-dco.cat
+            x64/Debug-Win11/ovpn-dco/ovpn-dco.sys
+            x64/Debug-Win11/ovpn-dco/ovpn-dco.inf
+            x64/Debug-Win11/ovpn-dco/ovpn-dco.cat
           if-no-files-found: error
 
   stress:
@@ -230,7 +232,10 @@ jobs:
           # Into a file of its own, pulled in with Include: ~/.ssh/config is how anyone running
           # a rig by hand reaches these hosts, and overwriting it broke the next manual run.
           ssh client "printf 'Host dut\n  HostName $DUT_PRIV\n  User Administrator\n  IdentityFile ~/.ssh/dut_key\n  IdentitiesOnly yes\n  StrictHostKeyChecking accept-new\n' > ~/.ssh/config.stress"
-          ssh client 'touch ~/.ssh/config; grep -q "^Include config.stress" ~/.ssh/config || sed -i "1i Include config.stress" ~/.ssh/config'
+          # First, always, for the same reason as in perf: ssh takes the first match.
+          ssh client 'touch ~/.ssh/config;
+                      { echo "Include config.stress"; grep -vx "Include config.stress" ~/.ssh/config || true; } > ~/.ssh/config.new &&
+                        chmod 600 ~/.ssh/config.new && mv ~/.ssh/config.new ~/.ssh/config'
           # A NIC reset on the device under test is an EC2 fault that takes the adapter
           # down for about ninety seconds. The rig fails a run that lost too much of
           # itself that way, and there is nothing to fix from here, so try again. Any

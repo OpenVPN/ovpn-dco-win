@@ -1,7 +1,7 @@
 #!/bin/bash
 # run-perf.sh --dut <ssh-target> [--mode client|server] [--proto udp|tcp]
 #             [--peer linux|<ssh-target>] [--server-ip <ip>] [--seconds 30] [--runs 3]
-#             [--streams "1 4"] [--min-mbit 1500] [--markdown <file>]
+#             [--streams "1 4"] [--min-mbit 3500] [--markdown <file>]
 #             [--keys <dir>] [--iperf3 <path on Windows>] [--outdir <dir>]
 #
 # Throughput of the driver under test, in both directions.
@@ -33,7 +33,7 @@ MARKDOWN=''
 # Not a performance target: a floor that catches a halving rather than a wobble. The
 # lowest median measured across the tests is about 2100 Mbit/s, so this leaves room for
 # the run-to-run spread these instances have and still fails a real collapse.
-MIN_MBIT=1500
+MIN_MBIT=3500
 SERVER_TUN=10.88.0.1
 
 while [ $# -gt 0 ]; do
@@ -293,13 +293,28 @@ busy_pct=0; busy_core='-'; busy_dpc=0
 if [ -n "$cpu_host" ]; then
     ssh "$cpu_host" "Get-Content '$REMOTE_DIR\\cpu.csv'" 2>/dev/null |
         tr -d '\r' > "$OUTDIR/cpu.csv"
-    # the busiest core over the run, and how much of it was DPC: the receive path runs
-    # in a WSK callback at DISPATCH, where the time belongs to no process
-    stats=$(awk -F, 'NR>1 && $4+0 > m { m=$4+0; c=$3; d=$5+0 } END { printf "%d %s %d", m+0, (c==""?"-":c), d+0 }' "$OUTDIR/cpu.csv" 2>/dev/null)
+    # The busiest core over the run, how much of it was DPC - the receive path runs in a
+    # WSK callback at DISPATCH, where the time belongs to no process - and then the peak
+    # of every other core. One core at 100% says nothing about a fan-out; how many cores
+    # reached it does.
+    stats=$(awk -F, 'NR>1 && $2 != "_Total" {
+                         if ($3+0 > peak[$2]) { peak[$2] = $3+0; dpc[$2] = $4+0 }
+                     }
+                     END {
+                         for (c in peak) if (peak[c] > m) { m = peak[c]; bc = c; bd = dpc[c] }
+                         printf "%d %s %d", m+0, (bc=="" ? "-" : bc), bd+0
+                     }' "$OUTDIR/cpu.csv" 2>/dev/null)
     busy_pct=$(echo "$stats" | cut -d' ' -f1)
     busy_core=$(echo "$stats" | cut -d' ' -f2)
     busy_dpc=$(echo "$stats" | cut -d' ' -f3)
     echo "  busiest core during the run: ${busy_pct:-0}% (core ${busy_core:--}, ${busy_dpc:-0}% of it DPC), see cpu.csv"
+
+    # Peak per core, busiest first, so a run that spread its work looks different from one
+    # that did not.
+    spread=$(awk -F, 'NR>1 && $2 != "_Total" { if ($3+0 > peak[$2]) peak[$2] = $3+0 }
+                      END { for (c in peak) printf "%d:%s\n", peak[c], c }' "$OUTDIR/cpu.csv" 2>/dev/null |
+             sort -rn | awk -F: '{ printf "%s%s(%s%%)", (NR>1 ? " " : ""), $2, $1 }')
+    [ -n "$spread" ] && echo "  peak per core: $spread"
 fi
 
 median() {

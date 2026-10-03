@@ -325,10 +325,29 @@ OvpnEvtIoWrite(WDFQUEUE queue, WDFREQUEST request, size_t length)
         goto done_not_complete;
     }
 
-    // The payload is copied, so a datagram send completes here, the way a socket does.
+    // The payload is copied, so a datagram send completes here, the way a socket does -
+    // until too many are in flight. Then the request is parked on its own send the way
+    // a TCP write is, which is the only thing that makes a writer wait: without it a
+    // caller outruns the completions and the buffers pile up in the transmit pool.
+    BOOLEAN const park = InterlockedCompareExchange(&device->TxControlInFlight, 0, 0) >= OVPN_TX_CONTROL_INFLIGHT_MAX;
+    if (park) {
+        if (InterlockedExchange(&device->TxControlWaiting, 1) == 0) {
+            LOG_WARN("Control writes are outrunning their sends, so writers now wait",
+                     TraceLoggingValue(OVPN_TX_CONTROL_INFLIGHT_MAX, "limit"));
+        }
+        txBuf->IoQueue = device->PendingWritesQueue;
+        GOTO_IF_NOT_NT_SUCCESS(error, status, WdfRequestForwardToIoQueue(request, device->PendingWritesQueue));
+    }
+
+    InterlockedIncrement(&device->TxControlInFlight);
+
     NTSTATUS sendStatus;
     LOG_IF_NOT_NT_SUCCESS(sendStatus = OvpnSocketSend(&socket, txBuf, sa));
     txBuf = NULL; // the send owns it now
+
+    if (park) {
+        goto done_not_complete;
+    }
 
     // STATUS_PENDING would leave the caller's overlapped write looking unfinished
     status = NT_SUCCESS(sendStatus) ? STATUS_SUCCESS : sendStatus;
@@ -424,15 +443,25 @@ OvpnStopVPN(_In_ POVPN_DEVICE device)
     // No lock needed: unpublished and drained, so nothing is reading these.
     device->Socket.Tcp = FALSE;
     RtlZeroMemory(&device->Socket.TcpState, sizeof(OvpnSocketTcpState));
-    RtlZeroMemory(&device->Socket.UdpState, sizeof(OvpnSocketUdpState));
 
     KIRQL kirql = ExAcquireSpinLockExclusive(&device->SpinLock);
     device->Mode = OVPN_MODE_P2P;
     ExReleaseSpinLockExclusive(&device->SpinLock, kirql);
 
+    // the next session, client or server, chooses its own home core, if any
+    WriteNoFence(&device->NicRxCpuPlus1, 0);
+    WriteULong64NoFence((volatile DWORD64*)&device->RxHomeIndexMask, 0);
+    WriteULong64NoFence((volatile DWORD64*)&device->RxHomeAffinity, 0);
+    device->RxHomeForNicPlus1 = 0;
+    device->RxNicSamplePlus1 = 0;
+    device->RxNicScore = 0;
+
     if (socket != NULL) {
         LOG_IF_NOT_NT_SUCCESS(OvpnSocketClose(socket));
     }
+
+    // no receive callbacks after the close; let the packets they handed off land first
+    OvpnRxWorkersFlush(&device->RxWorkers);
 
     // flush buffers in control queue so that client won't get control channel messages from previous session.
     // under ControlRxLock: else a reader's put-back re-fills the queue after the drain
@@ -788,6 +817,8 @@ VOID OvpnEvtDeviceCleanup(WDFOBJECT obj) {
 
     OVPN_DEVICE* device = OvpnGetDeviceContext(obj);
 
+    OvpnRxWorkersStop(&device->RxWorkers);
+
     OvpnTxBufferPoolDelete((OVPN_BUFFER_POOL)device->TxBufferPool);
     OvpnRxBufferPoolDelete((OVPN_BUFFER_POOL)device->RxBufferPool);
 
@@ -972,11 +1003,13 @@ OvpnEvtDeviceAdd(WDFDRIVER wdfDriver, PWDFDEVICE_INIT deviceInit) {
     WDF_IO_QUEUE_CONFIG_INIT(&queueConfig, WdfIoQueueDispatchManual);
     GOTO_IF_NOT_NT_SUCCESS(done, status, WdfIoQueueCreate(wdfDevice, &queueConfig, WDF_NO_OBJECT_ATTRIBUTES, &device->PendingNotificationRequestsQueue));
 
-    GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnTxBufferPoolCreate(&device->TxBufferPool, device));
+    GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnTxBufferPoolCreate(&device->TxBufferPool, device, &device->TxDataInFlight));
     GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnRxBufferPoolCreate(&device->RxBufferPool));
 
     GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnBufferQueueCreate(&device->ControlRxBufferQueue));
     GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnBufferQueueCreate(&device->DataRxBufferQueue));
+
+    OvpnRxWorkersInitialize(&device->RxWorkers, device);
 
     // constructors are not called for the members of WDF object context, so we use Init() method
     device->PendingNotificationsQueue.Init();

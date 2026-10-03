@@ -26,6 +26,8 @@
 #include <wdm.h>
 #include <wsk.h>
 
+#include "pktid.h"
+
 #define OVPN_SOCKET_RX_PACKET_BUFFER_SIZE 2048
 #define OVPN_BUFFER_HEADROOM 30 // prepend TCP size (2 bytes) + max front crypto overhead (28 bytes)
 #define OVPN_BUFFER_TAILROOM 16 // max AEAD auth tag appended at packet tail (epoch mode)
@@ -54,10 +56,16 @@ struct OVPN_TX_BUFFER
 
     OVPN_TX_BUFFER_POOL Pool;
 
+    // the peer this buffer is being sent to, with a reference held, while a worker has it
+    struct OvpnPeerContext* Peer;
+
     LIST_ENTRY PoolListEntry;
 
     // control channel packet, not data channel
     BOOLEAN ControlChannel;
+
+    // set while this buffer is counted in device->TxDataInFlight (datapath worker path)
+    BOOLEAN CountedInFlight;
 
     // set only when a write request is parked waiting for this send, which is TCP only
     WDFQUEUE IoQueue;
@@ -82,6 +90,14 @@ struct OVPN_RX_BUFFER
     LIST_ENTRY QueueListEntry;
 
     OVPN_RX_BUFFER_POOL Pool;
+
+    // From receive to delivery of a data packet: its peer, with a reference held,
+    // what decryption found, and the sender's address in MP mode (else AF_UNSPEC)
+    struct OvpnPeerContext* Peer;
+    OvpnCryptoRxResult CryptoResult;
+    NTSTATUS DecryptStatus;
+    volatile LONG Decrypted;
+    SOCKADDR_INET Remote;
 
     #pragma warning(suppress:4200) //nonstandard extension used: zero-sized array in struct/union
     UCHAR Head[];
@@ -119,7 +135,7 @@ OvpnTxBufferPush(_In_ OVPN_TX_BUFFER* work, SIZE_T len);
 
 _Must_inspect_result_
 NTSTATUS
-OvpnTxBufferPoolCreate(OVPN_TX_BUFFER_POOL* handle, VOID* ctx);
+OvpnTxBufferPoolCreate(OVPN_TX_BUFFER_POOL* handle, VOID* ctx, volatile LONG* inFlight);
 
 VOID*
 OvpnTxBufferPoolGetContext(OVPN_TX_BUFFER_POOL handle);
@@ -150,6 +166,22 @@ OvpnBufferQueueEnqueue(OVPN_BUFFER_QUEUE handle, PLIST_ENTRY listEntry);
 
 VOID
 OvpnBufferQueueEnqueueHead(OVPN_BUFFER_QUEUE handle, PLIST_ENTRY listEntry);
+
+// Moves every entry of from onto the empty list to without walking it; from is left empty.
+static inline
+VOID
+OvpnListMoveAll(_Inout_ PLIST_ENTRY from, _Out_ PLIST_ENTRY to)
+{
+    if (IsListEmpty(from)) {
+        InitializeListHead(to);
+        return;
+    }
+    to->Flink = from->Flink;
+    to->Blink = from->Blink;
+    to->Flink->Blink = to;
+    to->Blink->Flink = to;
+    InitializeListHead(from);
+}
 
 LIST_ENTRY*
 OvpnBufferQueueDequeue(OVPN_BUFFER_QUEUE handle);

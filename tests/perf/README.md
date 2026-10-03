@@ -27,9 +27,9 @@ them, so a driver number can be read as a fraction of what was achievable rather
 as a bare figure. It never says anything about the driver, and a drop in it is news
 about the instances rather than about this repository.
 
-For that reason it does not run on a pull request: it gates nothing there and costs
-a machine and four minutes. Ask for it by name - the `baseline` input on a dispatch -
-when a driver number needs a yardstick.
+It gates nothing, but it runs on every pull request anyway, last, because a driver
+number without it cannot say how much room is left. A dispatch can turn it off with the
+`baseline` input.
 
 There is no `perf-server-tcp`. The driver's socket, its `Tcp` flag and its stream
 reassembly state are one per device, so a multipeer server has nowhere to keep a second
@@ -90,7 +90,8 @@ quicker.
 Everything the stress rig needs, on every Windows machine involved, and in addition:
 
 * a **release** build of the driver, test-signed like any other — the build signs itself,
-  so this is `/p:Configuration=Release` and nothing more;
+  so this is `/p:Configuration=Release-Win11` and nothing more. The `-Win11` build, because
+  it is what the installer picks on Server 2022 and later;
 * Driver Verifier disarmed and the machine rebooted (`Set-TestMode.ps1 -Disarm`);
 * `iperf3.exe`, since one end of the tunnel has to be there. `--iperf3` says where it is;
   the default is `C:\stage\iperf3.exe`.
@@ -102,6 +103,10 @@ The Linux side needs no packages beyond `openvpn` 2.7 and `iperf3`: the `ovpn` m
 in the kernel from 6.16, and OpenVPN uses it when it is there. The Linux scripts say
 whether offload actually happened and fail if it did not, rather than quietly measuring a
 userspace tunnel.
+
+Both Linux scripts turn on RPS for the tunnel device once it is up. A tunnel arrives as one
+outer flow, so without it every decrypted packet, and every send its ACKs trigger, runs on
+the one Linux core that received it, and that core, not the driver, sets the number.
 
 ## The ceiling
 
@@ -125,7 +130,7 @@ a file, which is how CI collects every test into one table.
 
 A run fails if a measurement cannot be trusted — no throughput at all, or an adapter
 resetting while measuring, which drags an average down with no other sign that anything
-happened — or if any median falls below `--min-mbit`, 1500 by default.
+happened — or if any median falls below `--min-mbit`, 3500 by default.
 
 That floor is not a performance target. Throughput here varies by a factor of two
 between runs on idle machines, so a tight bound would flap and then be ignored. The

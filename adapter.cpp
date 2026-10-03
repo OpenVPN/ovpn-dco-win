@@ -117,6 +117,7 @@ OvpnEvtAdapterCreateTxQueue(NETADAPTER netAdapter, _Inout_ NETTXQUEUE_INIT* txQu
 
     NETPACKETQUEUE txQueue;
     WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&txAttributes, OVPN_TXQUEUE);
+    txAttributes.EvtCleanupCallback = OvpnEvtTxQueueCleanup;
     NTSTATUS status;
     GOTO_IF_NOT_NT_SUCCESS(done, status, NetTxQueueCreate(txQueueInit, &txAttributes, &txConfig, &txQueue));
 

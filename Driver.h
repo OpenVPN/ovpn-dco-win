@@ -32,6 +32,7 @@
 #include "bufferpool.h"
 #include "crypto.h"
 #include "notifyqueue.h"
+#include "rxworkers.h"
 #include "socket.h"
 #include "trie.h"
 #include "uapi\ovpn-dco.h"
@@ -53,6 +54,10 @@ typedef struct _OVPN_DRIVER {
     LONG DeviceCount;
 } OVPN_DRIVER, * POVPN_DRIVER;
 WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(OVPN_DRIVER, OvpnGetDriverContext)
+
+// Control writes in flight before a writer is made to wait for its own send. Far
+// below the pool's own ceiling, so the pool never becomes the thing that stops this.
+#define OVPN_TX_CONTROL_INFLIGHT_MAX 1024
 
 struct OVPN_DEVICE {
     EX_SPIN_LOCK SpinLock;
@@ -87,6 +92,20 @@ struct OVPN_DEVICE {
 
     OVPN_STATS Stats;
 
+    // 1 + the processor the NIC's receive thread hands us the tunnel on; 0 before any
+    volatile LONG NicRxCpuPlus1;
+
+    // the home core of our queue threads (see OvpnRxQueueChooseHome): as processor indices, for
+    // transmit workers to keep off, and as a group affinity, for the transmit queue thread
+    volatile ULONG64 RxHomeIndexMask;
+    volatile ULONG64 RxHomeAffinity;
+    volatile LONG RxHomeGroup;
+    // 1 + the NIC receive processor the home core was chosen for; written by the receive queue thread
+    ULONG RxHomeForNicPlus1;
+    // the receive queue thread's view of the dominant NIC receive core (see OvpnRxQueueHoldHome)
+    ULONG RxNicSamplePlus1;
+    LONG RxNicScore;
+
     BCRYPT_ALG_HANDLE AesAlgHandle;
     BCRYPT_ALG_HANDLE ChachaAlgHandle;
     BCRYPT_ALG_HANDLE HkdfAlgHandle;
@@ -94,8 +113,25 @@ struct OVPN_DEVICE {
     // Not SpinLock: senders take a reference instead, so a send holds nothing and a
     // datagram delivered back to us inline cannot deadlock. See OvpnSocketAcquire.
     OvpnSocket Socket;
+    // Control writes handed to the socket and not yet completed. Userspace is not
+    // throttled by the send any more - the write completes as soon as the payload is
+    // copied - so this is what stops a writer outrunning the sends and taking the
+    // transmit pool with it.
+    volatile LONG TxControlInFlight;
+
+    // set while writers are being made to wait, so the log says it once rather than
+    // once per write; cleared when the backlog has halved
+    volatile LONG TxControlWaiting;
+
+    // Data buffers handed to a worker and not yet returned to the pool. A worker buffer
+    // comes back only when its send completes, so this is what the pool cap gates on.
+    volatile LONG TxDataInFlight;
+
     volatile LONG SocketRefs;       // senders inside OvpnSocketSend
     KEVENT SocketDrained;
+
+    // decrypt received data packets on several cores, deliver them in order
+    OVPN_RX_WORKERS RxWorkers;
 
     _Guarded_by_(SpinLock)
     NETADAPTER Adapter;

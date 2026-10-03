@@ -7,6 +7,8 @@
 # under test.
 set -u
 
+. "$(dirname "$0")/rps.sh"
+
 SERVER=""; PORT=11198; DEV=ovpn-perf
 KEYS=${KEYS:-/usr/share/doc/openvpn/examples/sample-keys}
 RUN=${RUN:-$HOME/perf}
@@ -56,6 +58,8 @@ if [ -z "$addr" ]; then
     tail -20 "$RUN/client.log" >&2
     exit 1
 fi
+
+set_rps "$DEV" || { echo "could not enable RPS on $DEV" >&2; exit 1; }
 
 # Offload is the whole point, so say whether it actually happened rather than assuming.
 if grep -qa "ovpn-dco device" "$RUN/client.log"; then

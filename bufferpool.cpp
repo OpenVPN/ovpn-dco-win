@@ -39,6 +39,8 @@ struct OVPN_BUFFER_POOL_IMPL
     LONG PoolSize;
     VOID* Context;
     CHAR* Tag;
+    // decremented when a counted datapath buffer returns; NULL for pools that do not count
+    volatile LONG* InFlight;
 };
 
 struct OVPN_BUFFER_QUEUE_IMPL
@@ -110,6 +112,7 @@ OvpnBufferPoolCreate(OVPN_BUFFER_POOL* handle, UINT32 itemSize, CHAR* tag, VOID*
     pool->ItemSize = itemSize;
     pool->Tag = tag;
     pool->Context = ctx;
+    pool->InFlight = NULL;
 
     goto done;
 
@@ -125,9 +128,13 @@ done:
 
 _Use_decl_annotations_
 NTSTATUS
-OvpnTxBufferPoolCreate(OVPN_TX_BUFFER_POOL* handle, VOID* ctx)
+OvpnTxBufferPoolCreate(OVPN_TX_BUFFER_POOL* handle, VOID* ctx, volatile LONG* inFlight)
 {
-    return OvpnBufferPoolCreate((OVPN_BUFFER_POOL*)handle, sizeof(OVPN_TX_BUFFER) + OVPN_DCO_MTU_MAX + OVPN_BUFFER_HEADROOM + OVPN_BUFFER_TAILROOM, "tx", ctx);
+    NTSTATUS status = OvpnBufferPoolCreate((OVPN_BUFFER_POOL*)handle, sizeof(OVPN_TX_BUFFER) + OVPN_DCO_MTU_MAX + OVPN_BUFFER_HEADROOM + OVPN_BUFFER_TAILROOM, "tx", ctx);
+    if (NT_SUCCESS(status)) {
+        ((OVPN_BUFFER_POOL_IMPL*)*handle)->InFlight = inFlight;
+    }
+    return status;
 }
 
 VOID*
@@ -147,19 +154,23 @@ OvpnBufferPoolGet(OVPN_BUFFER_POOL handle, POOL_ENTRY** entry) {
     if (slist_entry) {
         *entry = CONTAINING_RECORD(slist_entry, POOL_ENTRY, PoolListEntry);
     } else {
-        if (pool->PoolSize > MAX_POOL_SIZE)
+        // Claim the slot before allocating: reading the size, allocating, then bumping it
+        // let concurrent producers all pass the test and overshoot the cap by their count.
+        LONG const size = InterlockedIncrement(&pool->PoolSize);
+        if (size > MAX_POOL_SIZE)
         {
+            InterlockedDecrement(&pool->PoolSize);
             *entry = NULL;
-            LOG_ERROR("Pool size is too large", TraceLoggingValue(pool->Tag, "tag"), TraceLoggingValue(pool->PoolSize, "size"));
+            LOG_ERROR("Pool size is too large", TraceLoggingValue(pool->Tag, "tag"), TraceLoggingValue(size, "size"));
             return;
         }
         *entry = (POOL_ENTRY*)ExAllocatePool2(POOL_FLAG_NON_PAGED, pool->ItemSize, 'ovpn');
-        if (*entry)
+        if (*entry == NULL)
         {
-            InterlockedIncrement(&pool->PoolSize);
-            if ((pool->PoolSize % 256) == 0) {
-                LOG_INFO("Pool size", TraceLoggingValue(pool->Tag, "tag"), TraceLoggingValue(pool->PoolSize, "size"));
-            }
+            InterlockedDecrement(&pool->PoolSize);
+        }
+        else if ((size % 256) == 0) {
+            LOG_INFO("Pool size", TraceLoggingValue(pool->Tag, "tag"), TraceLoggingValue(size, "size"));
         }
     }
 }
@@ -174,15 +185,20 @@ OvpnTxBufferPoolGet(OVPN_TX_BUFFER_POOL handle, OVPN_TX_BUFFER** buffer)
 
     (*buffer)->Pool = handle;
 
-    (*buffer)->Mdl = IoAllocateMdl(*buffer, ((OVPN_BUFFER_POOL_IMPL*)handle)->ItemSize, FALSE, FALSE, NULL);
+    // An MDL lives as long as its buffer: allocating one per packet sent every core
+    // through the same lookaside lists. A new buffer comes zeroed, so NULL means new.
+    if ((*buffer)->Mdl == NULL) {
+        (*buffer)->Mdl = IoAllocateMdl(*buffer, ((OVPN_BUFFER_POOL_IMPL*)handle)->ItemSize, FALSE, FALSE, NULL);
+        if ((*buffer)->Mdl != NULL) {
+            MmBuildMdlForNonPagedPool((*buffer)->Mdl);
+        }
+    }
     if (((*buffer)->Mdl) == NULL)
     {
         OvpnTxBufferPoolPut(*buffer);
         *buffer = NULL;
         return STATUS_INSUFFICIENT_RESOURCES;
     }
-
-    MmBuildMdlForNonPagedPool((*buffer)->Mdl);
 
     (*buffer)->Data = (*buffer)->Head + OVPN_BUFFER_HEADROOM;
     (*buffer)->Tail = (*buffer)->Data;
@@ -192,7 +208,9 @@ OvpnTxBufferPoolGet(OVPN_TX_BUFFER_POOL handle, OVPN_TX_BUFFER** buffer)
     RtlZeroMemory(&(*buffer)->WskBufList, sizeof(WSK_BUF_LIST));
 
     (*buffer)->ControlChannel = FALSE;
+    (*buffer)->CountedInFlight = FALSE;
     (*buffer)->IoQueue = WDF_NO_HANDLE;
+    (*buffer)->Peer = NULL;
 
     return STATUS_SUCCESS;
 }
@@ -227,8 +245,15 @@ _Use_decl_annotations_
 VOID
 OvpnTxBufferPoolPut(OVPN_TX_BUFFER* buffer)
 {
-    if (buffer->Mdl)
-        IoFreeMdl(buffer->Mdl);
+    // The one place every datapath buffer returns, so the count cannot leak down a path
+    // that forgot to decrement it.
+    if (buffer->CountedInFlight) {
+        buffer->CountedInFlight = FALSE;
+        OVPN_BUFFER_POOL_IMPL* pool = (OVPN_BUFFER_POOL_IMPL*)buffer->Pool;
+        if (pool->InFlight != NULL) {
+            InterlockedDecrement(pool->InFlight);
+        }
+    }
 
     OvpnBufferPoolPut(buffer);
 }
@@ -269,6 +294,19 @@ OvpnRxBufferPoolDelete(OVPN_BUFFER_POOL handle)
 VOID
 OvpnTxBufferPoolDelete(OVPN_BUFFER_POOL handle)
 {
+    if (handle == NULL)
+        return;
+
+    // device cleanup: the socket is closed and the transmit queue gone, so no buffer
+    // can be returned while this walks the list
+    OVPN_BUFFER_POOL_IMPL* pool = (OVPN_BUFFER_POOL_IMPL*)handle;
+    for (LIST_ENTRY* entry = pool->ListHead.Flink; entry != &pool->ListHead; entry = entry->Flink) {
+        OVPN_TX_BUFFER* buffer = CONTAINING_RECORD(entry, OVPN_TX_BUFFER, PoolListEntry);
+        if (buffer->Mdl != NULL) {
+            IoFreeMdl(buffer->Mdl);
+        }
+    }
+
     OvpnBufferPoolDelete<OVPN_TX_BUFFER>(handle);
 }
 

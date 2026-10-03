@@ -95,12 +95,162 @@ OvpnRxQueueGetLayer4Type(const VOID* buf, size_t len)
     return ret;
 }
 
+// NetAdapterCx runs this queue on its own thread, as it does a NetAdapterCx NIC's receive path; on one
+// core together they saturate it, packets queue, and one connection slows to its receive window. So
+// the thread gets a home core away from the NIC's receive core, and transmit workers keep off both:
+// an application woken by the ACKs this thread hands up then runs where no worker is encrypting.
+
+// The physical core a processor belongs to, as a mask of its group.
+static
+KAFFINITY
+OvpnRxQueueCoreMask(_In_ PROCESSOR_NUMBER* processor)
+{
+    union {
+        SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX info;
+        UCHAR bytes[sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX) + 4 * sizeof(GROUP_AFFINITY)];
+    } core;
+    ULONG coreLen = sizeof(core);
+    if (NT_SUCCESS(KeQueryLogicalProcessorRelationship(processor, RelationProcessorCore, &core.info, &coreLen)) &&
+        (core.info.Processor.GroupCount > 0)) {
+        return core.info.Processor.GroupMask[0].Mask;
+    }
+    return (KAFFINITY)1 << processor->Number;
+}
+
+// The NIC now receives the tunnel on rxIndex: pick a home core away from it for our receive and
+// transmit queue threads, publish it for transmit workers to avoid, and make it the receive
+// thread's ideal processor.
+static
+VOID
+OvpnRxQueueChooseHome(_Inout_ OVPN_DEVICE* device, ULONG rxIndex)
+{
+    WriteULong64NoFence(&device->RxHomeIndexMask, 0);
+    WriteULong64NoFence(&device->RxHomeAffinity, 0);
+
+    PROCESSOR_NUMBER rx;
+    if (!NT_SUCCESS(KeGetProcessorNumberFromIndex(rxIndex, &rx))) {
+        return;
+    }
+
+    KAFFINITY const rxCore = OvpnRxQueueCoreMask(&rx);
+    KAFFINITY const active = KeQueryGroupAffinity(rx.Group);
+    ULONG const span = (ULONG)RtlFindMostSignificantBit((ULONGLONG)active) + 1;
+    ULONG const half = RtlNumberOfSetBitsUlongPtr(active) / 2;
+
+    PROCESSOR_NUMBER home = {};
+    home.Group = rx.Group;
+    BOOLEAN found = FALSE;
+    for (ULONG i = 0; i < span; ++i) {
+        UCHAR const n = (UCHAR)((rx.Number + half + i) % span);
+        KAFFINITY const bit = (KAFFINITY)1 << n;
+        if ((active & bit) && !(rxCore & bit)) {
+            home.Number = n;
+            found = TRUE;
+            break;
+        }
+    }
+    if (!found) {
+        return;
+    }
+
+    KAFFINITY const homeMask = OvpnRxQueueCoreMask(&home) & active;
+
+    // transmit workers are placed by processor index
+    ULONG64 indexMask = 0;
+    for (ULONG n = 0; n < span; ++n) {
+        if (homeMask & ((KAFFINITY)1 << n)) {
+            PROCESSOR_NUMBER p = {};
+            p.Group = home.Group;
+            p.Number = (UCHAR)n;
+            ULONG const index = KeGetProcessorIndexFromNumber(&p);
+            if (index < 64) {
+                indexMask |= 1ULL << index;
+            }
+        }
+    }
+    WriteULong64NoFence(&device->RxHomeIndexMask, indexMask);
+    WriteNoFence(&device->RxHomeGroup, (LONG)home.Group);
+    WriteULong64NoFence(&device->RxHomeAffinity, (ULONG64)homeMask);
+
+    // the call returns the previous ideal processor in its buffer, so give it a copy
+    PROCESSOR_NUMBER ideal = home;
+    NTSTATUS const status = ZwSetInformationThread(ZwCurrentThread(), ThreadIdealProcessorEx, &ideal, sizeof(ideal));
+    LOG_INFO("Rx queue thread given a home core", TraceLoggingValue(rxIndex, "rxCpu"),
+        TraceLoggingValue(home.Number, "home"), TraceLoggingNTStatus(status, "status"));
+}
+
+// Steer only while one NIC receive core carries most of the traffic, as it does for a client or a
+// server with one busy peer; a server's peers spread over many cores, and there is no core to avoid.
+// Samples the core once per Advance: +1 when it repeats, -4 when it changes, so it must be about 80%.
+#define OVPN_RX_HOME_SCORE_MAX 32
+#define OVPN_RX_HOME_SCORE_ON 16
+
+// Holds this thread to the home core for one Advance, choosing a new home first if the NIC's receive
+// core moved; the thread is not ours, so the caller reverts it before returning.
+static
+BOOLEAN
+OvpnRxQueueHoldHome(_Inout_ OVPN_DEVICE* device, _Out_ PGROUP_AFFINITY previous)
+{
+    RtlZeroMemory(previous, sizeof(*previous));
+
+    // NetAdapterCx may run the queue in a DPC (Server 2022 does), where the current thread is
+    // whichever one it interrupted: nothing to hold, and the thread calls are not allowed there
+    if (KeGetCurrentIrql() != PASSIVE_LEVEL) {
+        return FALSE;
+    }
+
+    LONG const rxPlus1 = ReadNoFence(&device->NicRxCpuPlus1);
+    if (rxPlus1 == 0) {
+        return FALSE;
+    }
+    if ((ULONG)rxPlus1 == device->RxNicSamplePlus1) {
+        device->RxNicScore = min(device->RxNicScore + 1, OVPN_RX_HOME_SCORE_MAX);
+    }
+    else if ((device->RxNicScore -= 4) <= 0) {
+        device->RxNicSamplePlus1 = (ULONG)rxPlus1;
+        device->RxNicScore = 1;
+    }
+    if (device->RxNicScore < OVPN_RX_HOME_SCORE_ON) {
+        // no dominant core: drop the home, so transmit workers and the transmit queue thread go anywhere
+        if (device->RxHomeForNicPlus1 != 0) {
+            device->RxHomeForNicPlus1 = 0;
+            WriteULong64NoFence(&device->RxHomeIndexMask, 0);
+            WriteULong64NoFence(&device->RxHomeAffinity, 0);
+        }
+        return FALSE;
+    }
+    if (device->RxNicSamplePlus1 != device->RxHomeForNicPlus1) {
+        device->RxHomeForNicPlus1 = device->RxNicSamplePlus1;
+        OvpnRxQueueChooseHome(device, device->RxNicSamplePlus1 - 1);
+    }
+    USHORT const group = (USHORT)ReadNoFence(&device->RxHomeGroup);
+    KAFFINITY const home = (KAFFINITY)ReadULong64NoFence((volatile DWORD64*)&device->RxHomeAffinity);
+    if (home == 0) {
+        return FALSE;
+    }
+
+    PROCESSOR_NUMBER here;
+    KeGetCurrentProcessorNumberEx(&here);
+    if ((here.Group == group) && (home & ((KAFFINITY)1 << here.Number))) {
+        return FALSE;
+    }
+
+    GROUP_AFFINITY homeAffinity = {};
+    homeAffinity.Group = group;
+    homeAffinity.Mask = home;
+    KeSetSystemGroupAffinityThread(&homeAffinity, previous);
+    return TRUE;
+}
+
 _Use_decl_annotations_
 VOID
 OvpnEvtRxQueueAdvance(NETPACKETQUEUE netPacketQueue)
 {
     POVPN_RXQUEUE queue = OvpnGetRxQueueContext(netPacketQueue);
     OVPN_DEVICE* device = OvpnGetDeviceContext(queue->Adapter->WdfDevice);
+
+    GROUP_AFFINITY previous;
+    BOOLEAN const moved = OvpnRxQueueHoldHome(device, &previous);
 
     NET_RING_FRAGMENT_ITERATOR fi = NetRingGetAllFragments(queue->Rings);
     NET_RING_PACKET_ITERATOR pi = NetRingGetAllPackets(queue->Rings);
@@ -144,6 +294,10 @@ OvpnEvtRxQueueAdvance(NETPACKETQUEUE netPacketQueue)
     }
     NetFragmentIteratorSet(&fi);
     NetPacketIteratorSet(&pi);
+
+    if (moved) {
+        KeRevertToUserGroupAffinityThread(&previous);
+    }
 }
 
 _Use_decl_annotations_

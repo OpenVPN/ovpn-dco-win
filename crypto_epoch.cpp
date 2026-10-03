@@ -337,19 +337,57 @@ OvpnCryptoEpochIterateSendKey(OvpnCryptoTxState* tx, OvpnCryptoOptions* opts)
     OvpnCryptoEpochInitSendKey(tx, opts);
 }
 
+// Whether the send key has nothing left to give. The block count is read unsynchronised:
+// the usage limit is a threshold with a wide margin, unlike the packet id.
+static
+BOOLEAN
+OvpnCryptoEpochSendKeyUsedUp(OvpnCryptoTxState* tx, OvpnCryptoOptions* opts, UINT64 nextPktid)
+{
+    return (nextPktid > PACKET_ID_EPOCH_MAX) ||
+        OvpnCryptoAeadUsageLimitReached(opts->AeadUsageLimit, (UINT64)tx->Key.PlaintextBlocks, nextPktid);
+}
+
 NTSTATUS
 OvpnCryptoEpochNextPacketId(OvpnCryptoTxState* tx, OvpnCryptoOptions* opts, SIZE_T len, UINT64* packetId)
 {
-    if (OvpnCryptoAeadUsageLimitReached(opts->AeadUsageLimit, tx->Key.PlaintextBlocks, tx->Pktid.SeqNum) || (tx->Pktid.SeqNum >= PACKET_ID_EPOCH_MAX)) {
-        if (tx->EpochKey.Epoch == UINT16_MAX) {
-            // no epoch left to move to; only a renegotiation helps
-            return STATUS_INTEGER_OVERFLOW;
+    // an aligned 64 bit read, and the exchange below rejects it if it went stale
+    LONG64 seq = tx->Pktid.SeqNum;
+
+    for (;;) {
+        UINT64 const next = (UINT64)seq + 1;
+
+        if (OvpnCryptoEpochSendKeyUsedUp(tx, opts, next)) {
+            return STATUS_RETRY;
         }
-        OvpnCryptoEpochIterateSendKey(tx, opts);
+
+        LONG64 const prev = InterlockedCompareExchange64(&tx->Pktid.SeqNum, (LONG64)next, seq);
+        if (prev == seq) {
+            InterlockedExchangeAdd64(&tx->Key.PlaintextBlocks,
+                (LONG64)(((UINT64)len + AEAD_LIMIT_BLOCKSIZE - 1) / AEAD_LIMIT_BLOCKSIZE));
+
+            // the epoch cannot change under the lock, so it pairs with the id
+            *packetId = ((UINT64)tx->Key.Epoch << 48) | next;
+            return STATUS_SUCCESS;
+        }
+
+        seq = prev;
+    }
+}
+
+NTSTATUS
+OvpnCryptoEpochAdvanceSendKey(OvpnCryptoTxState* tx, OvpnCryptoOptions* opts)
+{
+    // another sender may have advanced the key while this one waited for the lock
+    if (!OvpnCryptoEpochSendKeyUsedUp(tx, opts, (UINT64)tx->Pktid.SeqNum + 1)) {
+        return STATUS_SUCCESS;
     }
 
-    tx->Key.PlaintextBlocks += ((UINT64)len + AEAD_LIMIT_BLOCKSIZE - 1) / AEAD_LIMIT_BLOCKSIZE;
-    *packetId = ((UINT64)tx->Key.Epoch << 48) | (UINT64)++tx->Pktid.SeqNum;
+    if (tx->EpochKey.Epoch == UINT16_MAX) {
+        // no epoch left to move to; only a renegotiation helps
+        return STATUS_INTEGER_OVERFLOW;
+    }
+
+    OvpnCryptoEpochIterateSendKey(tx, opts);
 
     return STATUS_SUCCESS;
 }

@@ -40,13 +40,6 @@ struct OvpnSocketTcpState
 	UCHAR PacketBuf[OVPN_SOCKET_RX_PACKET_BUFFER_SIZE];
 };
 
-struct OvpnSocketUdpState
-{
-	// packet buffer if datagram scattered across MDLs
-	// this seems to only happen in unlikely case when datagram is fragmented
-	UCHAR PacketBuf[OVPN_SOCKET_RX_PACKET_BUFFER_SIZE];
-};
-
 // What a send needs. The state buffers below belong to the receive path, and both
 // fields here are fixed for the life of a socket.
 struct OvpnSocketRef
@@ -61,7 +54,6 @@ struct OvpnSocket
 	PWSK_SOCKET Socket;
 
 	OvpnSocketTcpState TcpState;
-	OvpnSocketUdpState UdpState;
 };
 
 _Must_inspect_result_
@@ -80,6 +72,10 @@ _Must_inspect_result_
 NTSTATUS
 OvpnSocketSend(_In_ OvpnSocketRef* socket, _In_ OVPN_TX_BUFFER* buffer, _In_opt_ SOCKADDR* sa);
 
+// TCP data: sends a chain of encrypted buffers, linked by WskBufList.Next, as one stream write
+VOID
+OvpnSocketSendTcpBatch(_In_ OvpnSocketRef* socket, _In_ OVPN_TX_BUFFER* head);
+
 // Rundown for device->Socket: the reference covers the send call, not its completion,
 // which is what the device lock gave before. Callers may be at DISPATCH_LEVEL.
 struct OVPN_DEVICE;
@@ -96,14 +92,32 @@ _IRQL_requires_(PASSIVE_LEVEL)
 PWSK_SOCKET
 OvpnSocketDetach(_In_ OVPN_DEVICE* device);
 
+// Decrypts a received data packet in place. Called by OvpnRxWorkersSubmit's worker.
+_IRQL_requires_max_(DISPATCH_LEVEL)
+VOID
+OvpnSocketDataPacketDecrypt(_Inout_ OVPN_RX_BUFFER* buffer);
+
+// The replay check and the rest of receive, for decrypted packets in arrival order, one
+// at a time. Takes the buffer and its peer reference.
+_IRQL_requires_(DISPATCH_LEVEL)
+VOID
+OvpnSocketDataPacketDeliver(_In_ OVPN_DEVICE* device, _In_ OVPN_RX_BUFFER* buffer);
+
 _Must_inspect_result_
 NTSTATUS
 OvpnSocketTcpConnect(_In_ PWSK_SOCKET socket, _In_ PVOID context, _In_ PSOCKADDR remote);
 
-template<typename T>
-static
+// A peer's remote transport address. It has a name so that the code handling one does
+// not have to be a template over a type it cannot spell.
+union OVPN_REMOTE_ADDR
+{
+    SOCKADDR_IN IPv4;
+    SOCKADDR_IN6 IPv6;
+};
+
+inline
 VOID
-OvpnSocketCopyRemoteToSockaddr(T& remote, SOCKADDR_STORAGE* sockaddr) {
+OvpnSocketCopyRemoteToSockaddr(const OVPN_REMOTE_ADDR& remote, SOCKADDR_STORAGE* sockaddr) {
     // Copy the appropriate address based on the family
     if (remote.IPv4.sin_family == AF_INET) {
         RtlCopyMemory(sockaddr, &remote.IPv4, sizeof(SOCKADDR_IN));
