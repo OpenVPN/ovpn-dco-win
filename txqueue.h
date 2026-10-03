@@ -39,6 +39,9 @@
 // Data buffers allowed in flight before the datapath drops rather than grow the pool.
 #define OVPN_TX_DATA_INFLIGHT_MAX 2048
 
+// Bytes of TCP data packets sent as one stream write; see OvpnTxSubmit.
+#define OVPN_TX_TCP_BATCH_MAX (64 * 1024)
+
 struct OVPN_DEVICE;
 struct _OVPN_TXQUEUE;
 
