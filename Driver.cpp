@@ -453,6 +453,8 @@ OvpnStopVPN(_In_ POVPN_DEVICE device)
     WriteULong64NoFence((volatile DWORD64*)&device->RxHomeIndexMask, 0);
     WriteULong64NoFence((volatile DWORD64*)&device->RxHomeAffinity, 0);
     device->RxHomeForNicPlus1 = 0;
+    device->RxNicSamplePlus1 = 0;
+    device->RxNicScore = 0;
 
     if (socket != NULL) {
         LOG_IF_NOT_NT_SUCCESS(OvpnSocketClose(socket));

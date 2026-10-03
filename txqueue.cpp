@@ -391,7 +391,8 @@ OvpnTxQueueResume(_In_ POVPN_TXQUEUE queue)
 
 // The transmit queue thread copies every packet, and on a worker's core it slows the flow that
 // worker encrypts; workers keep off the receive queue thread's home core, so this thread is held
-// there for one Advance and reverted after, as that thread is. Point to point only.
+// there for one Advance and reverted after, as that thread is. Only while there is a home: see
+// OvpnRxQueueHoldHome.
 static
 BOOLEAN
 OvpnTxQueueHoldHome(_In_ POVPN_DEVICE device, _Out_ PGROUP_AFFINITY previous)
@@ -399,7 +400,7 @@ OvpnTxQueueHoldHome(_In_ POVPN_DEVICE device, _Out_ PGROUP_AFFINITY previous)
     RtlZeroMemory(previous, sizeof(*previous));
 
     // not in a DPC: see OvpnRxQueueHoldHome
-    if ((KeGetCurrentIrql() != PASSIVE_LEVEL) || (device->Mode != OVPN_MODE_P2P)) {
+    if (KeGetCurrentIrql() != PASSIVE_LEVEL) {
         return FALSE;
     }
 
