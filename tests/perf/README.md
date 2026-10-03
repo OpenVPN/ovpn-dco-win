@@ -130,7 +130,7 @@ a file, which is how CI collects every test into one table.
 
 A run fails if a measurement cannot be trusted — no throughput at all, or an adapter
 resetting while measuring, which drags an average down with no other sign that anything
-happened — or if any median falls below `--min-mbit`, 1500 by default.
+happened — or if any median falls below `--min-mbit`, 3500 by default.
 
 That floor is not a performance target. Throughput here varies by a factor of two
 between runs on idle machines, so a tight bound would flap and then be ignored. The
