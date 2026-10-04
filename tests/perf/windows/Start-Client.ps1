@@ -96,7 +96,10 @@ $deadline = (Get-Date).AddSeconds(60)
 $ip = $null
 while ((Get-Date) -lt $deadline -and -not $ip) {
     Start-Sleep -Seconds 2
-    $ip = Get-DcoAddress
+    # the adapter can keep an earlier session's address, so wait for this session first
+    if ((Test-Path $logFile) -and (Select-String -Path $logFile -Pattern 'Initialization Sequence Completed' -Quiet)) {
+        $ip = Get-DcoAddress
+    }
 }
 
 if (-not $ip) {
