@@ -18,13 +18,17 @@
     One CSV line per core per interval to stdout, including the _Total pseudo-core, so a
     run that ends badly still leaves its samples.
 
+    -StopFile ends sampling as soon as that file exists, so the samples cover one
+    measurement and a sampler never runs on into the next test; -Seconds stays a cap.
+
 .EXAMPLE
-    .\Sample-Cpu.ps1 -Seconds 120 -Interval 2
+    .\Sample-Cpu.ps1 -Seconds 120 -Interval 2 -StopFile C:\ovpn-perf\cpu.stop
 #>
 [CmdletBinding()]
 param(
     [int]$Seconds = 120,
-    [int]$Interval = 2
+    [int]$Interval = 2,
+    [string]$StopFile
 )
 
 $ErrorActionPreference = 'Stop'
@@ -38,6 +42,7 @@ $start = Get-Date
 $deadline = $start.AddSeconds($Seconds)
 
 while ((Get-Date) -lt $deadline) {
+    if ($StopFile -and (Test-Path $StopFile)) { break }
     $elapsed = ((Get-Date) - $start).TotalSeconds
     foreach ($c in Cores) {
         '{0:F0},{1},{2:F0},{3:F0}' -f $elapsed, $c.Name, $c.PercentProcessorTime, $c.PercentDPCTime
