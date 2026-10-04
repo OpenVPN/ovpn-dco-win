@@ -199,6 +199,12 @@ else
     echo "$out" | tr -d '\r'
 fi
 
+# The driver logs where the NIC receives the tunnel when it chooses its home core, on the
+# first data, so trace it from before the tunnel comes up.
+home_etl="$REMOTE_DIR\\home-$TEST.etl"
+[ "$MODE" != baseline ] && { ps_on "$DUT" 'Trace-HomeCore.ps1' -Start -Etl "$home_etl" >/dev/null 2>&1 ||
+    echo "  note: could not start the driver trace"; }
+
 echo "== starting the $CLI_OS client"
 if [ "$CLI_OS" = linux ]; then
     linux_run "$CLI_HOST" start-client.sh --server "$SERVER_IP" --port "$PORT" ||
@@ -292,7 +298,7 @@ else
     on "$SRV_HOST" "pkill -f 'iperf3 -s -p 5202'" >/dev/null 2>&1
 fi
 
-busy_pct=0; busy_core='-'; busy_dpc=0
+busy_pct=0; busy_core='-'; busy_dpc=0; nic_core='-'; nic_dpc=0; nic_busy=0; home_core='-'
 if [ -n "$cpu_host" ]; then
     # the sampler sees the stop file between samples, and one sample can take seconds
     ssh "$cpu_host" "New-Item -ItemType File -Force '$cpu_stop' | Out-Null; foreach (\$i in 1..40) { if (-not (Get-CimInstance Win32_Process -Filter \"Name='powershell.exe'\" | Where-Object { (\$_.ProcessId -ne \$PID) -and (\$_.CommandLine -like '*cpu-$TEST.stop*') })) { break }; Start-Sleep -Milliseconds 500 }" 2>/dev/null
@@ -320,6 +326,24 @@ if [ -n "$cpu_host" ]; then
                       END { for (c in peak) printf "%d:%s\n", peak[c], c }' "$OUTDIR/cpu.csv" 2>/dev/null |
              sort -rn | awk -F: '{ printf "%s%s(%s%%)", (NR>1 ? " " : ""), $2, $1 }')
     [ -n "$spread" ] && echo "  peak per core: $spread"
+
+fi
+
+# Where the NIC received the tunnel, as the driver saw it: the most DPC time does not tell,
+# as the transmit and receive workers are DPCs too. The core's load beyond its DPC share is
+# thread work sharing it, which is what a slow run's placement shows.
+if [ "$MODE" != baseline ]; then
+    homes=$(ps_on "$DUT" 'Trace-HomeCore.ps1' -Stop -Etl "$home_etl" 2>/dev/null | tr -d '\r' | grep -E '^[0-9]+ [0-9]+$')
+    if [ -n "$homes" ]; then
+        read -r nic_core home_core <<< "$(echo "$homes" | tail -1)"
+        load=$(awk -F, -v c="$nic_core" 'NR>1 && $2 == c { n++; b += $3; d += $4 }
+                                         END { if (n) printf "%d %d", b / n, d / n }' "$OUTDIR/cpu.csv" 2>/dev/null)
+        read -r nic_busy nic_dpc <<< "${load:-0 0}"
+        echo "  NIC receive core: core $nic_core, on average ${nic_busy}% busy, ${nic_dpc}% of it DPC;" \
+             "home core $home_core ($(echo "$homes" | wc -l) choice(s))"
+    else
+        echo "  NIC receive core: not reported, the driver chose no home core"
+    fi
 fi
 
 median() {
@@ -399,4 +423,4 @@ for p in $STREAMS; do
     done
 done
 
-echo "{\"verdict\":\"PASS\",\"test\":\"$TEST\",\"forward_mbit\":$(median forward "$first"),\"reverse_mbit\":$(median reverse "$first"),\"busiest_core_pct\":${busy_pct:-0},\"busiest_core_dpc_pct\":${busy_dpc:-0},\"outdir\":\"$OUTDIR\"}"
+echo "{\"verdict\":\"PASS\",\"test\":\"$TEST\",\"forward_mbit\":$(median forward "$first"),\"reverse_mbit\":$(median reverse "$first"),\"busiest_core_pct\":${busy_pct:-0},\"busiest_core_dpc_pct\":${busy_dpc:-0},\"nic_core\":\"${nic_core:--}\",\"nic_core_pct\":${nic_busy:-0},\"nic_core_dpc_pct\":${nic_dpc:-0},\"home_core\":\"${home_core:--}\",\"outdir\":\"$OUTDIR\"}"
