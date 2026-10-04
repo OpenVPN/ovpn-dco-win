@@ -36,6 +36,9 @@ on:
         description: also run the linux-to-linux control
         type: boolean
         default: true
+      driver_release:
+        description: measure this published release (e.g. 2.8.7) instead of the build
+        default: ''
   pull_request:
     branches: [multipeer]
     # These take tens of minutes on real machines. Documentation cannot change what
@@ -111,6 +114,19 @@ jobs:
         with:
           name: driver-release-x64
           path: driver
+
+      # A published release in place of the build, to compare it on the same machines: the
+      # win11 x64 driver from its zip, which is what Server 2025 installs.
+      - name: Use a published release instead of the build
+        if: inputs.driver_release != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REL: ${{ inputs.driver_release }}
+        run: |
+          rm -rf driver /tmp/rel && mkdir driver
+          gh release download "$REL" -R "$GITHUB_REPOSITORY" -p "ovpn-dco-win-$REL-amd64.zip" -D /tmp/rel
+          unzip -q -j "/tmp/rel/ovpn-dco-win-$REL-amd64.zip" 'win11/*' -d driver
+          ls -l driver
 
       # GitHub keeps only one *pending* run per concurrency group, so a newer run cancels
       # the older one that is waiting: a shared group does not queue these rigs, it drops
@@ -261,6 +277,7 @@ jobs:
       - name: Put the machines in measurement state and install the driver
         env:
           WINWIN: ${{ steps.ec2.outputs.winwin }}
+          REL: ${{ inputs.driver_release }}
         run: |
           hosts=dut
           if [ "$WINWIN" = 'true' ]; then hosts="$hosts peer"; fi
@@ -269,7 +286,10 @@ jobs:
             scp -q driver/* tests/stress/windows/Trust-DriverCert.ps1 \
                    tests/stress/windows/Install-Driver.ps1 \
                    tests/stress/windows/Set-TestMode.ps1 $h:'C:\stage'
-            ssh $h 'powershell -NoProfile -ExecutionPolicy Bypass -File C:\stage\Trust-DriverCert.ps1 -SysPath C:\stage\ovpn-dco.sys'
+            # a release is production-signed: its certificate needs no trust of ours
+            if [ -z "$REL" ]; then
+              ssh $h 'powershell -NoProfile -ExecutionPolicy Bypass -File C:\stage\Trust-DriverCert.ps1 -SysPath C:\stage\ovpn-dco.sys'
+            fi
             ssh $h 'powershell -NoProfile -ExecutionPolicy Bypass -File C:\stage\Set-TestMode.ps1 -Disarm'
             ssh $h 'shutdown /r /t 3' || true
           done
@@ -388,10 +408,13 @@ jobs:
 
       - name: Report
         if: always()
+        env:
+          REL: ${{ inputs.driver_release }}
         run: |
           {
             echo "## Throughput"
             echo
+            if [ -n "$REL" ]; then echo "Driver: published release \`$REL\`, not this build."; echo; fi
             ssh client 'cat ~/perf/table.md' 2>/dev/null || echo '_no results_'
             echo
             echo "Medians of \`${{ inputs.runs || '3' }}\` runs of \`${{ inputs.seconds || '30' }}\`s"
