@@ -253,9 +253,12 @@ fi
 # the only number this rig used to sample. Watch every core instead.
 cpu_host=''
 [ "$MODE" != baseline ] && cpu_host=$DUT
+# One sample file per test, and the sampler is stopped when the measurement ends: a sampler
+# left running wrote on into the next test, whose figures then included this one's.
+cpu_csv="$REMOTE_DIR\\cpu-$TEST.csv"; cpu_stop="$REMOTE_DIR\\cpu-$TEST.stop"
 if [ -n "$cpu_host" ]; then
     cpu_secs=$(( (SECONDS_PER + OMIT + 6) * RUNS * 2 * $(echo $STREAMS | wc -w) + 30 ))
-    ssh "$cpu_host" "\$c = 'cmd.exe /c powershell -NoProfile -ExecutionPolicy Bypass -File $REMOTE_DIR\\Sample-Cpu.ps1 -Seconds $cpu_secs -Interval 2 > $REMOTE_DIR\\cpu.csv 2>&1'; Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = \$c } | Out-Null" 2>/dev/null ||
+    ssh "$cpu_host" "Remove-Item '$cpu_csv', '$cpu_stop' -ErrorAction SilentlyContinue; \$c = 'cmd.exe /c powershell -NoProfile -ExecutionPolicy Bypass -File $REMOTE_DIR\\Sample-Cpu.ps1 -Seconds $cpu_secs -Interval 2 -StopFile $cpu_stop > $cpu_csv 2>&1'; Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = \$c } | Out-Null" 2>/dev/null ||
         echo "  note: could not start the CPU sampler"
 fi
 for p in $STREAMS; do
@@ -291,7 +294,9 @@ fi
 
 busy_pct=0; busy_core='-'; busy_dpc=0
 if [ -n "$cpu_host" ]; then
-    ssh "$cpu_host" "Get-Content '$REMOTE_DIR\\cpu.csv'" 2>/dev/null |
+    # the sampler sees the stop file between samples, and one sample can take seconds
+    ssh "$cpu_host" "New-Item -ItemType File -Force '$cpu_stop' | Out-Null; foreach (\$i in 1..40) { if (-not (Get-CimInstance Win32_Process -Filter \"Name='powershell.exe'\" | Where-Object { (\$_.ProcessId -ne \$PID) -and (\$_.CommandLine -like '*cpu-$TEST.stop*') })) { break }; Start-Sleep -Milliseconds 500 }" 2>/dev/null
+    ssh "$cpu_host" "Get-Content '$cpu_csv'" 2>/dev/null |
         tr -d '\r' > "$OUTDIR/cpu.csv"
     # The busiest core over the run, how much of it was DPC - the receive path runs in a
     # WSK callback at DISPATCH, where the time belongs to no process - and then the peak
