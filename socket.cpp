@@ -690,9 +690,63 @@ OvpnSocketSendComplete(_In_ PDEVICE_OBJECT deviceObj, _In_ PIRP irp, _In_ PVOID 
     return STATUS_MORE_PROCESSING_REQUIRED;
 }
 
+_Use_decl_annotations_
+BOOLEAN
+OvpnSocketAcquire(OVPN_DEVICE* device, OvpnSocketRef* ref)
+{
+    // Count first, then look: teardown unpublishes the socket before it reads the count,
+    // so a sender that is counted and still sees a socket is one teardown waits for.
+    InterlockedIncrement(&device->SocketSenders);
+
+    PWSK_SOCKET socket = (PWSK_SOCKET)InterlockedCompareExchangePointer(
+        (PVOID volatile*)&device->Socket.Socket, NULL, NULL);
+
+    if (socket == NULL) {
+        InterlockedDecrement(&device->SocketSenders);
+        return FALSE;
+    }
+
+    // Published last by OvpnPeerNew, so these are set by the time the pointer is visible.
+    ref->Socket = socket;
+    ref->Tcp = device->Socket.Tcp;
+    RtlCopyMemory(&ref->RemoteSA, &device->Socket.RemoteSA, sizeof(ref->RemoteSA));
+
+    return TRUE;
+}
+
+_Use_decl_annotations_
+VOID
+OvpnSocketRelease(OVPN_DEVICE* device)
+{
+    InterlockedDecrement(&device->SocketSenders);
+}
+
+_Use_decl_annotations_
+PWSK_SOCKET
+OvpnSocketDetach(OVPN_DEVICE* device)
+{
+    PWSK_SOCKET socket = (PWSK_SOCKET)InterlockedExchangePointer(
+        (PVOID volatile*)&device->Socket.Socket, NULL);
+
+    // No new sender can find the socket now, so this only waits out the ones already
+    // inside a send. They hold nothing and are bounded by the send call itself.
+    for (ULONG waited = 0; InterlockedCompareExchange(&device->SocketSenders, 0, 0) != 0; ++waited) {
+        LARGE_INTEGER interval;
+        interval.QuadPart = -10 * 1000;     // 1ms
+        KeDelayExecutionThread(KernelMode, FALSE, &interval);
+
+        if ((waited % 10000) == 9999) {
+            LOG_WARN("Still waiting for senders to leave the socket",
+                TraceLoggingValue(waited, "ms"));
+        }
+    }
+
+    return socket;
+}
+
 NTSTATUS
 _Use_decl_annotations_
-OvpnSocketSend(OvpnSocket* ovpnSocket, OVPN_TX_BUFFER* buffer) {
+OvpnSocketSend(OvpnSocketRef* ovpnSocket, OVPN_TX_BUFFER* buffer) {
     OVPN_DEVICE* device = (OVPN_DEVICE*)OvpnTxBufferPoolGetContext(buffer->Pool);
 
     PWSK_SOCKET socket = ovpnSocket->Socket;

@@ -123,8 +123,8 @@ _Must_inspect_result_
 _Requires_shared_lock_held_(device->SpinLock)
 static
 NTSTATUS
-OvpnTxProcessPacket(_In_ POVPN_DEVICE device, _In_ POVPN_TXQUEUE queue, _In_ NET_RING_PACKET_ITERATOR *pi,
-    _Inout_ OVPN_TX_BUFFER **head, _Inout_ OVPN_TX_BUFFER** tail)
+OvpnTxProcessPacket(_In_ POVPN_DEVICE device, _In_ POVPN_TXQUEUE queue, _In_ OvpnSocketRef* socket,
+    _In_ NET_RING_PACKET_ITERATOR *pi, _Inout_ OVPN_TX_BUFFER **head, _Inout_ OVPN_TX_BUFFER** tail)
 {
     NET_RING_FRAGMENT_ITERATOR fi = NetPacketIteratorGetFragments(pi);
 
@@ -160,14 +160,14 @@ OvpnTxProcessPacket(_In_ POVPN_DEVICE device, _In_ POVPN_TXQUEUE queue, _In_ NET
         NetFragmentIteratorAdvance(&fi);
     }
 
-    if (OvpnCheckRecursiveRoutingIPv4((SOCKADDR_IN*)&device->Socket.RemoteSA, buffer->Data, buffer->Len, device->Socket.Tcp)) {
+    if (OvpnCheckRecursiveRoutingIPv4((SOCKADDR_IN*)&socket->RemoteSA, buffer->Data, buffer->Len, socket->Tcp)) {
         status = STATUS_ADDRESS_NOT_ASSOCIATED;
         OvpnTxBufferPoolPut(buffer);
         goto out;
     }
 
 
-    if (OvpnCheckRecursiveRoutingIPv6((SOCKADDR_IN6*)&device->Socket.RemoteSA, buffer->Data, buffer->Len, device->Socket.Tcp)) {
+    if (OvpnCheckRecursiveRoutingIPv6((SOCKADDR_IN6*)&socket->RemoteSA, buffer->Data, buffer->Len, socket->Tcp)) {
         status = STATUS_ADDRESS_NOT_ASSOCIATED;
         OvpnTxBufferPoolPut(buffer);
         goto out;
@@ -194,27 +194,26 @@ OvpnTxProcessPacket(_In_ POVPN_DEVICE device, _In_ POVPN_TXQUEUE queue, _In_ NET
     }
 
     if (NT_SUCCESS(status)) {
-        // start async send, this will return ciphertext buffer to the pool
-        if (device->Socket.Tcp) {
-            status = OvpnSocketSend(&device->Socket, buffer);
-        }
-        else {
-            // for UDP we use SendMessages to send multiple datagrams at once
-            // here we only append WSK_BUF to the list
+        // Chain the buffer and leave the sending to the caller, which sends once the
+        // device lock is released: the transport can deliver a datagram back to us inline,
+        // on this thread, and the receive path takes that same lock. For UDP the chain is
+        // also what WskSendMessages takes; for TCP it only keeps the order.
+        buffer->WskBufList.Next = NULL;
 
+        if (!socket->Tcp) {
             buffer->WskBufList.Buffer.Length = buffer->Len;
             buffer->WskBufList.Buffer.Mdl = buffer->Mdl;
             buffer->WskBufList.Buffer.Offset = FIELD_OFFSET(OVPN_TX_BUFFER, Head) + (ULONG)(buffer->Data - buffer->Head);
-
-            if (*head == NULL) {
-                *head = buffer;
-            }
-            else {
-                (*tail)->WskBufList.Next = &buffer->WskBufList;
-            }
-
-            *tail = buffer;
         }
+
+        if (*head == NULL) {
+            *head = buffer;
+        }
+        else {
+            (*tail)->WskBufList.Next = &buffer->WskBufList;
+        }
+
+        *tail = buffer;
     }
     else {
         OvpnTxBufferPoolPut(buffer);
@@ -240,6 +239,14 @@ OvpnEvtTxQueueAdvance(NETPACKETQUEUE netPacketQueue)
     POVPN_DEVICE device = OvpnGetDeviceContext(queue->Adapter->WdfDevice);
     bool packetSent = false;
 
+    // Held for the whole pass and released after the sends. Without a socket nothing is
+    // returned to the framework: the packets stay on the ring for the next pass, and
+    // EvtTxQueueCancel gives them all back when the datapath stops.
+    OvpnSocketRef socket;
+    if (!OvpnSocketAcquire(device, &socket)) {
+        return;
+    }
+
     KIRQL kirql = ExAcquireSpinLockShared(&device->SpinLock);
 
     OVPN_TX_BUFFER* txBufferHead = NULL;
@@ -249,7 +256,7 @@ OvpnEvtTxQueueAdvance(NETPACKETQUEUE netPacketQueue)
         NET_PACKET* packet = NetPacketIteratorGetPacket(&pi);
         NTSTATUS status = STATUS_SUCCESS;
         if (!packet->Ignore && !packet->Scratch) {
-            status = OvpnTxProcessPacket(device, queue, &pi, &txBufferHead, &txBufferTail);
+            status = OvpnTxProcessPacket(device, queue, &socket, &pi, &txBufferHead, &txBufferTail);
             if (!NT_SUCCESS(status)) {
                 InterlockedIncrementNoFence(&device->Stats.LostOutDataPackets);
             }
@@ -265,17 +272,34 @@ OvpnEvtTxQueueAdvance(NETPACKETQUEUE netPacketQueue)
     }
     NetPacketIteratorSet(&pi);
 
-    // reset keepalive timer
+    // reset keepalive timer - the timer handle is the lock's, so it stays inside
     if (packetSent) {
         OvpnTimerResetXmit(device->Timer);
-
-        if (!device->Socket.Tcp) {
-            // this will use WskSendMessages to send buffers list which we constructed before
-            LOG_IF_NOT_NT_SUCCESS(OvpnSocketSend(&device->Socket, txBufferHead));
-        }
     }
 
     ExReleaseSpinLockShared(&device->SpinLock, kirql);
+
+    if (packetSent && (txBufferHead != NULL)) {
+        if (socket.Tcp) {
+            // A stream takes one send per packet, in the order they were encrypted. Each
+            // is unlinked first: a send's completion returns the whole chain behind the
+            // buffer to the pool, which is what the one UDP send wants and what a
+            // per-packet send must not do.
+            OVPN_TX_BUFFER* buffer = txBufferHead;
+            while (buffer != NULL) {
+                WSK_BUF_LIST* next = buffer->WskBufList.Next;
+                buffer->WskBufList.Next = NULL;
+                LOG_IF_NOT_NT_SUCCESS(OvpnSocketSend(&socket, buffer));
+                buffer = (next == NULL) ? NULL : CONTAINING_RECORD(next, OVPN_TX_BUFFER, WskBufList);
+            }
+        }
+        else {
+            // this will use WskSendMessages to send buffers list which we constructed before
+            LOG_IF_NOT_NT_SUCCESS(OvpnSocketSend(&socket, txBufferHead));
+        }
+    }
+
+    OvpnSocketRelease(device);
 }
 
 _Use_decl_annotations_

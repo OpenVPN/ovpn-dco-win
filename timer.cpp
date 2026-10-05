@@ -62,6 +62,14 @@ static VOID OvpnTimerXmit(WDFTIMER timer)
     // copy keepalive magic message to the buffer
     RtlCopyMemory(OvpnTxBufferPut(buffer, sizeof(OvpnKeepaliveMessage)), OvpnKeepaliveMessage, sizeof(OvpnKeepaliveMessage));
 
+    OvpnSocketRef socket;
+    if (!OvpnSocketAcquire(device, &socket)) {
+        OvpnTxBufferPoolPut(buffer);
+        return;
+    }
+
+    // The lock is the crypto context's, so it is held for the encryption and dropped
+    // before the send, which the transport may deliver back to us on this thread.
     KIRQL kiqrl = ExAcquireSpinLockShared(&device->SpinLock);
     if (device->CryptoContext.Encrypt) {
         // make space to crypto overhead
@@ -74,10 +82,11 @@ static VOID OvpnTimerXmit(WDFTIMER timer)
         status = STATUS_INVALID_DEVICE_STATE;
         // LOG_WARN("CryptoContext not initialized");
     }
+    ExReleaseSpinLockShared(&device->SpinLock, kiqrl);
 
     if (NT_SUCCESS(status)) {
         // start async send, completion handler will return ciphertext buffer to the pool
-        LOG_IF_NOT_NT_SUCCESS(status = OvpnSocketSend(&device->Socket, buffer));
+        LOG_IF_NOT_NT_SUCCESS(status = OvpnSocketSend(&socket, buffer));
         if (NT_SUCCESS(status)) {
             LOG_INFO("Ping sent");
         }
@@ -85,7 +94,8 @@ static VOID OvpnTimerXmit(WDFTIMER timer)
     else {
         OvpnTxBufferPoolPut(buffer);
     }
-    ExReleaseSpinLockShared(&device->SpinLock, kiqrl);
+
+    OvpnSocketRelease(device);
 }
 
 static BOOLEAN OvpnTimerRecv(WDFTIMER timer)
