@@ -97,8 +97,14 @@ struct OVPN_DEVICE {
     _Guarded_by_(SpinLock)
     OvpnCryptoContext CryptoContext;
 
-    _Guarded_by_(SpinLock)
+    // The socket pointer inside is published and unpublished with Interlocked operations
+    // rather than under SpinLock, so that a sender can send with no lock held. The receive
+    // state buffers are still the lock's.
     OvpnSocket Socket;
+
+    // senders inside OvpnSocketSend, so teardown can wait for them before closing
+    _Interlocked_
+    LONG SocketSenders;
 
     _Guarded_by_(SpinLock)
     NETADAPTER Adapter;

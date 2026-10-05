@@ -183,15 +183,17 @@ OvpnEvtIoWrite(WDFQUEUE queue, WDFREQUEST request, size_t length)
 
     POVPN_DEVICE device = OvpnGetDeviceContext(WdfIoQueueGetDevice(queue));
 
-    // acquire spinlock, since we access device->TransportSocket
-    KIRQL kiqrl = ExAcquireSpinLockShared(&device->SpinLock);
-
     OVPN_TX_BUFFER* buffer = NULL;
 
-    if (device->Socket.Socket == NULL) {
+    // A hold on the socket, not the device lock: the transport may deliver this datagram
+    // back to us inline, on this thread, and the receive path takes that lock.
+    OvpnSocketRef socket;
+    if (!OvpnSocketAcquire(device, &socket)) {
         status = STATUS_INVALID_DEVICE_STATE;
         LOG_ERROR("TransportSocket is not initialized");
-        goto error;
+        ULONG_PTR noBytes = 0;
+        WdfRequestCompleteWithInformation(request, status, noBytes);
+        return;
     }
 
     // fetch tx buffer
@@ -218,7 +220,7 @@ OvpnEvtIoWrite(WDFQUEUE queue, WDFREQUEST request, size_t length)
     GOTO_IF_NOT_NT_SUCCESS(error, status, WdfRequestForwardToIoQueue(request, device->PendingWritesQueue));
 
     // send
-    LOG_IF_NOT_NT_SUCCESS(status = OvpnSocketSend(&device->Socket, buffer));
+    LOG_IF_NOT_NT_SUCCESS(status = OvpnSocketSend(&socket, buffer));
 
     goto done_not_complete;
 
@@ -231,7 +233,7 @@ error:
     WdfRequestCompleteWithInformation(request, status, bytesCopied);
 
 done_not_complete:
-    ExReleaseSpinLockShared(&device->SpinLock, kiqrl);
+    OvpnSocketRelease(device);
 }
 
 EVT_WDF_IO_QUEUE_IO_DEVICE_CONTROL OvpnEvtIoDeviceControl;

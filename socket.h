@@ -70,9 +70,35 @@ _IRQL_requires_(PASSIVE_LEVEL)
 NTSTATUS
 OvpnSocketClose(_In_ PWSK_SOCKET socket);
 
+struct OVPN_DEVICE;
+
+// What a sender needs to send, copied out while the socket is known to be alive. Neither
+// field changes while the socket is published, so the send itself needs no lock.
+struct OvpnSocketRef
+{
+	PWSK_SOCKET Socket;
+	BOOLEAN Tcp;
+	SOCKADDR_STORAGE RemoteSA;
+};
+
+// Take a hold on the transport socket and copy out what a send needs. FALSE means there is
+// no socket to send on. Every TRUE is paired with OvpnSocketRelease.
+_Must_inspect_result_
+BOOLEAN
+OvpnSocketAcquire(_In_ OVPN_DEVICE* device, _Out_ OvpnSocketRef* ref);
+
+VOID
+OvpnSocketRelease(_In_ OVPN_DEVICE* device);
+
+// Unpublish the socket so later senders find nothing, then wait for the ones already
+// inside a send. Returns the socket for the caller to close.
+_IRQL_requires_(PASSIVE_LEVEL)
+PWSK_SOCKET
+OvpnSocketDetach(_In_ OVPN_DEVICE* device);
+
 _Must_inspect_result_
 NTSTATUS
-OvpnSocketSend(_In_ OvpnSocket* ovpnSocket, _In_ OVPN_TX_BUFFER* buffer);
+OvpnSocketSend(_In_ OvpnSocketRef* ovpnSocket, _In_ OVPN_TX_BUFFER* buffer);
 
 _Must_inspect_result_
 NTSTATUS

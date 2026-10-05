@@ -81,7 +81,6 @@ OvpnPeerNew(POVPN_DEVICE device, WDFREQUEST request)
     RtlZeroMemory(&device->CryptoContext, sizeof(OvpnCryptoContext));
     device->CryptoContext.AesAlgHandle = aesAlgHandle;
     device->CryptoContext.ChachaAlgHandle = chachaAlgHandle;
-    device->Socket.Socket = socket;
     device->Socket.Tcp = proto_tcp;
     RtlZeroMemory(&device->Socket.TcpState, sizeof(OvpnSocketTcpState));
     RtlZeroMemory(&device->Socket.UdpState, sizeof(OvpnSocketUdpState));
@@ -94,6 +93,10 @@ OvpnPeerNew(POVPN_DEVICE device, WDFREQUEST request)
     else if (peer->Remote.Addr6.sin6_family == AF_INET6) {
         RtlCopyMemory(&device->Socket.RemoteSA, &peer->Remote.Addr6, sizeof(SOCKADDR_IN6));
     }
+
+    // Published last, so a sender that sees the pointer also sees the rest, and published
+    // atomically, because senders read it without the lock.
+    InterlockedExchangePointer((PVOID volatile*)&device->Socket.Socket, socket);
 
     ExReleaseSpinLockExclusive(&device->SpinLock, kirql);
 
@@ -137,14 +140,15 @@ OvpnPeerDel(POVPN_DEVICE device)
 
     InterlockedExchange(&device->UserspacePid, 0);
 
-    PWSK_SOCKET socket = device->Socket.Socket;
-    device->Socket.Socket = NULL;
-
     RtlZeroMemory(&device->Socket.TcpState, sizeof(OvpnSocketTcpState));
     RtlZeroMemory(&device->Socket.UdpState, sizeof(OvpnSocketUdpState));
 
     // OvpnCryptoUninitAlgHandles and OvpnSocketClose require PASSIVE_LEVEL, so must release lock
     ExReleaseSpinLockExclusive(&device->SpinLock, kirql);
+
+    // Unpublish the socket, then wait for the senders already inside a send. They hold no
+    // lock now, so this waits for the sends themselves and nothing else.
+    PWSK_SOCKET socket = OvpnSocketDetach(device);
 
     // Stop the timer outside the lock and wait for completion
     if (timer != WDF_NO_HANDLE) {
