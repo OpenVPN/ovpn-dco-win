@@ -13,6 +13,12 @@ jobs:
       matrix:
         arch: [x64, ARM64]
         build_conf: [Debug, Release, Debug-Win11, Release-Win11]
+        include:
+          # vcpkg triplets are lowercase; msbuild wants the platform capitalised
+          - arch: x64
+            triplet: x64-windows
+          - arch: ARM64
+            triplet: arm64-windows
 
     steps:
     - uses: actions/checkout@v2
@@ -29,7 +35,7 @@ jobs:
       with:
         vcpkgGitCommitId: '9e593bb18ea69cc5095e012465dcd675a822ed0d'
         vcpkgArguments: 'asio'
-        vcpkgTriplet: '${{ matrix.arch }}-windows'
+        vcpkgTriplet: '${{ matrix.triplet }}'
 
     - name: Install Wix 3.14
       run: |
