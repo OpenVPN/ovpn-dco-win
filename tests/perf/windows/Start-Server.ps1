@@ -28,6 +28,7 @@ param(
     [int]$Port = 11198,
     [string]$Subnet = '10.88.0.0',
     [string]$Mask = '255.255.255.0',
+    [string]$Cipher = 'AES-256-GCM',
     [string]$CertDir = 'C:\ovpn-perf\keys',
     [string]$WorkDir = "$env:TEMP\ovpn-perf",
     # a multipeer server needs a binary that knows the MP ioctls, which is the same
@@ -105,7 +106,7 @@ ca "$certs/ca.crt"
 cert "$certs/server.crt"
 key "$certs/server.key"
 dh none
-data-ciphers AES-256-GCM
+data-ciphers $Cipher
 keepalive 10 60
 verb 3
 log "$($logFile -replace '\\', '/')"
