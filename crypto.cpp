@@ -24,6 +24,9 @@
 #include <ntstrsafe.h>
 
 #include "crypto.h"
+#ifdef _AMD64_
+#include "cryptogams.h"
+#endif
 #include "trace.h"
 #include "pktid.h"
 #include "socket.h"
@@ -367,6 +370,19 @@ OvpnCryptoDecryptAEAD(OvpnCryptoRxState* rx, UCHAR* bufIn, SIZE_T len, UCHAR* bu
     // A key was found but the tag does not verify. Distinct from an unknown epoch, and
     // common when a peer id is reused and a packet from the previous session lands
     // inside the new window, so name it rather than reporting a bare status.
+#ifdef _AMD64_
+    if (decryptKey->UseAsm) {
+        // the assembly works in place; when the caller asked for a separate output
+        // buffer, move the ciphertext there first and decrypt it where it landed
+        if (bufOut != bufIn) {
+            RtlCopyMemory(bufOut, bufIn, len);
+        }
+        status = OvpnChaChaPolyDecrypt(decryptKey->RawKey, nonce,
+                                       authInfo.pbAuthData, authInfo.cbAuthData,
+                                       bufOut, len, authInfo.pbTag);
+    }
+    else
+#endif
     status = BCryptDecrypt(decryptKey->Key, bufIn, (ULONG)len, &authInfo, NULL, 0, bufOut,
         (ULONG)len, &bytesDone, 0);
     if (!NT_SUCCESS(status)) {
@@ -478,6 +494,16 @@ OvpnCryptoEncryptAEAD(OvpnCryptoTxState* tx, UCHAR* buf, SIZE_T len, OvpnCryptoO
 
     // Not chained, so the per-call state lives in this thread's own authInfo, which is the
     // one thing CNG says not to share. That is what lets senders share the key.
+#ifdef _AMD64_
+    if (tx->Key.UseAsm) {
+        GOTO_IF_NOT_NT_SUCCESS(done, status,
+            OvpnChaChaPolyEncrypt(tx->Key.RawKey, nonce,
+                                  authInfo.pbAuthData, authInfo.cbAuthData,
+                                  buf, len, authInfo.pbTag));
+        goto done;
+    }
+#endif
+
     ULONG bytesDone = 0;
     GOTO_IF_NOT_NT_SUCCESS(done, status, BCryptEncrypt(tx->Key.Key, buf, (ULONG)len, &authInfo, NULL, 0, buf, (ULONG)len, &bytesDone, 0));
 
@@ -562,6 +588,7 @@ OvpnCryptoNewKey(OvpnPeerContext* peer, POVPN_CRYPTO_DATA_V2 cryptoDataV2, BCRYP
             options.UseEpoch = TRUE;
             options.HkdfAlgHandle = hkdfAlgHandle;
             options.AeadAlgHangle = algHandle;
+            options.CipherAlg = cryptoData->CipherAlg;
 
             tx.EpochKey.Epoch = 1;
             RtlCopyMemory(tx.EpochKey.EpochKey, cryptoData->Encrypt.Key, 32);
@@ -580,6 +607,19 @@ OvpnCryptoNewKey(OvpnPeerContext* peer, POVPN_CRYPTO_DATA_V2 cryptoDataV2, BCRYP
             // copy nonce tails
             RtlCopyMemory(tx.Key.ImplicitIV + 4, cryptoData->Encrypt.NonceTail, sizeof(cryptoData->Encrypt.NonceTail));
             RtlCopyMemory(rx.Key.ImplicitIV + 4, cryptoData->Decrypt.NonceTail, sizeof(cryptoData->Decrypt.NonceTail));
+
+#ifdef _AMD64_
+            // the assembly takes raw key bytes where CNG takes a handle
+            if ((cryptoData->CipherAlg == OVPN_CIPHER_ALG_CHACHA20_POLY1305) &&
+                (cryptoData->Encrypt.KeyLen == sizeof(tx.Key.RawKey)) &&
+                (cryptoData->Decrypt.KeyLen == sizeof(rx.Key.RawKey)) &&
+                OvpnCryptogamsUsable()) {
+                RtlCopyMemory(tx.Key.RawKey, cryptoData->Encrypt.Key, sizeof(tx.Key.RawKey));
+                RtlCopyMemory(rx.Key.RawKey, cryptoData->Decrypt.Key, sizeof(rx.Key.RawKey));
+                tx.Key.UseAsm = TRUE;
+                rx.Key.UseAsm = TRUE;
+            }
+#endif
         }
 
         LOG_INFO("New key", TraceLoggingValue(cryptoData->CipherAlg == OVPN_CIPHER_ALG_AES_GCM ? "aes-gcm" : "chacha20-poly1305", "alg"),

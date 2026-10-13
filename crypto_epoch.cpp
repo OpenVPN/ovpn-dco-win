@@ -20,6 +20,9 @@
  */
 
 #include "crypto_epoch.h"
+#if defined(_AMD64_) && defined(_KERNEL_MODE)
+#include "cryptogams.h"
+#endif
 #include "trace.h"
 
 // Derive bytes via HKDF-Expand with PRK = E_i, using bcrypt HKDF.
@@ -164,6 +167,15 @@ OvpnCryptoEpochInitKey(OvpnCryptoKeyContext* ctx, OvpnCryptoEpochKey* epochKey, 
     ctx->Epoch = key.Epoch;
     ctx->Key = key.KeyHandle;
     RtlCopyMemory(ctx->ImplicitIV, key.IV, sizeof(ctx->ImplicitIV));
+
+#if defined(_AMD64_) && defined(_KERNEL_MODE)
+    // keep the raw bytes for the assembly path; key.Cipher is wiped just below
+    ctx->UseAsm = (opts->CipherAlg == OVPN_CIPHER_ALG_CHACHA20_POLY1305) &&
+                  (opts->KeyLen == sizeof(ctx->RawKey)) && OvpnCryptogamsUsable();
+    if (ctx->UseAsm) {
+        RtlCopyMemory(ctx->RawKey, key.Cipher, sizeof(ctx->RawKey));
+    }
+#endif
 
     RtlSecureZeroMemory(&key, sizeof(OvpnCryptoKeyParameters));
 }

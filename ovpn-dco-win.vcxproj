@@ -71,6 +71,7 @@
     <ClCompile Include="bufferpool.cpp" />
     <ClCompile Include="control.cpp" />
     <ClCompile Include="crypto.cpp" />
+    <ClCompile Include="cryptogams.cpp" Condition="'$(Platform)'=='x64'" />
     <ClCompile Include="crypto_epoch.cpp" />
     <ClCompile Include="driver.cpp" />
     <ClCompile Include="mss.cpp" />
@@ -792,6 +793,10 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <FilesToPackage Include="$(TargetPath)" />
+  </ItemGroup>
+  <ItemGroup>
+    <MASM Include="chacha-x86_64.asm" Condition="'$(Platform)'=='x64'" />
+    <MASM Include="poly1305-x86_64.asm" Condition="'$(Platform)'=='x64'" />
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="ovpn-dco.rc" />
