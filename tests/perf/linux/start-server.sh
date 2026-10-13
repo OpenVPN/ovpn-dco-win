@@ -13,10 +13,12 @@ PROTO=udp; PORT=11198; SUBNET=10.88.0.0; DEV=ovpn-perf
 KEYS=${KEYS:-/usr/share/doc/openvpn/examples/sample-keys}
 RUN=${RUN:-$HOME/perf}
 
+CIPHER=${CIPHER:-AES-256-GCM}
 while [ $# -gt 0 ]; do
     case "$1" in
         --proto)  PROTO=$2; shift 2 ;;
         --port)   PORT=$2; shift 2 ;;
+        --cipher) CIPHER=$2; shift 2 ;;
         --subnet) SUBNET=$2; shift 2 ;;
         --dev)    DEV=$2; shift 2 ;;
         --stop)   sudo pkill -f "$RUN/server.conf" 2>/dev/null; exit 0 ;;
@@ -48,7 +50,7 @@ ca $KEYS/ca.crt
 cert $KEYS/server.crt
 key $KEYS/server.key
 dh none
-data-ciphers AES-256-GCM
+data-ciphers $CIPHER
 keepalive 10 60
 verb 3
 EOF

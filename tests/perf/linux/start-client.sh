@@ -13,10 +13,12 @@ SERVER=""; PORT=11198; DEV=ovpn-perf
 KEYS=${KEYS:-/usr/share/doc/openvpn/examples/sample-keys}
 RUN=${RUN:-$HOME/perf}
 
+CIPHER=${CIPHER:-AES-256-GCM}
 while [ $# -gt 0 ]; do
     case "$1" in
         --server) SERVER=$2; shift 2 ;;
         --port)   PORT=$2; shift 2 ;;
+        --cipher) CIPHER=$2; shift 2 ;;
         --dev)    DEV=$2; shift 2 ;;
         --stop)   sudo pkill -f "$RUN/client.conf" 2>/dev/null; exit 0 ;;
         *) echo "unknown argument: $1" >&2; exit 2 ;;
@@ -40,7 +42,7 @@ ca $KEYS/ca.crt
 cert $KEYS/client.crt
 key $KEYS/client.key
 remote-cert-tls server
-data-ciphers AES-256-GCM
+data-ciphers $CIPHER
 verb 3
 EOF
 

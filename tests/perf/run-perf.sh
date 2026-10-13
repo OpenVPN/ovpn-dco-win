@@ -3,6 +3,7 @@
 #             [--peer linux|<ssh-target>] [--server-ip <ip>] [--seconds 30] [--runs 3]
 #             [--streams "1 4"] [--min-mbit 3500] [--markdown <file>]
 #             [--keys <dir>] [--iperf3 <path on Windows>] [--outdir <dir>]
+#             [--cipher AES-256-GCM|CHACHA20-POLY1305]
 #
 # Throughput of the driver under test, in both directions.
 #
@@ -25,7 +26,7 @@
 set -u
 
 DUT=""; SERVER_IP=""; MODE=client; PROTO=udp; PEER=linux
-SECONDS_PER=30; RUNS=3; STREAMS="1 4"
+SECONDS_PER=30; RUNS=3; STREAMS="1 4"; CIPHER=AES-256-GCM
 REMOTE_DIR='C:\ovpn-perf'; OUTDIR=""; PORT=11198
 KEYS=${KEYS:-/usr/share/doc/openvpn/examples/sample-keys}
 IPERF3='C:\stage\iperf3.exe'
@@ -46,6 +47,7 @@ while [ $# -gt 0 ]; do
         --seconds)    SECONDS_PER=$2; shift 2 ;;
         --runs)       RUNS=$2; shift 2 ;;
         --streams)    STREAMS=$2; shift 2 ;;
+        --cipher)     CIPHER=$2; shift 2 ;;
         --port)       PORT=$2; shift 2 ;;
         --keys)       KEYS=$2; shift 2 ;;
         --iperf3)     IPERF3=$2; shift 2 ;;
@@ -189,12 +191,12 @@ echo "== checking the machines are set up for measurement"
 
 echo "== starting the $SRV_OS server"
 if [ "$SRV_OS" = linux ]; then
-    linux_run "$SRV_HOST" start-server.sh --proto "$PROTO" --port "$PORT" ||
+    linux_run "$SRV_HOST" start-server.sh --proto "$PROTO" --port "$PORT" --cipher "$CIPHER" ||
         fail "the Linux server did not start"
 else
     # The status has to come from the script, not from the tr that tidies its output:
     # a pipeline reports the last command, so piping first swallows the failure.
-    out=$(ps_on "$SRV_HOST" 'Start-Server.ps1' -Up -Port "$PORT" 2>&1) ||
+    out=$(ps_on "$SRV_HOST" 'Start-Server.ps1' -Up -Port "$PORT" -Cipher "$CIPHER" 2>&1) ||
         { echo "$out" | tr -d '\r'; fail "the Windows server did not start"; }
     echo "$out" | tr -d '\r'
 fi
@@ -207,10 +209,10 @@ home_etl="$REMOTE_DIR\\home-$TEST.etl"
 
 echo "== starting the $CLI_OS client"
 if [ "$CLI_OS" = linux ]; then
-    linux_run "$CLI_HOST" start-client.sh --server "$SERVER_IP" --port "$PORT" ||
+    linux_run "$CLI_HOST" start-client.sh --server "$SERVER_IP" --port "$PORT" --cipher "$CIPHER" ||
         fail "the Linux client did not connect"
 else
-    out=$(ps_on "$CLI_HOST" 'Start-Client.ps1' -Up -Server "$SERVER_IP" -Port "$PORT" -Proto "$PROTO" \
+    out=$(ps_on "$CLI_HOST" 'Start-Client.ps1' -Up -Server "$SERVER_IP" -Port "$PORT" -Proto "$PROTO" -Cipher "$CIPHER" \
               -CertDir "$REMOTE_DIR\\keys" 2>&1) ||
         { echo "$out" | tr -d '\r'; fail "the Windows client did not connect"; }
     echo "$out" | tr -d '\r'
@@ -423,4 +425,4 @@ for p in $STREAMS; do
     done
 done
 
-echo "{\"verdict\":\"PASS\",\"test\":\"$TEST\",\"forward_mbit\":$(median forward "$first"),\"reverse_mbit\":$(median reverse "$first"),\"busiest_core_pct\":${busy_pct:-0},\"busiest_core_dpc_pct\":${busy_dpc:-0},\"nic_core\":\"${nic_core:--}\",\"nic_core_pct\":${nic_busy:-0},\"nic_core_dpc_pct\":${nic_dpc:-0},\"home_core\":\"${home_core:--}\",\"outdir\":\"$OUTDIR\"}"
+echo "{\"verdict\":\"PASS\",\"test\":\"$TEST\",\"cipher\":\"$CIPHER\",\"forward_mbit\":$(median forward "$first"),\"reverse_mbit\":$(median reverse "$first"),\"busiest_core_pct\":${busy_pct:-0},\"busiest_core_dpc_pct\":${busy_dpc:-0},\"nic_core\":\"${nic_core:--}\",\"nic_core_pct\":${nic_busy:-0},\"nic_core_dpc_pct\":${nic_dpc:-0},\"home_core\":\"${home_core:--}\",\"outdir\":\"$OUTDIR\"}"
