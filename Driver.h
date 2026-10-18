@@ -110,9 +110,16 @@ struct OVPN_DEVICE {
     BCRYPT_ALG_HANDLE ChachaAlgHandle;
     BCRYPT_ALG_HANDLE HkdfAlgHandle;
 
-    // Not SpinLock: senders take a reference instead, so a send holds nothing and a
-    // datagram delivered back to us inline cannot deadlock. See OvpnSocketAcquire.
-    OvpnSocket Socket;
+    // The session's socket, or NULL between sessions. A peer holds a reference on the
+    // one it sends over, so the transmit path reaches it through the peer and never
+    // through here; this slot is for the paths that have no peer to ask.
+    _Guarded_by_(SpinLock)
+    OvpnSocket* Socket;
+
+    // Every socket is created under this and releases it once it is closed and gone.
+    // A socket now outlives the session that opened it, and WSK can call back into
+    // this image for as long as one exists, so removal has to wait for them.
+    EX_RUNDOWN_REF SocketRundown;
     // Control writes handed to the socket and not yet completed. Userspace is not
     // throttled by the send any more - the write completes as soon as the payload is
     // copied - so this is what stops a writer outrunning the sends and taking the

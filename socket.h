@@ -42,14 +42,6 @@ struct OvpnSocketTcpState
 	UCHAR PacketBuf[OVPN_SOCKET_RX_PACKET_BUFFER_SIZE];
 };
 
-// What a send needs. The state buffers below belong to the receive path, and both
-// fields here are fixed for the life of a socket.
-struct OvpnSocketRef
-{
-	PWSK_SOCKET Socket;
-	BOOLEAN Tcp;
-};
-
 struct OvpnSocket
 {
 	// the device this socket belongs to: WSK hands this object to the receive
@@ -61,44 +53,64 @@ struct OvpnSocket
 
 	OvpnSocketTcpState TcpState;
 
-	// senders inside OvpnSocketSend, and what OvpnSocketDetach waits on
-	volatile LONG Senders;
-	KEVENT Drained;
+	// What keeps this socket open: the device's slot while it is the current one, and
+	// every peer that sends over it. The last holder to let go closes it, so nothing
+	// has to wait for a send or a connect to finish before tearing a session down.
+	volatile LONG Refs;
+
+	// Closing needs PASSIVE_LEVEL and the last reference can go at DISPATCH_LEVEL.
+	// Deliberately not a WDFWORKITEM: the device's own children are disposed while its
+	// cleanup runs, and that cleanup is what waits for this to close the socket.
+	PIO_WORKITEM CloseWorkItem;
+
+	// Set when the device lets go of it. A retired socket stays open while someone
+	// is still sending over it, but what it receives is no longer anyone's: the
+	// session it belonged to is gone.
+	volatile LONG Retired;
 };
 
+// Creates a socket and its WSK handle, with one reference for the caller.
 _Must_inspect_result_
 _IRQL_requires_(PASSIVE_LEVEL)
 NTSTATUS
-OvpnSocketInit(_In_ WSK_PROVIDER_NPI* wskProviderNpi, _In_ WSK_REGISTRATION* wskRegistration, ADDRESS_FAMILY addrFamily,
-	BOOLEAN tcp, _In_ PSOCKADDR localAddr, _In_opt_ PSOCKADDR remoteAddr, SIZE_T remoteAddrSize,
-	_In_ OvpnSocket* sock, _Out_ PWSK_SOCKET* socket, BOOLEAN ipv6only);
+OvpnSocketCreate(_In_ OVPN_DEVICE* device, ADDRESS_FAMILY addrFamily, BOOLEAN tcp,
+	_In_ PSOCKADDR localAddr, _In_opt_ PSOCKADDR remoteAddr, SIZE_T remoteAddrSize,
+	BOOLEAN ipv6only, _Outptr_ OvpnSocket** sock);
+
+// One more holder of the socket. Callers may be at DISPATCH_LEVEL.
+VOID
+OvpnSocketReference(_In_ OvpnSocket* sock);
+
+// One fewer holder. The last one closes the socket and frees it, from a work item when
+// it has to. Callers may be at DISPATCH_LEVEL.
+VOID
+OvpnSocketRelease(_In_opt_ OvpnSocket* sock);
+
+// The same, for callers that must not be kept waiting even at PASSIVE_LEVEL: the close
+// always goes to the work item. For the datapath, which owes NetAdapterCx a prompt
+// return and cannot spend it inside a WSK close.
+VOID
+OvpnSocketReleaseNoBlock(_In_opt_ OvpnSocket* sock);
+
+// The device's current socket with a reference on it, or NULL when it has none. For
+// the paths that have no peer to take it from.
+_Must_inspect_result_
+OvpnSocket*
+OvpnSocketGet(_In_ OVPN_DEVICE* device);
+
+// Makes this the device's current socket, letting go of the one it had. NULL for a
+// session that is going away.
+_IRQL_requires_max_(DISPATCH_LEVEL)
+VOID
+OvpnSocketPublish(_In_ OVPN_DEVICE* device, _In_opt_ OvpnSocket* sock);
 
 _Must_inspect_result_
-_IRQL_requires_(PASSIVE_LEVEL)
 NTSTATUS
-OvpnSocketClose(_In_opt_ PWSK_SOCKET socket);
-
-_Must_inspect_result_
-NTSTATUS
-OvpnSocketSend(_In_ OvpnSocketRef* socket, _In_ OVPN_TX_BUFFER* buffer, _In_opt_ SOCKADDR* sa);
+OvpnSocketSend(_In_ OvpnSocket* sock, _In_ OVPN_TX_BUFFER* buffer, _In_opt_ SOCKADDR* sa);
 
 // TCP data: sends a chain of encrypted buffers, linked by WskBufList.Next, as one stream write
 VOID
-OvpnSocketSendTcpBatch(_In_ OvpnSocketRef* socket, _In_ OVPN_TX_BUFFER* head);
-
-// Rundown for one socket: the reference covers the send call, not its completion,
-// which is what the device lock gave before. Callers may be at DISPATCH_LEVEL.
-_Must_inspect_result_
-BOOLEAN
-OvpnSocketAcquire(_In_ OvpnSocket* sock, _When_(return != FALSE, _Out_) OvpnSocketRef* ref);
-
-VOID
-OvpnSocketRelease(_In_ OvpnSocket* sock);
-
-// Unpublishes the socket, waits for senders already inside one, and returns it to close.
-_IRQL_requires_(PASSIVE_LEVEL)
-PWSK_SOCKET
-OvpnSocketDetach(_In_ OvpnSocket* sock);
+OvpnSocketSendTcpBatch(_In_ OvpnSocket* sock, _In_ OVPN_TX_BUFFER* head);
 
 // Decrypts a received data packet in place. Called by OvpnRxWorkersSubmit's worker.
 _IRQL_requires_max_(DISPATCH_LEVEL)

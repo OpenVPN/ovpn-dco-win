@@ -235,9 +235,9 @@ OvpnTxEncryptLocked(_In_ OvpnPeerContext* peer, _In_ OVPN_TX_BUFFER* buffer)
 // socket they leave by. A different socket or destination flushes what is already there.
 struct OVPN_TX_BATCH
 {
-    // the socket the reference below was taken from, NULL when the batch holds none
+    // the socket the chain goes out on, held by the batch until the pass ends: the
+    // chain outlives the peer reference it came from
     OvpnSocket* Sock;
-    OvpnSocketRef Ref;
 
     OVPN_TX_BUFFER* Head;
     OVPN_TX_BUFFER* Tail;
@@ -253,45 +253,40 @@ OvpnTxBatchFlush(_Inout_ OVPN_TX_BATCH* batch)
         return;
     }
 
-    if (batch->Ref.Tcp) {
-        OvpnSocketSendTcpBatch(&batch->Ref, batch->Head);
+    if (batch->Sock->Tcp) {
+        OvpnSocketSendTcpBatch(batch->Sock, batch->Head);
     }
     else {
         // this will use WskSendMessages to send the buffer list we constructed before
-        LOG_IF_NOT_NT_SUCCESS(OvpnSocketSend(&batch->Ref, batch->Head, (SOCKADDR*)&batch->Sockaddr));
+        LOG_IF_NOT_NT_SUCCESS(OvpnSocketSend(batch->Sock, batch->Head, (SOCKADDR*)&batch->Sockaddr));
     }
 
     batch->Head = NULL;
     batch->Tail = NULL;
 }
 
-// Point the batch at this socket, sending and releasing the one it held before.
-_Must_inspect_result_
+// Point the batch at this socket, sending what the previous one still holds. The batch
+// takes its own reference: the caller's peer reference is dropped before the chain is
+// sent, and the peer may be the last thing keeping the socket open.
 static
-BOOLEAN
+VOID
 OvpnTxBatchUse(_Inout_ OVPN_TX_BATCH* batch, _In_ OvpnSocket* sock)
 {
     if (batch->Sock == sock) {
-        return TRUE;
+        return;
     }
 
     OvpnTxBatchFlush(batch);
 
     if (batch->Sock != NULL) {
-        OvpnSocketRelease(batch->Sock);
-        batch->Sock = NULL;
+        OvpnSocketReleaseNoBlock(batch->Sock);
     }
 
-    if (!OvpnSocketAcquire(sock, &batch->Ref)) {
-        return FALSE;
-    }
-
+    OvpnSocketReference(sock);
     batch->Sock = sock;
-
-    return TRUE;
 }
 
-// End of a pass: send what is left and give the reference back.
+// End of a pass: send whatever is still chained.
 static
 VOID
 OvpnTxBatchEnd(_Inout_ OVPN_TX_BATCH* batch)
@@ -299,7 +294,8 @@ OvpnTxBatchEnd(_Inout_ OVPN_TX_BATCH* batch)
     OvpnTxBatchFlush(batch);
 
     if (batch->Sock != NULL) {
-        OvpnSocketRelease(batch->Sock);
+        // never inline: this is the transmit pass, and a close waits for WSK
+        OvpnSocketReleaseNoBlock(batch->Sock);
         batch->Sock = NULL;
     }
 }
@@ -314,7 +310,7 @@ OvpnTxSubmit(_Inout_ OVPN_TX_BATCH* batch, _In_ OVPN_TX_BUFFER* buffer, _In_ con
     // TCP: chain the buffers too, and send up to OVPN_TX_TCP_BATCH_MAX as one stream write. The
     // head keeps the chain's length in WskBufList.Buffer.Length: only the UDP path reads that field,
     // and the pool clears it for the buffer's next use.
-    if (batch->Ref.Tcp) {
+    if (batch->Sock->Tcp) {
         SIZE_T const len = 2 + buffer->Len;
         buffer->WskBufList.Next = NULL;
         if ((batch->Head != NULL) && (batch->Head->WskBufList.Buffer.Length + len > OVPN_TX_TCP_BATCH_MAX)) {
@@ -368,10 +364,7 @@ OvpnTxEncryptAndSend(_In_ POVPN_DEVICE device, _Inout_ OVPN_TX_BATCH* batch, _In
     _In_ OVPN_TX_BUFFER* buffer)
 {
     // the chain belongs to one socket: a peer sending by another one flushes it first
-    if (!OvpnTxBatchUse(batch, peer->Socket)) {
-        OvpnTxBufferPoolPut(buffer);
-        return STATUS_INVALID_DEVICE_STATE;
-    }
+    OvpnTxBatchUse(batch, peer->Socket);
 
     InterlockedExchangeAddNoFence64(&device->Stats.TunBytesSent, buffer->Len);
     InterlockedExchangeAddNoFence64(&peer->VpnTxBytes, buffer->Len);
@@ -777,9 +770,9 @@ OvpnEvtTxQueueAdvance(NETPACKETQUEUE netPacketQueue)
     NET_RING_PACKET_ITERATOR pi = NetRingGetAllPackets(queue->Rings);
     POVPN_DEVICE device = OvpnGetDeviceContext(queue->Adapter->WdfDevice);
 
-    // A relaxed read is enough, it only decides whether to bother; each peer's own
-    // socket is taken by the batch below, once per pass it sends on.
-    if (ReadPointerNoFence((PVOID volatile*)&device->Socket.Socket) == NULL) {
+    // A relaxed read is enough, it only decides whether to bother; the packets go out on
+    // whichever socket their peer holds.
+    if (ReadPointerNoFence((PVOID volatile*)&device->Socket) == NULL) {
         // Nowhere to send them, so drop them and hand the ring back. Leaving them on it
         // waits for EvtTxQueueCancel, which runs when a queue is deleted and not when a
         // session ends, so the framework would poll a ring that never drains.

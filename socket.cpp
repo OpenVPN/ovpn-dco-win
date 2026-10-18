@@ -37,6 +37,10 @@
 // how often OvpnSocketSyncOp logs while a WSK operation stays pending
 #define OVPN_SOCKET_SYNC_OP_WARN_INTERVAL_SEC 10
 
+_Must_inspect_result_
+_IRQL_requires_(PASSIVE_LEVEL)
+static NTSTATUS OvpnSocketClose(_In_opt_ PWSK_SOCKET socket);
+
 IO_COMPLETION_ROUTINE OvpnSocketSyncOpCompletionRoutine;
 
 _Use_decl_annotations_
@@ -463,6 +467,11 @@ OvpnSocketUdpReceiveFromEvent(_In_ PVOID socketContext, ULONG flags, _In_opt_ PW
         return STATUS_SUCCESS;
     }
 
+    // the session this belonged to is gone; its packets are not the next one's
+    if (ReadNoFence(&sock->Retired)) {
+        return STATUS_SUCCESS;
+    }
+
     OvpnSocketNoteNicCpu(device);
 
     while (dataIndication != NULL) {
@@ -560,6 +569,11 @@ OvpnSocketTcpReceiveEvent(_In_opt_ PVOID socketContext, _In_ ULONG flags, _In_op
 
     OvpnSocket* sock = (OvpnSocket*)socketContext;
     POVPN_DEVICE device = sock->Device;
+
+    // the session this belonged to is gone; its packets are not the next one's
+    if (ReadNoFence(&sock->Retired)) {
+        return STATUS_SUCCESS;
+    }
 
     OvpnSocketTcpState* tcpState = &sock->TcpState;
 
@@ -672,7 +686,13 @@ OvpnSocketTcpDisconnectEvent(_In_opt_ PVOID socketContext, _In_ ULONG flags)
         return STATUS_SUCCESS;
     }
 
-    POVPN_DEVICE device = ((OvpnSocket*)socketContext)->Device;
+    OvpnSocket* sock = (OvpnSocket*)socketContext;
+    POVPN_DEVICE device = sock->Device;
+
+    // the session this belonged to is gone; its disconnect is not the next one's
+    if (ReadNoFence(&sock->Retired)) {
+        return STATUS_SUCCESS;
+    }
 
     // inform userspace about error
     WDFREQUEST request;
@@ -691,7 +711,9 @@ OvpnSocketTcpDisconnectEvent(_In_opt_ PVOID socketContext, _In_ ULONG flags)
 const WSK_CLIENT_DATAGRAM_DISPATCH OvpnSocketUdpDispatch = { OvpnSocketUdpReceiveFromEvent };
 const WSK_CLIENT_CONNECTION_DISPATCH OvpnSocketTcpDispatch = { OvpnSocketTcpReceiveEvent, OvpnSocketTcpDisconnectEvent, NULL };
 
-_Use_decl_annotations_
+_Must_inspect_result_
+_IRQL_requires_(PASSIVE_LEVEL)
+static
 NTSTATUS
 OvpnSocketInit(WSK_PROVIDER_NPI* wskProviderNpi, WSK_REGISTRATION* wskRegistration, ADDRESS_FAMILY addressFamily, BOOLEAN tcp, PSOCKADDR localAddr,
     PSOCKADDR remoteAddr, SIZE_T remoteAddrSize, OvpnSocket* sock, PWSK_SOCKET* socket, BOOLEAN ipv6only)
@@ -779,8 +801,10 @@ done:
     return status;
 }
 
+_Must_inspect_result_
+_IRQL_requires_(PASSIVE_LEVEL)
+static
 NTSTATUS
-_Use_decl_annotations_
 OvpnSocketClose(PWSK_SOCKET socket)
 {
     if (socket == NULL) {
@@ -930,67 +954,190 @@ OvpnSocketSendComplete(_In_ PDEVICE_OBJECT deviceObj, _In_ PIRP irp, _In_ PVOID 
     return STATUS_MORE_PROCESSING_REQUIRED;
 }
 
-// Never the NoFence variants: this increment and the count read in OvpnSocketDetach are
-// read-modify-writes on one word, which is what orders the two sides on arm64.
-_Use_decl_annotations_
-BOOLEAN
-OvpnSocketAcquire(OvpnSocket* sock, OvpnSocketRef* ref)
+_IRQL_requires_(PASSIVE_LEVEL)
+static
+VOID
+OvpnSocketCloseAndFree(_In_ OvpnSocket* sock)
 {
-    InterlockedIncrement(&sock->Senders);
+    LOG_IF_NOT_NT_SUCCESS(OvpnSocketClose(sock->Socket));
 
-    // Pointer first, with acquire: the publisher writes Tcp before releasing it.
-    ref->Socket = (PWSK_SOCKET)ReadPointerAcquire((PVOID volatile*)&sock->Socket);
-    if (ref->Socket == NULL) {
-        OvpnSocketRelease(sock);
-        return FALSE;
+    PIO_WORKITEM workItem = sock->CloseWorkItem;
+    POVPN_DEVICE device = sock->Device;
+
+    ExFreePoolWithTag(sock, 'sovo');
+
+    // outlives the socket it was created for, so that it can be the thing that frees it
+    if (workItem != NULL) {
+        IoFreeWorkItem(workItem);
     }
-    ref->Tcp = sock->Tcp;
 
-    return TRUE;
+    // Last of all: removal resumes on this.
+    ExReleaseRundownProtection(&device->SocketRundown);
+}
+
+IO_WORKITEM_ROUTINE OvpnSocketCloseWorkItem;
+
+_Use_decl_annotations_
+VOID
+OvpnSocketCloseWorkItem(PDEVICE_OBJECT deviceObj, PVOID context)
+{
+    UNREFERENCED_PARAMETER(deviceObj);
+
+    OvpnSocketCloseAndFree((OvpnSocket*)context);
+}
+
+_Use_decl_annotations_
+VOID
+OvpnSocketReference(OvpnSocket* sock)
+{
+    InterlockedIncrement(&sock->Refs);
+}
+
+static
+VOID
+OvpnSocketReleaseInternal(_In_opt_ OvpnSocket* sock, BOOLEAN mayBlock)
+{
+    if (sock == NULL) {
+        return;
+    }
+
+    LONG const refs = InterlockedDecrement(&sock->Refs);
+
+    // A holder that lets go twice would close a socket others are still using, and the
+    // count is the only place that shows it. Cheap: this is a teardown path, not a send.
+    if (refs < 0) {
+        LOG_ERROR("Socket reference count underflow", TraceLoggingValue(refs, "refs"));
+        NT_ASSERT(FALSE);
+        return;
+    }
+
+    if (refs != 0) {
+        return;
+    }
+
+    // Nobody can reach it any more, so closing it is all that is left. Closing waits for
+    // WSK, so it only happens here when the caller is somewhere that can wait.
+    if (mayBlock && (KeGetCurrentIrql() == PASSIVE_LEVEL)) {
+        OvpnSocketCloseAndFree(sock);
+    }
+    else {
+        IoQueueWorkItem(sock->CloseWorkItem, OvpnSocketCloseWorkItem, DelayedWorkQueue, sock);
+    }
 }
 
 _Use_decl_annotations_
 VOID
 OvpnSocketRelease(OvpnSocket* sock)
 {
-    if (InterlockedDecrement(&sock->Senders) != 0) {
-        return;
-    }
-
-    // Unconditional: a signal skipped here is one the next detach waits for forever.
-    KeSetEvent(&sock->Drained, IO_NO_INCREMENT, FALSE);
+    OvpnSocketReleaseInternal(sock, TRUE);
 }
 
 _Use_decl_annotations_
-PWSK_SOCKET
-OvpnSocketDetach(OvpnSocket* sock)
+VOID
+OvpnSocketReleaseNoBlock(OvpnSocket* sock)
 {
-    // Unpublish first, so later senders find NULL, then wait for the earlier ones.
-    PWSK_SOCKET socket = (PWSK_SOCKET)InterlockedExchangePointer((PVOID*)&sock->Socket, NULL);
+    OvpnSocketReleaseInternal(sock, FALSE);
+}
 
-    // Re-checked after each wake, so a signal left from an earlier drain cannot end this
-    // one early. Waited in slices and logged, never given up on: the caller closes the
-    // socket next, and a sender still inside a send would be left holding it.
-    LARGE_INTEGER slice;
-    slice.QuadPart = -10LL * 1000 * 1000 * OVPN_SOCKET_SYNC_OP_WARN_INTERVAL_SEC;
-    ULONG pendingSec = 0;
+_Use_decl_annotations_
+OvpnSocket*
+OvpnSocketGet(OVPN_DEVICE* device)
+{
+    KIRQL kirql = ExAcquireSpinLockShared(&device->SpinLock);
 
-    while (InterlockedCompareExchange(&sock->Senders, 0, 0) != 0) {
-        KeClearEvent(&sock->Drained);
-
-        if (InterlockedCompareExchange(&sock->Senders, 0, 0) == 0) {
-            break;
-        }
-
-        if (KeWaitForSingleObject(&sock->Drained, Executive, KernelMode, FALSE, &slice) == STATUS_TIMEOUT) {
-            pendingSec += OVPN_SOCKET_SYNC_OP_WARN_INTERVAL_SEC;
-            LONG const refs = InterlockedCompareExchange(&sock->Senders, 0, 0);
-            LOG_WARN("Still waiting for socket senders to drain",
-                     TraceLoggingValue(pendingSec, "sec"), TraceLoggingValue(refs, "refs"));
-        }
+    OvpnSocket* sock = device->Socket;
+    if (sock != NULL) {
+        OvpnSocketReference(sock);
     }
 
-    return socket;
+    ExReleaseSpinLockShared(&device->SpinLock, kirql);
+
+    return sock;
+}
+
+_Use_decl_annotations_
+VOID
+OvpnSocketPublish(OVPN_DEVICE* device, OvpnSocket* sock)
+{
+    // the slot's own reference, taken before it can be found there
+    if (sock != NULL) {
+        OvpnSocketReference(sock);
+    }
+
+    KIRQL kirql = ExAcquireSpinLockExclusive(&device->SpinLock);
+    OvpnSocket* previous = device->Socket;
+    device->Socket = sock;
+
+    // Set here for tidiness, not for ordering: the receive callbacks do not take this
+    // lock, so a reader that already passed the check carries on regardless. What
+    // stops it reaching the next session is the close, which the release below does
+    // once the last holder lets go.
+    if (previous != NULL) {
+        WriteNoFence(&previous->Retired, 1);
+    }
+
+    ExReleaseSpinLockExclusive(&device->SpinLock, kirql);
+
+    // whoever is still sending over it keeps it alive until they are done
+    OvpnSocketRelease(previous);
+}
+
+_Use_decl_annotations_
+NTSTATUS
+OvpnSocketCreate(OVPN_DEVICE* device, ADDRESS_FAMILY addrFamily, BOOLEAN tcp, PSOCKADDR localAddr,
+    PSOCKADDR remoteAddr, SIZE_T remoteAddrSize, BOOLEAN ipv6only, OvpnSocket** sock)
+{
+    *sock = NULL;
+
+    OvpnSocket* newSock = (OvpnSocket*)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(OvpnSocket), 'sovo');
+    if (newSock == NULL) {
+        LOG_ERROR("Failed to allocate socket");
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    newSock->Device = device;
+    newSock->Tcp = tcp;
+    newSock->Refs = 1;
+
+    // Created up front, because the path that needs it is the one that cannot fail. It
+    // hangs off the WDM device object, which holds its own reference, rather than off
+    // the WDFDEVICE whose cleanup is what ends up waiting for it.
+    NTSTATUS status;
+    newSock->CloseWorkItem = IoAllocateWorkItem(WdfDeviceWdmGetDeviceObject(device->WdfDevice));
+    if (newSock->CloseWorkItem == NULL) {
+        LOG_ERROR("Failed to allocate the socket close work item");
+        status = STATUS_INSUFFICIENT_RESOURCES;
+        goto error;
+    }
+
+    // Taken before the WSK socket exists and released only once it is closed. Failing
+    // means the device is going away, and there is no point creating anything.
+    if (!ExAcquireRundownProtection(&device->SocketRundown)) {
+        LOG_ERROR("Device is going away, not creating a socket");
+        status = STATUS_DEVICE_REMOVED;
+        goto error;
+    }
+
+    POVPN_DRIVER driver = OvpnGetDriverContext(WdfGetDriver());
+    GOTO_IF_NOT_NT_SUCCESS(rundown, status, OvpnSocketInit(&driver->WskProviderNpi, &driver->WskRegistration,
+        addrFamily, tcp, localAddr, remoteAddr, remoteAddrSize, newSock, &newSock->Socket, ipv6only));
+
+    *sock = newSock;
+
+    return STATUS_SUCCESS;
+
+rundown:
+    if (!NT_SUCCESS(status)) {
+        ExReleaseRundownProtection(&device->SocketRundown);
+    }
+
+error:
+    if (newSock->CloseWorkItem != NULL) {
+        IoFreeWorkItem(newSock->CloseWorkItem);
+    }
+    ExFreePoolWithTag(newSock, 'sovo');
+
+    return status;
 }
 
 // Data packets of one transmit pass over TCP, copied back to back behind their length prefixes so
@@ -1032,7 +1179,7 @@ OvpnSocketSendTcpBatchComplete(PDEVICE_OBJECT deviceObj, PIRP irp, PVOID ctx)
 
 _Use_decl_annotations_
 VOID
-OvpnSocketSendTcpBatch(OvpnSocketRef* ovpnSocket, OVPN_TX_BUFFER* head)
+OvpnSocketSendTcpBatch(OvpnSocket* ovpnSocket, OVPN_TX_BUFFER* head)
 {
     OVPN_DEVICE* device = (OVPN_DEVICE*)OvpnTxBufferPoolGetContext(head->Pool);
 
@@ -1087,7 +1234,7 @@ OvpnSocketSendTcpBatch(OvpnSocketRef* ovpnSocket, OVPN_TX_BUFFER* head)
 
 _Use_decl_annotations_
 NTSTATUS
-OvpnSocketSend(OvpnSocketRef* ovpnSocket, OVPN_TX_BUFFER* buffer, SOCKADDR* sa) {
+OvpnSocketSend(OvpnSocket* ovpnSocket, OVPN_TX_BUFFER* buffer, SOCKADDR* sa) {
     OVPN_DEVICE* device = (OVPN_DEVICE*)OvpnTxBufferPoolGetContext(buffer->Pool);
 
     PWSK_SOCKET socket = ovpnSocket->Socket;
