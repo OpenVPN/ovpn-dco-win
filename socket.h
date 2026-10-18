@@ -86,19 +86,19 @@ OvpnSocketSend(_In_ OvpnSocketRef* socket, _In_ OVPN_TX_BUFFER* buffer, _In_opt_
 VOID
 OvpnSocketSendTcpBatch(_In_ OvpnSocketRef* socket, _In_ OVPN_TX_BUFFER* head);
 
-// Rundown for device->Socket: the reference covers the send call, not its completion,
+// Rundown for one socket: the reference covers the send call, not its completion,
 // which is what the device lock gave before. Callers may be at DISPATCH_LEVEL.
 _Must_inspect_result_
 BOOLEAN
-OvpnSocketAcquire(_In_ OVPN_DEVICE* device, _When_(return != FALSE, _Out_) OvpnSocketRef* socket);
+OvpnSocketAcquire(_In_ OvpnSocket* sock, _When_(return != FALSE, _Out_) OvpnSocketRef* ref);
 
 VOID
-OvpnSocketRelease(_In_ OVPN_DEVICE* device);
+OvpnSocketRelease(_In_ OvpnSocket* sock);
 
 // Unpublishes the socket, waits for senders already inside one, and returns it to close.
 _IRQL_requires_(PASSIVE_LEVEL)
 PWSK_SOCKET
-OvpnSocketDetach(_In_ OVPN_DEVICE* device);
+OvpnSocketDetach(_In_ OvpnSocket* sock);
 
 // Decrypts a received data packet in place. Called by OvpnRxWorkersSubmit's worker.
 _IRQL_requires_max_(DISPATCH_LEVEL)

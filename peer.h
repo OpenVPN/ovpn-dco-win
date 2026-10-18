@@ -70,6 +70,9 @@ struct OvpnPeerContext
         OVPN_REMOTE_ADDR Remote;
     } TransportAddrs;
 
+    // the transport this peer sends on, fixed for the peer's life
+    OvpnSocket* Socket;
+
     LONG RefCounter;
 
     // the core its packets arrive on, MAXULONG before the first; transmit workers stay off it

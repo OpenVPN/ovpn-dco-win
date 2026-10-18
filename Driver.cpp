@@ -236,8 +236,8 @@ OvpnEvtIoWrite(WDFQUEUE queue, WDFREQUEST request, size_t length)
 
     OVPN_TX_BUFFER* txBuf = NULL;
 
-    OvpnSocketRef socket;
-    if (!OvpnSocketAcquire(device, &socket)) {
+    OvpnSocketRef ref;
+    if (!OvpnSocketAcquire(&device->Socket, &ref)) {
         status = STATUS_INVALID_DEVICE_STATE;
         LOG_ERROR("TransportSocket is not initialized");
         WdfRequestCompleteWithInformation(request, status, 0);
@@ -317,11 +317,11 @@ OvpnEvtIoWrite(WDFQUEUE queue, WDFREQUEST request, size_t length)
 
     // TCP is a stream, so keep the request parked: sends stay ordered and the caller
     // still learns how the send went.
-    if (socket.Tcp) {
+    if (ref.Tcp) {
         txBuf->IoQueue = device->PendingWritesQueue;
         GOTO_IF_NOT_NT_SUCCESS(error, status, WdfRequestForwardToIoQueue(request, device->PendingWritesQueue));
 
-        LOG_IF_NOT_NT_SUCCESS(status = OvpnSocketSend(&socket, txBuf, sa));
+        LOG_IF_NOT_NT_SUCCESS(status = OvpnSocketSend(&ref, txBuf, sa));
         goto done_not_complete;
     }
 
@@ -342,7 +342,7 @@ OvpnEvtIoWrite(WDFQUEUE queue, WDFREQUEST request, size_t length)
     InterlockedIncrement(&device->TxControlInFlight);
 
     NTSTATUS sendStatus;
-    LOG_IF_NOT_NT_SUCCESS(sendStatus = OvpnSocketSend(&socket, txBuf, sa));
+    LOG_IF_NOT_NT_SUCCESS(sendStatus = OvpnSocketSend(&ref, txBuf, sa));
     txBuf = NULL; // the send owns it now
 
     if (park) {
@@ -360,7 +360,7 @@ error:
     WdfRequestCompleteWithInformation(request, status, NT_SUCCESS(status) ? length : 0);
 
 done_not_complete:
-    OvpnSocketRelease(device);
+    OvpnSocketRelease(&device->Socket);
 }
 
 NTSTATUS
@@ -438,7 +438,7 @@ OvpnStopVPN(_In_ POVPN_DEVICE device)
 
     // Stops new senders and waits for the ones inside a send, so the state below is
     // not zeroed under them.
-    PWSK_SOCKET socket = OvpnSocketDetach(device);
+    PWSK_SOCKET socket = OvpnSocketDetach(&device->Socket);
 
     // No lock needed: unpublished and drained, so nothing is reading these.
     device->Socket.Tcp = FALSE;

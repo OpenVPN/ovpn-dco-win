@@ -547,6 +547,8 @@ OvpnPeerNew(POVPN_DEVICE device, WDFREQUEST request)
         goto done;
     }
 
+    peerCtx->Socket = &device->Socket;
+
     // assign remote transport address
     if (peer->Remote.Addr4.sin_family == AF_INET) {
         peerCtx->TransportAddrs.Remote.IPv4 = peer->Remote.Addr4;
@@ -570,7 +572,7 @@ OvpnPeerNew(POVPN_DEVICE device, WDFREQUEST request)
     // OvpnStopVPN's lock-protected swap.
     {
         // Detach first: the old socket is only closed once nobody is inside a send.
-        PWSK_SOCKET oldSocket = OvpnSocketDetach(device);
+        PWSK_SOCKET oldSocket = OvpnSocketDetach(&device->Socket);
 
         // No lock: drained, and not published yet. The pointer goes last, with release,
         // so a sender that sees it also sees Tcp.
@@ -645,6 +647,8 @@ OvpnMPPeerNew(POVPN_DEVICE device, WDFREQUEST request)
         status = STATUS_NO_MEMORY;
         goto done;
     }
+
+    peerCtx->Socket = &device->Socket;
 
     // assign remote transport address
     auto ipv4 = peer->Remote.Addr4.sin_family == AF_INET;
