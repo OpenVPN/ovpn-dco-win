@@ -64,6 +64,10 @@ struct OVPN_TX_BUFFER
     // control channel packet, not data channel
     BOOLEAN ControlChannel;
 
+    // transport this buffer went out on: the send completion subtracts the 2-byte
+    // length prefix the TCP path prepends from the bytes it reports
+    BOOLEAN Tcp;
+
     // set while this buffer is counted in device->TxDataInFlight (datapath worker path)
     BOOLEAN CountedInFlight;
 

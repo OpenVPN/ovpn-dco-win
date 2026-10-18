@@ -559,7 +559,7 @@ OvpnPeerNew(POVPN_DEVICE device, WDFREQUEST request)
         &driver->WskRegistration, peer->Local.Addr4.sin_family, proto_tcp,
         (PSOCKADDR)&peer->Local,
         (PSOCKADDR)&peer->Remote,
-        remoteAddrSize, device, &socket, TRUE));
+        remoteAddrSize, &device->Socket, &socket, TRUE));
 
     GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnAddPeerToTable(device, &device->Peers, peerCtx));
 
@@ -590,7 +590,7 @@ OvpnPeerNew(POVPN_DEVICE device, WDFREQUEST request)
     if (proto_tcp) {
         LOG_IF_NOT_NT_SUCCESS(status = WdfRequestForwardToIoQueue(request, device->PendingNewPeerQueue));
         // start async connect
-        status = OvpnSocketTcpConnect(socket, device, (PSOCKADDR)&peer->Remote);
+        status = OvpnSocketTcpConnect(&device->Socket, (PSOCKADDR)&peer->Remote);
     }
 
 done:
