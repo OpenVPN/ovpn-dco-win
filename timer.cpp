@@ -126,11 +126,11 @@ static VOID OvpnTimerXmit(WDFTIMER timer)
 
     if (NT_SUCCESS(status)) {
         // A DPC can race a close like any other sender, so take the reference too.
-        OvpnSocketRef socket;
-        if (OvpnSocketAcquire(device, &socket)) {
+        OvpnSocketRef ref;
+        if (OvpnSocketAcquire(peer->Socket, &ref)) {
             // start async send, completion handler will return ciphertext buffer to the pool
-            LOG_IF_NOT_NT_SUCCESS(status = OvpnSocketSend(&socket, buffer, (SOCKADDR*)&sa));
-            OvpnSocketRelease(device);
+            LOG_IF_NOT_NT_SUCCESS(status = OvpnSocketSend(&ref, buffer, (SOCKADDR*)&sa));
+            OvpnSocketRelease(peer->Socket);
             if (NT_SUCCESS(status)) {
                 LOG_INFO("Ping sent", TraceLoggingValue(peerId, "peer-id"));
             }

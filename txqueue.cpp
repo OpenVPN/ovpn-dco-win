@@ -153,7 +153,7 @@ OvpnCheckRecursiveRoutingIPv6(SOCKADDR_IN6* transportAddr, UCHAR* buffer, SIZE_T
 // nowhere to send it.
 static
 OvpnPeerContext*
-OvpnTxFindPeer(_In_ POVPN_DEVICE device, _In_reads_bytes_(len) UCHAR* data, SIZE_T len, BOOLEAN tcp)
+OvpnTxFindPeer(_In_ POVPN_DEVICE device, _In_reads_bytes_(len) UCHAR* data, SIZE_T len)
 {
     OvpnPeerContext* peer = NULL;
 
@@ -165,7 +165,7 @@ OvpnTxFindPeer(_In_ POVPN_DEVICE device, _In_reads_bytes_(len) UCHAR* data, SIZE
             peer = device->IRoutesIPV4.Find(reinterpret_cast<UCHAR*>(&addr));
         }
 
-        if ((device->Mode == OVPN_MODE_P2P) && (peer != nullptr) && (OvpnCheckRecursiveRoutingIPv4(&peer->TransportAddrs.Remote.IPv4, data, len, tcp))) {
+        if ((device->Mode == OVPN_MODE_P2P) && (peer != nullptr) && (OvpnCheckRecursiveRoutingIPv4(&peer->TransportAddrs.Remote.IPv4, data, len, peer->Socket->Tcp))) {
             OvpnPeerCtxRelease(peer);
             peer = nullptr;
         }
@@ -181,7 +181,7 @@ OvpnTxFindPeer(_In_ POVPN_DEVICE device, _In_reads_bytes_(len) UCHAR* data, SIZE
             peer = device->IRoutesIPV6.Find(reinterpret_cast<UCHAR*>(&addr));
         }
 
-        if ((device->Mode == OVPN_MODE_P2P) && (peer != nullptr) && (OvpnCheckRecursiveRoutingIPv6(&peer->TransportAddrs.Remote.IPv6, data, len, tcp))) {
+        if ((device->Mode == OVPN_MODE_P2P) && (peer != nullptr) && (OvpnCheckRecursiveRoutingIPv6(&peer->TransportAddrs.Remote.IPv6, data, len, peer->Socket->Tcp))) {
             OvpnPeerCtxRelease(peer);
             peer = nullptr;
         }
@@ -231,33 +231,104 @@ OvpnTxEncryptLocked(_In_ OvpnPeerContext* peer, _In_ OVPN_TX_BUFFER* buffer)
     return OvpnCryptoEncrypt(tx, buffer->Data, buffer->Len);
 }
 
+// What one pass has chained but not yet sent: the buffers, where they are going and the
+// socket they leave by. A different socket or destination flushes what is already there.
+struct OVPN_TX_BATCH
+{
+    // the socket the reference below was taken from, NULL when the batch holds none
+    OvpnSocket* Sock;
+    OvpnSocketRef Ref;
+
+    OVPN_TX_BUFFER* Head;
+    OVPN_TX_BUFFER* Tail;
+    SOCKADDR_STORAGE Sockaddr;
+};
+
+// Send what is chained, if anything.
+static
+VOID
+OvpnTxBatchFlush(_Inout_ OVPN_TX_BATCH* batch)
+{
+    if (batch->Head == NULL) {
+        return;
+    }
+
+    if (batch->Ref.Tcp) {
+        OvpnSocketSendTcpBatch(&batch->Ref, batch->Head);
+    }
+    else {
+        // this will use WskSendMessages to send the buffer list we constructed before
+        LOG_IF_NOT_NT_SUCCESS(OvpnSocketSend(&batch->Ref, batch->Head, (SOCKADDR*)&batch->Sockaddr));
+    }
+
+    batch->Head = NULL;
+    batch->Tail = NULL;
+}
+
+// Point the batch at this socket, sending and releasing the one it held before.
+_Must_inspect_result_
+static
+BOOLEAN
+OvpnTxBatchUse(_Inout_ OVPN_TX_BATCH* batch, _In_ OvpnSocket* sock)
+{
+    if (batch->Sock == sock) {
+        return TRUE;
+    }
+
+    OvpnTxBatchFlush(batch);
+
+    if (batch->Sock != NULL) {
+        OvpnSocketRelease(batch->Sock);
+        batch->Sock = NULL;
+    }
+
+    if (!OvpnSocketAcquire(sock, &batch->Ref)) {
+        return FALSE;
+    }
+
+    batch->Sock = sock;
+
+    return TRUE;
+}
+
+// End of a pass: send what is left and give the reference back.
+static
+VOID
+OvpnTxBatchEnd(_Inout_ OVPN_TX_BATCH* batch)
+{
+    OvpnTxBatchFlush(batch);
+
+    if (batch->Sock != NULL) {
+        OvpnSocketRelease(batch->Sock);
+        batch->Sock = NULL;
+    }
+}
+
 // Hand one encrypted buffer to the socket. Datagrams for one destination are chained and
 // sent together by the caller; the buffer is consumed either way.
 _Must_inspect_result_
 static
 NTSTATUS
-OvpnTxSubmit(_In_ OvpnSocketRef* socket, _In_ OVPN_TX_BUFFER* buffer, _In_ const OVPN_REMOTE_ADDR& remoteAddr,
-    _Inout_ OVPN_TX_BUFFER** head, _Inout_ OVPN_TX_BUFFER** tail, _Inout_ SOCKADDR_STORAGE* headSockaddr)
+OvpnTxSubmit(_Inout_ OVPN_TX_BATCH* batch, _In_ OVPN_TX_BUFFER* buffer, _In_ const OVPN_REMOTE_ADDR& remoteAddr)
 {
     // TCP: chain the buffers too, and send up to OVPN_TX_TCP_BATCH_MAX as one stream write. The
     // head keeps the chain's length in WskBufList.Buffer.Length: only the UDP path reads that field,
     // and the pool clears it for the buffer's next use.
-    if (socket->Tcp) {
+    if (batch->Ref.Tcp) {
         SIZE_T const len = 2 + buffer->Len;
         buffer->WskBufList.Next = NULL;
-        if ((*head != NULL) && ((*head)->WskBufList.Buffer.Length + len > OVPN_TX_TCP_BATCH_MAX)) {
-            OvpnSocketSendTcpBatch(socket, *head);
-            *head = NULL;
+        if ((batch->Head != NULL) && (batch->Head->WskBufList.Buffer.Length + len > OVPN_TX_TCP_BATCH_MAX)) {
+            OvpnTxBatchFlush(batch);
         }
-        if (*head == NULL) {
-            *head = buffer;
+        if (batch->Head == NULL) {
+            batch->Head = buffer;
             buffer->WskBufList.Buffer.Length = len;
         }
         else {
-            (*tail)->WskBufList.Next = &buffer->WskBufList;
-            (*head)->WskBufList.Buffer.Length += len;
+            batch->Tail->WskBufList.Next = &buffer->WskBufList;
+            batch->Head->WskBufList.Buffer.Length += len;
         }
-        *tail = buffer;
+        batch->Tail = buffer;
         return STATUS_SUCCESS;
     }
 
@@ -271,23 +342,20 @@ OvpnTxSubmit(_In_ OvpnSocketRef* socket, _In_ OVPN_TX_BUFFER* buffer, _In_ const
     // If this peer is different (head sockaddr != peer sockaddr) to the previous buffer chain peers,
     // then flush those and restart with a new buffer list.
 
-    if ((*head != NULL) && !(OvpnTxAreSockaddrEqual((const SOCKADDR*)headSockaddr, (const SOCKADDR*)&remoteAddr)))
+    if ((batch->Head != NULL) && !(OvpnTxAreSockaddrEqual((const SOCKADDR*)&batch->Sockaddr, (const SOCKADDR*)&remoteAddr)))
     {
-        LOG_IF_NOT_NT_SUCCESS(OvpnSocketSend(socket, *head, (SOCKADDR*)headSockaddr));
-        *head = buffer;
-        *tail = buffer;
-        OvpnSocketCopyRemoteToSockaddr(remoteAddr, headSockaddr);
-    } else {
-        if (*head == NULL) {
-            *head = buffer;
-            OvpnSocketCopyRemoteToSockaddr(remoteAddr, headSockaddr);
-        }
-        else {
-            (*tail)->WskBufList.Next = &buffer->WskBufList;
-        }
-
-        *tail = buffer;
+        OvpnTxBatchFlush(batch);
     }
+
+    if (batch->Head == NULL) {
+        batch->Head = buffer;
+        OvpnSocketCopyRemoteToSockaddr(remoteAddr, &batch->Sockaddr);
+    }
+    else {
+        batch->Tail->WskBufList.Next = &buffer->WskBufList;
+    }
+
+    batch->Tail = buffer;
 
     return STATUS_SUCCESS;
 }
@@ -296,10 +364,15 @@ OvpnTxSubmit(_In_ OvpnSocketRef* socket, _In_ OVPN_TX_BUFFER* buffer, _In_ const
 _Must_inspect_result_
 static
 NTSTATUS
-OvpnTxEncryptAndSend(_In_ POVPN_DEVICE device, _In_ OvpnSocketRef* socket, _In_ OvpnPeerContext* peer,
-    _In_ OVPN_TX_BUFFER* buffer, _Inout_ OVPN_TX_BUFFER** head, _Inout_ OVPN_TX_BUFFER** tail,
-    _Inout_ SOCKADDR_STORAGE* headSockaddr)
+OvpnTxEncryptAndSend(_In_ POVPN_DEVICE device, _Inout_ OVPN_TX_BATCH* batch, _In_ OvpnPeerContext* peer,
+    _In_ OVPN_TX_BUFFER* buffer)
 {
+    // the chain belongs to one socket: a peer sending by another one flushes it first
+    if (!OvpnTxBatchUse(batch, peer->Socket)) {
+        OvpnTxBufferPoolPut(buffer);
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+
     InterlockedExchangeAddNoFence64(&device->Stats.TunBytesSent, buffer->Len);
     InterlockedExchangeAddNoFence64(&peer->VpnTxBytes, buffer->Len);
 
@@ -330,7 +403,7 @@ OvpnTxEncryptAndSend(_In_ POVPN_DEVICE device, _In_ OvpnSocketRef* socket, _In_ 
 
     InterlockedExchangeAddNoFence64(&peer->LinkTxBytes, buffer->Len);
 
-    status = OvpnTxSubmit(socket, buffer, remoteAddr, head, tail, headSockaddr);
+    status = OvpnTxSubmit(batch, buffer, remoteAddr);
 
     OvpnTimerResetXmit(peer->Timer);
 
@@ -449,12 +522,7 @@ OvpnTxWorkerDpc(KDPC* dpc, PVOID context, PVOID arg1, PVOID arg2)
         return;
     }
 
-    OvpnSocketRef socket;
-    BOOLEAN const haveSocket = OvpnSocketAcquire(device, &socket);
-
-    OVPN_TX_BUFFER* head = NULL;
-    OVPN_TX_BUFFER* tail = NULL;
-    SOCKADDR_STORAGE headSockaddr = { 0 };
+    OVPN_TX_BATCH batch = {};
     ULONG chained = 0;
 
     while (!IsListEmpty(&work)) {
@@ -463,13 +531,7 @@ OvpnTxWorkerDpc(KDPC* dpc, PVOID context, PVOID arg1, PVOID arg2)
         buffer->Peer = NULL;
         InterlockedDecrement(&worker->Owner->Queued);
 
-        NTSTATUS status = STATUS_INVALID_DEVICE_STATE;
-        if (haveSocket) {
-            status = OvpnTxEncryptAndSend(device, &socket, peer, buffer, &head, &tail, &headSockaddr);
-        }
-        else {
-            OvpnTxBufferPoolPut(buffer);
-        }
+        NTSTATUS status = OvpnTxEncryptAndSend(device, &batch, peer, buffer);
 
         if (!NT_SUCCESS(status)) {
             InterlockedIncrementNoFence(&device->Stats.LostOutDataPackets);
@@ -479,21 +541,13 @@ OvpnTxWorkerDpc(KDPC* dpc, PVOID context, PVOID arg1, PVOID arg2)
 
         // Send as we go: packet IDs are assigned at encryption, so a batch held back while
         // other workers send can fall behind the receiver's replay window.
-        if (haveSocket && (head != NULL) && (++chained >= OVPN_TX_SEND_BATCH)) {
-            LOG_IF_NOT_NT_SUCCESS(OvpnSocketSend(&socket, head, (SOCKADDR*)&headSockaddr));
-            head = NULL;
-            tail = NULL;
+        if ((batch.Head != NULL) && (++chained >= OVPN_TX_SEND_BATCH)) {
+            OvpnTxBatchFlush(&batch);
             chained = 0;
         }
     }
 
-    if (haveSocket) {
-        if (head != NULL) {
-            LOG_IF_NOT_NT_SUCCESS(OvpnSocketSend(&socket, head, (SOCKADDR*)&headSockaddr));
-        }
-
-        OvpnSocketRelease(device);
-    }
+    OvpnTxBatchEnd(&batch);
 
     OvpnTxQueueResume(worker->Owner);
 }
@@ -629,9 +683,8 @@ OvpnTxWorkersStop(_In_ POVPN_TXQUEUE queue)
 _Must_inspect_result_
 static
 NTSTATUS
-OvpnTxProcessPacket(_In_ POVPN_DEVICE device, _In_ OvpnSocketRef* socket, _In_ POVPN_TXQUEUE queue,
-    _In_ NET_RING_PACKET_ITERATOR *pi, _Inout_ OVPN_TX_BUFFER **head, _Inout_ OVPN_TX_BUFFER** tail,
-    _Inout_ SOCKADDR_STORAGE *headSockaddr)
+OvpnTxProcessPacket(_In_ POVPN_DEVICE device, _In_ POVPN_TXQUEUE queue,
+    _In_ NET_RING_PACKET_ITERATOR *pi, _Inout_ OVPN_TX_BATCH* batch)
 {
     NET_RING_FRAGMENT_ITERATOR fi = NetPacketIteratorGetFragments(pi);
 
@@ -675,7 +728,7 @@ OvpnTxProcessPacket(_In_ POVPN_DEVICE device, _In_ OvpnSocketRef* socket, _In_ P
         NetFragmentIteratorAdvance(&fi);
     }
 
-    peer = OvpnTxFindPeer(device, buffer->Data, buffer->Len, socket->Tcp);
+    peer = OvpnTxFindPeer(device, buffer->Data, buffer->Len);
 
     if (peer == nullptr) {
         status = STATUS_ADDRESS_NOT_ASSOCIATED;
@@ -684,7 +737,7 @@ OvpnTxProcessPacket(_In_ POVPN_DEVICE device, _In_ OvpnSocketRef* socket, _In_ P
     }
 
     // a stream has to leave in the order it was encrypted, so TCP stays on this thread
-    if ((workerCount > 0) && !socket->Tcp) {
+    if ((workerCount > 0) && !peer->Socket->Tcp) {
         // A worker buffer is not returned to the pool until its send completes, so the
         // count in flight - and the pool behind it - grows without bound when sends lag.
         // Over the cap, drop this packet rather than grow.
@@ -701,7 +754,7 @@ OvpnTxProcessPacket(_In_ POVPN_DEVICE device, _In_ OvpnSocketRef* socket, _In_ P
         goto out;
     }
 
-    status = OvpnTxEncryptAndSend(device, socket, peer, buffer, head, tail, headSockaddr);
+    status = OvpnTxEncryptAndSend(device, batch, peer, buffer);
 
     OvpnPeerCtxRelease(peer);
 
@@ -723,15 +776,13 @@ OvpnEvtTxQueueAdvance(NETPACKETQUEUE netPacketQueue)
     POVPN_TXQUEUE queue = OvpnGetTxQueueContext(netPacketQueue);
     NET_RING_PACKET_ITERATOR pi = NetRingGetAllPackets(queue->Rings);
     POVPN_DEVICE device = OvpnGetDeviceContext(queue->Adapter->WdfDevice);
-    BOOLEAN packetSent = false;
 
-    // Held for the whole batch, released after the flush at the end.
-    OvpnSocketRef socket;
-    if (!OvpnSocketAcquire(device, &socket)) {
+    // A relaxed read is enough, it only decides whether to bother; each peer's own
+    // socket is taken by the batch below, once per pass it sends on.
+    if (ReadPointerNoFence((PVOID volatile*)&device->Socket.Socket) == NULL) {
         // Nowhere to send them, so drop them and hand the ring back. Leaving them on it
-        // waits for EvtTxQueueCancel, which never comes: the adapter stays started with
-        // the media down between sessions, and the framework polls a ring that never
-        // drains.
+        // waits for EvtTxQueueCancel, which runs when a queue is deleted and not when a
+        // session ends, so the framework would poll a ring that never drains.
         while (NetPacketIteratorHasAny(&pi)) {
             NET_PACKET* packet = NetPacketIteratorGetPacket(&pi);
             if (!packet->Ignore && !packet->Scratch) {
@@ -742,14 +793,11 @@ OvpnEvtTxQueueAdvance(NETPACKETQUEUE netPacketQueue)
         NetPacketIteratorSet(&pi);
         return;
     }
-    BOOLEAN isTcp = socket.Tcp;
 
     GROUP_AFFINITY previous;
     BOOLEAN const moved = OvpnTxQueueHoldHome(device, &previous);
 
-    OVPN_TX_BUFFER* txBufferHead = NULL;
-    OVPN_TX_BUFFER* txBufferTail = NULL;
-    SOCKADDR_STORAGE headSockaddr = {0};
+    OVPN_TX_BATCH batch = {};
 
     // Stop once the workers are a queue-depth behind and let the framework poll again.
     // The packets stay on the ring, which is the whole point: a buffer taken off it is
@@ -765,12 +813,9 @@ OvpnEvtTxQueueAdvance(NETPACKETQUEUE netPacketQueue)
         NET_PACKET* packet = NetPacketIteratorGetPacket(&pi);
         NTSTATUS status = STATUS_SUCCESS;
         if (!packet->Ignore && !packet->Scratch) {
-            status = OvpnTxProcessPacket(device, &socket, queue, &pi, &txBufferHead, &txBufferTail, &headSockaddr);
+            status = OvpnTxProcessPacket(device, queue, &pi, &batch);
             if (!NT_SUCCESS(status)) {
                 InterlockedIncrementNoFence(&device->Stats.LostOutDataPackets);
-            }
-            else {
-                packetSent = true;
             }
         }
 
@@ -781,15 +826,7 @@ OvpnEvtTxQueueAdvance(NETPACKETQUEUE netPacketQueue)
     }
     NetPacketIteratorSet(&pi);
 
-    if (packetSent && !isTcp && txBufferHead != NULL) {
-        // this will use WskSendMessages to send buffers list which we constructed before
-        LOG_IF_NOT_NT_SUCCESS(OvpnSocketSend(&socket, txBufferHead, (SOCKADDR*)&headSockaddr));
-    }
-    else if (isTcp && (txBufferHead != NULL)) {
-        OvpnSocketSendTcpBatch(&socket, txBufferHead);
-    }
-
-    OvpnSocketRelease(device);
+    OvpnTxBatchEnd(&batch);
 
     if (queue->WorkerCount > 0) {
         OvpnTxWakeWorkers(queue);

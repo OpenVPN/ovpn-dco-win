@@ -934,39 +934,39 @@ OvpnSocketSendComplete(_In_ PDEVICE_OBJECT deviceObj, _In_ PIRP irp, _In_ PVOID 
 // read-modify-writes on one word, which is what orders the two sides on arm64.
 _Use_decl_annotations_
 BOOLEAN
-OvpnSocketAcquire(POVPN_DEVICE device, OvpnSocketRef* socket)
+OvpnSocketAcquire(OvpnSocket* sock, OvpnSocketRef* ref)
 {
-    InterlockedIncrement(&device->Socket.Senders);
+    InterlockedIncrement(&sock->Senders);
 
     // Pointer first, with acquire: the publisher writes Tcp before releasing it.
-    socket->Socket = (PWSK_SOCKET)ReadPointerAcquire((PVOID volatile*)&device->Socket.Socket);
-    if (socket->Socket == NULL) {
-        OvpnSocketRelease(device);
+    ref->Socket = (PWSK_SOCKET)ReadPointerAcquire((PVOID volatile*)&sock->Socket);
+    if (ref->Socket == NULL) {
+        OvpnSocketRelease(sock);
         return FALSE;
     }
-    socket->Tcp = device->Socket.Tcp;
+    ref->Tcp = sock->Tcp;
 
     return TRUE;
 }
 
 _Use_decl_annotations_
 VOID
-OvpnSocketRelease(POVPN_DEVICE device)
+OvpnSocketRelease(OvpnSocket* sock)
 {
-    if (InterlockedDecrement(&device->Socket.Senders) != 0) {
+    if (InterlockedDecrement(&sock->Senders) != 0) {
         return;
     }
 
     // Unconditional: a signal skipped here is one the next detach waits for forever.
-    KeSetEvent(&device->Socket.Drained, IO_NO_INCREMENT, FALSE);
+    KeSetEvent(&sock->Drained, IO_NO_INCREMENT, FALSE);
 }
 
 _Use_decl_annotations_
 PWSK_SOCKET
-OvpnSocketDetach(POVPN_DEVICE device)
+OvpnSocketDetach(OvpnSocket* sock)
 {
     // Unpublish first, so later senders find NULL, then wait for the earlier ones.
-    PWSK_SOCKET socket = (PWSK_SOCKET)InterlockedExchangePointer((PVOID*)&device->Socket.Socket, NULL);
+    PWSK_SOCKET socket = (PWSK_SOCKET)InterlockedExchangePointer((PVOID*)&sock->Socket, NULL);
 
     // Re-checked after each wake, so a signal left from an earlier drain cannot end this
     // one early. Waited in slices and logged, never given up on: the caller closes the
@@ -975,16 +975,16 @@ OvpnSocketDetach(POVPN_DEVICE device)
     slice.QuadPart = -10LL * 1000 * 1000 * OVPN_SOCKET_SYNC_OP_WARN_INTERVAL_SEC;
     ULONG pendingSec = 0;
 
-    while (InterlockedCompareExchange(&device->Socket.Senders, 0, 0) != 0) {
-        KeClearEvent(&device->Socket.Drained);
+    while (InterlockedCompareExchange(&sock->Senders, 0, 0) != 0) {
+        KeClearEvent(&sock->Drained);
 
-        if (InterlockedCompareExchange(&device->Socket.Senders, 0, 0) == 0) {
+        if (InterlockedCompareExchange(&sock->Senders, 0, 0) == 0) {
             break;
         }
 
-        if (KeWaitForSingleObject(&device->Socket.Drained, Executive, KernelMode, FALSE, &slice) == STATUS_TIMEOUT) {
+        if (KeWaitForSingleObject(&sock->Drained, Executive, KernelMode, FALSE, &slice) == STATUS_TIMEOUT) {
             pendingSec += OVPN_SOCKET_SYNC_OP_WARN_INTERVAL_SEC;
-            LONG const refs = InterlockedCompareExchange(&device->Socket.Senders, 0, 0);
+            LONG const refs = InterlockedCompareExchange(&sock->Senders, 0, 0);
             LOG_WARN("Still waiting for socket senders to drain",
                      TraceLoggingValue(pendingSec, "sec"), TraceLoggingValue(refs, "refs"));
         }
