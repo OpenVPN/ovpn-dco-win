@@ -831,43 +831,40 @@ OvpnSocketTcpConnectComplete(_In_ PDEVICE_OBJECT deviceObj, _In_ PIRP irp, _In_ 
     POVPN_DEVICE device = sock->Device;
 
     // finish pending IO request
-    WDFREQUEST request;
-    NTSTATUS status = WdfIoQueueRetrieveNextRequest(device->PendingNewPeerQueue, &request);
+    NTSTATUS status = irp->IoStatus.Status;
+    LOG_INFO("TCP Connect completed", TraceLoggingNTStatus(status, "status"));
 
-    if (!NT_SUCCESS(status)) {
-        LOG_ERROR("No pending NewPeer requests");
+    // Before the request, and whether or not there still is one: a connect nobody is
+    // waiting on still has to be armed, or the session goes on over a deaf socket.
+    // Nothing checks whether the session is still this socket's - a retired one drops
+    // what it receives, so arming it costs a call and changes nothing.
+    if (status == STATUS_SUCCESS) {
+        WSK_EVENT_CALLBACK_CONTROL eventCallbackControl = {};
+        // enable Receive and Disconnect events
+        eventCallbackControl.NpiId = &NPI_WSK_INTERFACE_ID;
+        eventCallbackControl.EventMask = WSK_EVENT_RECEIVE | WSK_EVENT_DISCONNECT;
+
+        PWSK_PROVIDER_CONNECTION_DISPATCH connectionDispatch = (PWSK_PROVIDER_CONNECTION_DISPATCH)(sock->Socket)->Dispatch;
+        LOG_IF_NOT_NT_SUCCESS(status = connectionDispatch->Basic.WskControlSocket(sock->Socket, WskSetOption, SO_WSK_EVENT_CALLBACK, SOL_SOCKET,
+            sizeof(WSK_EVENT_CALLBACK_CONTROL), &eventCallbackControl, 0, NULL, NULL, NULL));
+    }
+
+    // The queue holds one session's request at a time, so this is only ours while the
+    // session still is. A retired socket's own request went with the session it left.
+    WDFREQUEST request;
+    if (ReadNoFence(&sock->Retired)) {
+        LOG_INFO("Connect completed after its session went, leaving the queue alone");
+    }
+    else if (NT_SUCCESS(WdfIoQueueRetrieveNextRequest(device->PendingNewPeerQueue, &request))) {
+        WdfRequestCompleteWithInformation(request, status, 0);
     }
     else {
-        status = irp->IoStatus.Status;
-        LOG_INFO("TCP Connect completed", TraceLoggingNTStatus(status, "status"));
-        if (status == STATUS_SUCCESS) {
-            WSK_EVENT_CALLBACK_CONTROL eventCallbackControl = {};
-            // enable Receive and Disconnect events
-            eventCallbackControl.NpiId = &NPI_WSK_INTERFACE_ID;
-            eventCallbackControl.EventMask = WSK_EVENT_RECEIVE | WSK_EVENT_DISCONNECT;
-
-            // the socket this connect was started on, rather than whatever the
-            // device holds by now
-            PWSK_SOCKET socket = sock->Socket;
-
-            if (socket != NULL) {
-                PWSK_PROVIDER_CONNECTION_DISPATCH connectionDispatch = (PWSK_PROVIDER_CONNECTION_DISPATCH)(socket)->Dispatch;
-                LOG_IF_NOT_NT_SUCCESS(status = connectionDispatch->Basic.WskControlSocket(socket, WskSetOption, SO_WSK_EVENT_CALLBACK, SOL_SOCKET,
-                    sizeof(WSK_EVENT_CALLBACK_CONTROL), &eventCallbackControl, 0, NULL, NULL, NULL));
-            }
-            else {
-                LOG_ERROR("socket is NULL");
-                status = STATUS_INVALID_DEVICE_STATE;
-            }
-
-        }
-        // complete request
-        ULONG_PTR bytesSent = 0;
-        WdfRequestCompleteWithInformation(request, status, bytesSent);
+        LOG_WARN("No pending NewPeer requests");
     }
 
-    // Free the IRP
-    IoFreeIrp(irp);
+    // The IRP is not freed here: it belongs to the socket, so that a removal can
+    // cancel it without racing this. Letting go of the socket is what frees it.
+    OvpnSocketRelease(sock);
 
     // Always return STATUS_MORE_PROCESSING_REQUIRED to
     // terminate the completion processing of the IRP.
@@ -876,7 +873,7 @@ OvpnSocketTcpConnectComplete(_In_ PDEVICE_OBJECT deviceObj, _In_ PIRP irp, _In_ 
 
 NTSTATUS
 _Use_decl_annotations_
-OvpnSocketTcpConnect(OvpnSocket* sock, PSOCKADDR remote)
+OvpnSocketTcpConnect(OvpnSocket* sock, PSOCKADDR remote, WDFREQUEST request)
 {
     // Get pointer to the socket's provider dispatch structure
     PWSK_PROVIDER_CONNECTION_DISPATCH dispatch = (PWSK_PROVIDER_CONNECTION_DISPATCH)(sock->Socket->Dispatch);
@@ -894,10 +891,33 @@ OvpnSocketTcpConnect(OvpnSocket* sock, PSOCKADDR remote)
     // Set the completion routine for the IRP
     IoSetCompletionRoutine(irp, OvpnSocketTcpConnectComplete, sock, TRUE, TRUE, TRUE);
 
+    // Our own copy: the caller's address points into the request, which can be
+    // completed and its buffer freed while the connect is still in flight.
+    RtlCopyMemory(&sock->Remote, remote,
+        remote->sa_family == AF_INET ? sizeof(SOCKADDR_IN) : sizeof(SOCKADDR_IN6));
+
+    // The connect holds the socket open while it is in flight, so a session torn down
+    // underneath it cannot close the socket it is connecting on.
+    OvpnSocketReference(sock);
+
+    // The socket owns it from here, and frees it when it closes.
+    sock->ConnectIrp = irp;
+
+    // Park the request before starting the connect: from here the completion owns it,
+    // which is why this returns STATUS_PENDING whatever the connect makes of it.
+    NTSTATUS status;
+    LOG_IF_NOT_NT_SUCCESS(status = WdfRequestForwardToIoQueue(request, sock->Device->PendingNewPeerQueue));
+    if (!NT_SUCCESS(status)) {
+        OvpnSocketRelease(sock);
+        return status;
+    }
+
     LOG_INFO("TCP Connect initiated");
 
     // Initiate the connect operation on the socket
-    return dispatch->WskConnect(sock->Socket, remote, 0, irp);
+    LOG_IF_NOT_NT_SUCCESS(dispatch->WskConnect(sock->Socket, (PSOCKADDR)&sock->Remote, 0, irp));
+
+    return STATUS_PENDING;
 }
 
 static
@@ -963,6 +983,16 @@ OvpnSocketCloseAndFree(_In_ OvpnSocket* sock)
 
     PIO_WORKITEM workItem = sock->CloseWorkItem;
     POVPN_DEVICE device = sock->Device;
+
+    // Out of the list first: a removal cancels under the lock, so it must not be able
+    // to reach this socket once its connect IRP is gone.
+    KIRQL kirql = ExAcquireSpinLockExclusive(&device->SpinLock);
+    RemoveEntryList(&sock->Link);
+    ExReleaseSpinLockExclusive(&device->SpinLock, kirql);
+
+    if (sock->ConnectIrp != NULL) {
+        IoFreeIrp(sock->ConnectIrp);
+    }
 
     ExFreePoolWithTag(sock, 'sovo');
 
@@ -1121,6 +1151,10 @@ OvpnSocketCreate(OVPN_DEVICE* device, ADDRESS_FAMILY addrFamily, BOOLEAN tcp, PS
     POVPN_DRIVER driver = OvpnGetDriverContext(WdfGetDriver());
     GOTO_IF_NOT_NT_SUCCESS(rundown, status, OvpnSocketInit(&driver->WskProviderNpi, &driver->WskRegistration,
         addrFamily, tcp, localAddr, remoteAddr, remoteAddrSize, newSock, &newSock->Socket, ipv6only));
+
+    KIRQL kirql = ExAcquireSpinLockExclusive(&device->SpinLock);
+    InsertTailList(&device->Sockets, &newSock->Link);
+    ExReleaseSpinLockExclusive(&device->SpinLock, kirql);
 
     *sock = newSock;
 
