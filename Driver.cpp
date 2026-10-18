@@ -236,8 +236,8 @@ OvpnEvtIoWrite(WDFQUEUE queue, WDFREQUEST request, size_t length)
 
     OVPN_TX_BUFFER* txBuf = NULL;
 
-    OvpnSocketRef ref;
-    if (!OvpnSocketAcquire(&device->Socket, &ref)) {
+    OvpnSocket* socket = OvpnSocketGet(device);
+    if (socket == NULL) {
         status = STATUS_INVALID_DEVICE_STATE;
         LOG_ERROR("TransportSocket is not initialized");
         WdfRequestCompleteWithInformation(request, status, 0);
@@ -317,11 +317,11 @@ OvpnEvtIoWrite(WDFQUEUE queue, WDFREQUEST request, size_t length)
 
     // TCP is a stream, so keep the request parked: sends stay ordered and the caller
     // still learns how the send went.
-    if (ref.Tcp) {
+    if (socket->Tcp) {
         txBuf->IoQueue = device->PendingWritesQueue;
         GOTO_IF_NOT_NT_SUCCESS(error, status, WdfRequestForwardToIoQueue(request, device->PendingWritesQueue));
 
-        LOG_IF_NOT_NT_SUCCESS(status = OvpnSocketSend(&ref, txBuf, sa));
+        LOG_IF_NOT_NT_SUCCESS(status = OvpnSocketSend(socket, txBuf, sa));
         goto done_not_complete;
     }
 
@@ -342,7 +342,7 @@ OvpnEvtIoWrite(WDFQUEUE queue, WDFREQUEST request, size_t length)
     InterlockedIncrement(&device->TxControlInFlight);
 
     NTSTATUS sendStatus;
-    LOG_IF_NOT_NT_SUCCESS(sendStatus = OvpnSocketSend(&ref, txBuf, sa));
+    LOG_IF_NOT_NT_SUCCESS(sendStatus = OvpnSocketSend(socket, txBuf, sa));
     txBuf = NULL; // the send owns it now
 
     if (park) {
@@ -360,7 +360,7 @@ error:
     WdfRequestCompleteWithInformation(request, status, NT_SUCCESS(status) ? length : 0);
 
 done_not_complete:
-    OvpnSocketRelease(&device->Socket);
+    OvpnSocketRelease(socket);
 }
 
 NTSTATUS
@@ -436,13 +436,10 @@ OvpnStopVPN(_In_ POVPN_DEVICE device)
     OvpnCleanupPeerTable(device, &device->PeersByVpn4);
     OvpnCleanupPeerTable(device, &device->Peers);
 
-    // Stops new senders and waits for the ones inside a send, so the state below is
-    // not zeroed under them.
-    PWSK_SOCKET socket = OvpnSocketDetach(&device->Socket);
-
-    // No lock needed: unpublished and drained, so nothing is reading these.
-    device->Socket.Tcp = FALSE;
-    RtlZeroMemory(&device->Socket.TcpState, sizeof(OvpnSocketTcpState));
+    // The peers are gone, so letting go of the slot's reference is usually the last
+    // one and the socket closes here. Anything still sending keeps it alive until it is
+    // done, and closes it then.
+    OvpnSocketPublish(device, NULL);
 
     KIRQL kirql = ExAcquireSpinLockExclusive(&device->SpinLock);
     device->Mode = OVPN_MODE_P2P;
@@ -455,10 +452,6 @@ OvpnStopVPN(_In_ POVPN_DEVICE device)
     device->RxHomeForNicPlus1 = 0;
     device->RxNicSamplePlus1 = 0;
     device->RxNicScore = 0;
-
-    if (socket != NULL) {
-        LOG_IF_NOT_NT_SUCCESS(OvpnSocketClose(socket));
-    }
 
     // no receive callbacks after the close; let the packets they handed off land first
     OvpnRxWorkersFlush(&device->RxWorkers);
@@ -522,7 +515,7 @@ OvpnMPStartVPN(POVPN_DEVICE device, WDFREQUEST request, ULONG_PTR* bytesReturned
     LOG_ENTER();
 
     KIRQL kirql = ExAcquireSpinLockExclusive(&device->SpinLock);
-    if (device->Socket.Socket != NULL) {
+    if (device->Socket != NULL) {
         ExReleaseSpinLockExclusive(&device->SpinLock, kirql);
 
         status = STATUS_ALREADY_INITIALIZED;
@@ -544,24 +537,22 @@ OvpnMPStartVPN(POVPN_DEVICE device, WDFREQUEST request, ULONG_PTR* bytesReturned
             goto done;
         }
 
-        PWSK_SOCKET socket = NULL;
-        POVPN_DRIVER driver = OvpnGetDriverContext(WdfGetDriver());
+        OvpnSocket* socket = NULL;
 
         // Bind to the address provided
-        status = OvpnSocketInit(&driver->WskProviderNpi, &driver->WskRegistration,
-            addrIn->ListenAddress.Addr4.sin_family, false,
-            (PSOCKADDR)&addrIn->ListenAddress, NULL,
-            0, &device->Socket, &socket, addrIn->IPv6Only > 0 ? TRUE : FALSE);
+        status = OvpnSocketCreate(device, addrIn->ListenAddress.Addr4.sin_family, FALSE,
+            (PSOCKADDR)&addrIn->ListenAddress, NULL, 0,
+            addrIn->IPv6Only > 0 ? TRUE : FALSE, &socket);
         if (!NT_SUCCESS(status)) {
             LOG_ERROR("Socket create failed", TraceLoggingValue((UINT32)status),
                 TraceLoggingHexUInt32(*(UINT32*)(&addrIn->ListenAddress.Addr4.sin_addr), "addr"));
             goto done;
         }
 
-        kirql = ExAcquireSpinLockExclusive(&device->SpinLock);
-        device->Socket.Socket = socket;
-        device->Socket.Tcp = FALSE;
-        ExReleaseSpinLockExclusive(&device->SpinLock, kirql);
+        OvpnSocketPublish(device, socket);
+
+        // the slot holds it now
+        OvpnSocketRelease(socket);
 
         // we might bind the socket to port 0 and we want to get actual port back to userspace
         POVPN_MP_START_VPN addrOut = NULL;
@@ -817,6 +808,10 @@ VOID OvpnEvtDeviceCleanup(WDFOBJECT obj) {
 
     OVPN_DEVICE* device = OvpnGetDeviceContext(obj);
 
+    // Nothing below may run, and this image may not go, while WSK still holds a socket
+    // of ours: it would call back into code that is no longer there.
+    ExWaitForRundownProtectionRelease(&device->SocketRundown);
+
     OvpnRxWorkersStop(&device->RxWorkers);
 
     OvpnTxBufferPoolDelete((OVPN_BUFFER_POOL)device->TxBufferPool);
@@ -956,6 +951,10 @@ OvpnEvtDeviceAdd(WDFDRIVER wdfDriver, PWDFDEVICE_INIT deviceInit) {
     WDFDEVICE wdfDevice;
     GOTO_IF_NOT_NT_SUCCESS(done, status, WdfDeviceCreate(&deviceInit, &objAttributes, &wdfDevice));
 
+    // Before anything that can fail: from here on a failure deletes the device, and
+    // the cleanup that runs then waits on this.
+    ExInitializeRundownProtection(&OvpnGetDeviceContext(wdfDevice)->SocketRundown);
+
     POVPN_DRIVER driverCtx = OvpnGetDriverContext(WdfGetDriver());
     InterlockedIncrement(&driverCtx->DeviceCount);
 
@@ -985,8 +984,6 @@ OvpnEvtDeviceAdd(WDFDRIVER wdfDriver, PWDFDEVICE_INIT deviceInit) {
 
     POVPN_DEVICE device = OvpnGetDeviceContext(wdfDevice);
     device->WdfDevice = wdfDevice;
-    device->Socket.Device = device;
-    KeInitializeEvent(&device->Socket.Drained, NotificationEvent, FALSE);
 
     // create manual pending queue which handles async reads
     WDF_IO_QUEUE_CONFIG_INIT(&queueConfig, WdfIoQueueDispatchManual);

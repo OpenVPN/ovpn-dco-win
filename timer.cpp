@@ -125,19 +125,11 @@ static VOID OvpnTimerXmit(WDFTIMER timer)
     ExReleaseSpinLockExclusive(&peer->TxLock, irql);
 
     if (NT_SUCCESS(status)) {
-        // A DPC can race a close like any other sender, so take the reference too.
-        OvpnSocketRef ref;
-        if (OvpnSocketAcquire(peer->Socket, &ref)) {
-            // start async send, completion handler will return ciphertext buffer to the pool
-            LOG_IF_NOT_NT_SUCCESS(status = OvpnSocketSend(&ref, buffer, (SOCKADDR*)&sa));
-            OvpnSocketRelease(peer->Socket);
-            if (NT_SUCCESS(status)) {
-                LOG_INFO("Ping sent", TraceLoggingValue(peerId, "peer-id"));
-            }
-        }
-        else {
-            status = STATUS_INVALID_DEVICE_STATE;
-            OvpnTxBufferPoolPut(buffer);
+        // the peer holds the socket open, and the tick cannot outlive the peer:
+        // OvpnPeerCtxFreeAtPassive detaches the timer and waits for a running tick
+        LOG_IF_NOT_NT_SUCCESS(status = OvpnSocketSend(peer->Socket, buffer, (SOCKADDR*)&sa));
+        if (NT_SUCCESS(status)) {
+            LOG_INFO("Ping sent", TraceLoggingValue(peerId, "peer-id"));
         }
     }
     else {

@@ -112,6 +112,9 @@ OvpnPeerCtxFreeAtPassive(OvpnPeerContext* peer)
     // Crypto context can be safely cleaned up after the timer is gone
     OvpnCryptoUninit(&peer->CryptoContext);
 
+    // the socket it sent over: the last peer to let go closes it
+    OvpnSocketRelease(peer->Socket);
+
     WDFWORKITEM cleanupWorkItem = peer->CleanupWorkItem;
 
     ExFreePoolWithTag(peer, 'ovpn');
@@ -289,20 +292,28 @@ _Use_decl_annotations_
 VOID
 OvpnCleanupPeerTable(POVPN_DEVICE device, RTL_GENERIC_TABLE* peers)
 {
-    auto irql = ExAcquireSpinLockExclusive(&device->SpinLock);
+    // Unlinked under the lock, released outside it. Releasing under the lock would be
+    // at DISPATCH_LEVEL, where a peer's free - and the socket reference it holds - is
+    // deferred to a work item, leaving the transport open past the end of the teardown.
+    //
+    // It ends because the table only shrinks: teardown is the only writer, with ioctls
+    // dispatched one at a time to a single handle.
+    for (;;) {
+        auto irql = ExAcquireSpinLockExclusive(&device->SpinLock);
 
-    while (!RtlIsGenericTableEmpty(peers)) {
-        PVOID ptr = RtlGetElementGenericTable(peers, 0);
+        PVOID ptr = RtlIsGenericTableEmpty(peers) ? nullptr : RtlGetElementGenericTable(peers, 0);
         if (ptr == nullptr) {
+            ExReleaseSpinLockExclusive(&device->SpinLock, irql);
             break;
         }
+
         OvpnPeerContext* peer = *(OvpnPeerContext**)ptr;
         RtlDeleteElementGenericTable(peers, ptr);
 
+        ExReleaseSpinLockExclusive(&device->SpinLock, irql);
+
         OvpnPeerCtxRelease(peer);
     }
-
-    ExReleaseSpinLockExclusive(&device->SpinLock, irql);
 }
 
 _Use_decl_annotations_
@@ -536,8 +547,7 @@ OvpnPeerNew(POVPN_DEVICE device, WDFREQUEST request)
         goto done;
     }
 
-    POVPN_DRIVER driver = OvpnGetDriverContext(WdfGetDriver());
-    PWSK_SOCKET socket = NULL;
+    OvpnSocket* socket = NULL;
     BOOLEAN proto_tcp = peer->Proto == OVPN_PROTO_TCP;
     SIZE_T remoteAddrSize = peer->Remote.Addr4.sin_family == AF_INET ? sizeof(peer->Remote.Addr4) : sizeof(peer->Remote.Addr6);
 
@@ -547,8 +557,6 @@ OvpnPeerNew(POVPN_DEVICE device, WDFREQUEST request)
         goto done;
     }
 
-    peerCtx->Socket = &device->Socket;
-
     // assign remote transport address
     if (peer->Remote.Addr4.sin_family == AF_INET) {
         peerCtx->TransportAddrs.Remote.IPv4 = peer->Remote.Addr4;
@@ -557,33 +565,19 @@ OvpnPeerNew(POVPN_DEVICE device, WDFREQUEST request)
         peerCtx->TransportAddrs.Remote.IPv6 = peer->Remote.Addr6;
     }
 
-    GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnSocketInit(&driver->WskProviderNpi,
-        &driver->WskRegistration, peer->Local.Addr4.sin_family, proto_tcp,
-        (PSOCKADDR)&peer->Local,
-        (PSOCKADDR)&peer->Remote,
-        remoteAddrSize, &device->Socket, &socket, TRUE));
+    GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnSocketCreate(device, peer->Local.Addr4.sin_family,
+        proto_tcp, (PSOCKADDR)&peer->Local, (PSOCKADDR)&peer->Remote, remoteAddrSize, TRUE, &socket));
+
+    // The peer takes the reference the socket was created with and holds it for as
+    // long as it lives, so a failure below closes the socket along with the peer.
+    peerCtx->Socket = socket;
 
     GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnAddPeerToTable(device, &device->Peers, peerCtx));
 
-    // Adopt the new transport socket under the device lock, closing any
-    // previous one. On the P2P re-add path the old peer is deleted above but
-    // its socket is not torn down, so without this the old socket would leak
-    // here with its WSK receive callback still pointing at the device. Mirrors
-    // OvpnStopVPN's lock-protected swap.
-    {
-        // Detach first: the old socket is only closed once nobody is inside a send.
-        PWSK_SOCKET oldSocket = OvpnSocketDetach(&device->Socket);
-
-        // No lock: drained, and not published yet. The pointer goes last, with release,
-        // so a sender that sees it also sees Tcp.
-        device->Socket.Tcp = proto_tcp;
-        RtlZeroMemory(&device->Socket.TcpState, sizeof(OvpnSocketTcpState));
-            WritePointerRelease((PVOID volatile*)&device->Socket.Socket, socket);
-
-        if (oldSocket != NULL) {
-            LOG_IF_NOT_NT_SUCCESS(OvpnSocketClose(oldSocket));
-        }
-    }
+    // Make it the session's socket, which lets go of the one the session had. On the
+    // P2P re-add path the old peer is deleted above, so that is usually the last
+    // reference and the old socket closes here.
+    OvpnSocketPublish(device, socket);
 
     OvpnPeerZeroStats(&device->Stats);
 
@@ -592,7 +586,7 @@ OvpnPeerNew(POVPN_DEVICE device, WDFREQUEST request)
     if (proto_tcp) {
         LOG_IF_NOT_NT_SUCCESS(status = WdfRequestForwardToIoQueue(request, device->PendingNewPeerQueue));
         // start async connect
-        status = OvpnSocketTcpConnect(&device->Socket, (PSOCKADDR)&peer->Remote);
+        status = OvpnSocketTcpConnect(socket, (PSOCKADDR)&peer->Remote);
     }
 
 done:
@@ -648,7 +642,13 @@ OvpnMPPeerNew(POVPN_DEVICE device, WDFREQUEST request)
         goto done;
     }
 
-    peerCtx->Socket = &device->Socket;
+    // the socket it sends over, held for as long as the peer lives
+    peerCtx->Socket = OvpnSocketGet(device);
+    if (peerCtx->Socket == NULL) {
+        status = STATUS_INVALID_DEVICE_STATE;
+        LOG_ERROR("No listening socket");
+        goto done;
+    }
 
     // assign remote transport address
     auto ipv4 = peer->Remote.Addr4.sin_family == AF_INET;
