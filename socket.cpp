@@ -455,9 +455,10 @@ static
 NTSTATUS
 OvpnSocketUdpReceiveFromEvent(_In_ PVOID socketContext, ULONG flags, _In_opt_ PWSK_DATAGRAM_INDICATION dataIndication)
 {
-    POVPN_DEVICE device = (POVPN_DEVICE)socketContext;
+    OvpnSocket* sock = (OvpnSocket*)socketContext;
+    POVPN_DEVICE device = sock->Device;
 
-    if (device->Socket.Socket == NULL) {
+    if (sock->Socket == NULL) {
         LOG_ERROR("TransportSocket is not initialized");
         return STATUS_SUCCESS;
     }
@@ -553,9 +554,14 @@ OvpnSocketTcpReceiveEvent(_In_opt_ PVOID socketContext, _In_ ULONG flags, _In_op
     UNREFERENCED_PARAMETER(bytesAccepted);
     UNREFERENCED_PARAMETER(bytesIndicated);
 
-    POVPN_DEVICE device = (POVPN_DEVICE)socketContext;
+    if (socketContext == NULL) {
+        return STATUS_SUCCESS;
+    }
 
-    OvpnSocketTcpState* tcpState = &device->Socket.TcpState;
+    OvpnSocket* sock = (OvpnSocket*)socketContext;
+    POVPN_DEVICE device = sock->Device;
+
+    OvpnSocketTcpState* tcpState = &sock->TcpState;
 
     OvpnSocketNoteNicCpu(device);
 
@@ -666,7 +672,7 @@ OvpnSocketTcpDisconnectEvent(_In_opt_ PVOID socketContext, _In_ ULONG flags)
         return STATUS_SUCCESS;
     }
 
-    POVPN_DEVICE device = (POVPN_DEVICE)socketContext;
+    POVPN_DEVICE device = ((OvpnSocket*)socketContext)->Device;
 
     // inform userspace about error
     WDFREQUEST request;
@@ -688,7 +694,7 @@ const WSK_CLIENT_CONNECTION_DISPATCH OvpnSocketTcpDispatch = { OvpnSocketTcpRece
 _Use_decl_annotations_
 NTSTATUS
 OvpnSocketInit(WSK_PROVIDER_NPI* wskProviderNpi, WSK_REGISTRATION* wskRegistration, ADDRESS_FAMILY addressFamily, BOOLEAN tcp, PSOCKADDR localAddr,
-    PSOCKADDR remoteAddr, SIZE_T remoteAddrSize, PVOID deviceContext, PWSK_SOCKET* socket, BOOLEAN ipv6only)
+    PSOCKADDR remoteAddr, SIZE_T remoteAddrSize, OvpnSocket* sock, PWSK_SOCKET* socket, BOOLEAN ipv6only)
 {
     NTSTATUS status;
     WSK_EVENT_CALLBACK_CONTROL eventCallbackControl = {};
@@ -706,8 +712,8 @@ OvpnSocketInit(WSK_PROVIDER_NPI* wskProviderNpi, WSK_REGISTRATION* wskRegistrati
     ULONG flags = tcp ? WSK_FLAG_CONNECTION_SOCKET : WSK_FLAG_DATAGRAM_SOCKET;
     PVOID dispatch = tcp ? (PVOID)&OvpnSocketTcpDispatch : (PVOID)&OvpnSocketUdpDispatch;
 
-    GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnSocketSyncOp("CreateSocket", [&status, wskProviderNpi, addressFamily, socketType, proto, flags, deviceContext, dispatch](PIRP irp) {
-        return wskProviderNpi->Dispatch->WskSocket(wskProviderNpi->Client, addressFamily, socketType, proto, flags, deviceContext,
+    GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnSocketSyncOp("CreateSocket", [&status, wskProviderNpi, addressFamily, socketType, proto, flags, sock, dispatch](PIRP irp) {
+        return wskProviderNpi->Dispatch->WskSocket(wskProviderNpi->Client, addressFamily, socketType, proto, flags, sock,
             dispatch, NULL, NULL, NULL, irp);
         }, [socket](PIRP irp) {
             *socket = (PWSK_SOCKET)irp->IoStatus.Information;
@@ -797,7 +803,8 @@ OvpnSocketTcpConnectComplete(_In_ PDEVICE_OBJECT deviceObj, _In_ PIRP irp, _In_ 
 {
     UNREFERENCED_PARAMETER(deviceObj);
 
-    POVPN_DEVICE device = (POVPN_DEVICE)context;
+    OvpnSocket* sock = (OvpnSocket*)context;
+    POVPN_DEVICE device = sock->Device;
 
     // finish pending IO request
     WDFREQUEST request;
@@ -815,9 +822,9 @@ OvpnSocketTcpConnectComplete(_In_ PDEVICE_OBJECT deviceObj, _In_ PIRP irp, _In_ 
             eventCallbackControl.NpiId = &NPI_WSK_INTERFACE_ID;
             eventCallbackControl.EventMask = WSK_EVENT_RECEIVE | WSK_EVENT_DISCONNECT;
 
-            KIRQL kirql = ExAcquireSpinLockExclusive(&device->SpinLock);
-            PWSK_SOCKET socket = device->Socket.Socket;
-            ExReleaseSpinLockExclusive(&device->SpinLock, kirql);
+            // the socket this connect was started on, rather than whatever the
+            // device holds by now
+            PWSK_SOCKET socket = sock->Socket;
 
             if (socket != NULL) {
                 PWSK_PROVIDER_CONNECTION_DISPATCH connectionDispatch = (PWSK_PROVIDER_CONNECTION_DISPATCH)(socket)->Dispatch;
@@ -845,10 +852,10 @@ OvpnSocketTcpConnectComplete(_In_ PDEVICE_OBJECT deviceObj, _In_ PIRP irp, _In_ 
 
 NTSTATUS
 _Use_decl_annotations_
-OvpnSocketTcpConnect(PWSK_SOCKET socket, PVOID context, PSOCKADDR remote)
+OvpnSocketTcpConnect(OvpnSocket* sock, PSOCKADDR remote)
 {
     // Get pointer to the socket's provider dispatch structure
-    PWSK_PROVIDER_CONNECTION_DISPATCH dispatch = (PWSK_PROVIDER_CONNECTION_DISPATCH)(socket->Dispatch);
+    PWSK_PROVIDER_CONNECTION_DISPATCH dispatch = (PWSK_PROVIDER_CONNECTION_DISPATCH)(sock->Socket->Dispatch);
 
     // Allocate an IRP
     PIRP irp = IoAllocateIrp(1, FALSE);
@@ -861,12 +868,12 @@ OvpnSocketTcpConnect(PWSK_SOCKET socket, PVOID context, PSOCKADDR remote)
     }
 
     // Set the completion routine for the IRP
-    IoSetCompletionRoutine(irp, OvpnSocketTcpConnectComplete, context, TRUE, TRUE, TRUE);
+    IoSetCompletionRoutine(irp, OvpnSocketTcpConnectComplete, sock, TRUE, TRUE, TRUE);
 
     LOG_INFO("TCP Connect initiated");
 
     // Initiate the connect operation on the socket
-    return dispatch->WskConnect(socket, remote, 0, irp);
+    return dispatch->WskConnect(sock->Socket, remote, 0, irp);
 }
 
 static
@@ -913,7 +920,7 @@ OvpnSocketSendComplete(_In_ PDEVICE_OBJECT deviceObj, _In_ PIRP irp, _In_ PVOID 
         InterlockedExchangeAddNoFence64(&device->Stats.TransportBytesSent, bytesSend);
     }
 
-    if (device->Socket.Tcp) {
+    if (buffer->Tcp) {
         bytesSend -= 2; // the length prefix the driver added is not the caller's
     }
     OvpnSocketFinalizeTxBuffer(buffer, irp->IoStatus.Status, bytesSend);
@@ -929,7 +936,7 @@ _Use_decl_annotations_
 BOOLEAN
 OvpnSocketAcquire(POVPN_DEVICE device, OvpnSocketRef* socket)
 {
-    InterlockedIncrement(&device->SocketRefs);
+    InterlockedIncrement(&device->Socket.Senders);
 
     // Pointer first, with acquire: the publisher writes Tcp before releasing it.
     socket->Socket = (PWSK_SOCKET)ReadPointerAcquire((PVOID volatile*)&device->Socket.Socket);
@@ -946,12 +953,12 @@ _Use_decl_annotations_
 VOID
 OvpnSocketRelease(POVPN_DEVICE device)
 {
-    if (InterlockedDecrement(&device->SocketRefs) != 0) {
+    if (InterlockedDecrement(&device->Socket.Senders) != 0) {
         return;
     }
 
     // Unconditional: a signal skipped here is one the next detach waits for forever.
-    KeSetEvent(&device->SocketDrained, IO_NO_INCREMENT, FALSE);
+    KeSetEvent(&device->Socket.Drained, IO_NO_INCREMENT, FALSE);
 }
 
 _Use_decl_annotations_
@@ -968,16 +975,16 @@ OvpnSocketDetach(POVPN_DEVICE device)
     slice.QuadPart = -10LL * 1000 * 1000 * OVPN_SOCKET_SYNC_OP_WARN_INTERVAL_SEC;
     ULONG pendingSec = 0;
 
-    while (InterlockedCompareExchange(&device->SocketRefs, 0, 0) != 0) {
-        KeClearEvent(&device->SocketDrained);
+    while (InterlockedCompareExchange(&device->Socket.Senders, 0, 0) != 0) {
+        KeClearEvent(&device->Socket.Drained);
 
-        if (InterlockedCompareExchange(&device->SocketRefs, 0, 0) == 0) {
+        if (InterlockedCompareExchange(&device->Socket.Senders, 0, 0) == 0) {
             break;
         }
 
-        if (KeWaitForSingleObject(&device->SocketDrained, Executive, KernelMode, FALSE, &slice) == STATUS_TIMEOUT) {
+        if (KeWaitForSingleObject(&device->Socket.Drained, Executive, KernelMode, FALSE, &slice) == STATUS_TIMEOUT) {
             pendingSec += OVPN_SOCKET_SYNC_OP_WARN_INTERVAL_SEC;
-            LONG const refs = InterlockedCompareExchange(&device->SocketRefs, 0, 0);
+            LONG const refs = InterlockedCompareExchange(&device->Socket.Senders, 0, 0);
             LOG_WARN("Still waiting for socket senders to drain",
                      TraceLoggingValue(pendingSec, "sec"), TraceLoggingValue(refs, "refs"));
         }
@@ -1103,6 +1110,8 @@ OvpnSocketSend(OvpnSocketRef* ovpnSocket, OVPN_TX_BUFFER* buffer, SOCKADDR* sa) 
 
     // completion routine will be called in any case and will free IRP
     IoSetCompletionRoutine(irp, OvpnSocketSendComplete, buffer, TRUE, TRUE, TRUE);
+
+    buffer->Tcp = ovpnSocket->Tcp;
 
     // prepend TCP packet with size, as required by OpenVPN protocol
     if (ovpnSocket->Tcp) {

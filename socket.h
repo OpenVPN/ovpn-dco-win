@@ -26,6 +26,8 @@
 
 #include "bufferpool.h"
 
+struct OVPN_DEVICE;
+
 struct OvpnSocketTcpState
 {
 	// filled with 2-bytes length which prepends OpenVPN TCP packet
@@ -50,10 +52,18 @@ struct OvpnSocketRef
 
 struct OvpnSocket
 {
+	// the device this socket belongs to: WSK hands this object to the receive
+	// callbacks, which reach everything else through here
+	OVPN_DEVICE* Device;
+
 	BOOLEAN Tcp;
 	PWSK_SOCKET Socket;
 
 	OvpnSocketTcpState TcpState;
+
+	// senders inside OvpnSocketSend, and what OvpnSocketDetach waits on
+	volatile LONG Senders;
+	KEVENT Drained;
 };
 
 _Must_inspect_result_
@@ -61,7 +71,7 @@ _IRQL_requires_(PASSIVE_LEVEL)
 NTSTATUS
 OvpnSocketInit(_In_ WSK_PROVIDER_NPI* wskProviderNpi, _In_ WSK_REGISTRATION* wskRegistration, ADDRESS_FAMILY addrFamily,
 	BOOLEAN tcp, _In_ PSOCKADDR localAddr, _In_opt_ PSOCKADDR remoteAddr, SIZE_T remoteAddrSize,
-	_In_ PVOID deviceContext, _Out_ PWSK_SOCKET* socket, BOOLEAN ipv6only);
+	_In_ OvpnSocket* sock, _Out_ PWSK_SOCKET* socket, BOOLEAN ipv6only);
 
 _Must_inspect_result_
 _IRQL_requires_(PASSIVE_LEVEL)
@@ -78,8 +88,6 @@ OvpnSocketSendTcpBatch(_In_ OvpnSocketRef* socket, _In_ OVPN_TX_BUFFER* head);
 
 // Rundown for device->Socket: the reference covers the send call, not its completion,
 // which is what the device lock gave before. Callers may be at DISPATCH_LEVEL.
-struct OVPN_DEVICE;
-
 _Must_inspect_result_
 BOOLEAN
 OvpnSocketAcquire(_In_ OVPN_DEVICE* device, _When_(return != FALSE, _Out_) OvpnSocketRef* socket);
@@ -105,7 +113,7 @@ OvpnSocketDataPacketDeliver(_In_ OVPN_DEVICE* device, _In_ OVPN_RX_BUFFER* buffe
 
 _Must_inspect_result_
 NTSTATUS
-OvpnSocketTcpConnect(_In_ PWSK_SOCKET socket, _In_ PVOID context, _In_ PSOCKADDR remote);
+OvpnSocketTcpConnect(_In_ OvpnSocket* sock, _In_ PSOCKADDR remote);
 
 // A peer's remote transport address. It has a name so that the code handling one does
 // not have to be a template over a type it cannot spell.

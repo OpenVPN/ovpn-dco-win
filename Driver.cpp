@@ -551,7 +551,7 @@ OvpnMPStartVPN(POVPN_DEVICE device, WDFREQUEST request, ULONG_PTR* bytesReturned
         status = OvpnSocketInit(&driver->WskProviderNpi, &driver->WskRegistration,
             addrIn->ListenAddress.Addr4.sin_family, false,
             (PSOCKADDR)&addrIn->ListenAddress, NULL,
-            0, device, &socket, addrIn->IPv6Only > 0 ? TRUE : FALSE);
+            0, &device->Socket, &socket, addrIn->IPv6Only > 0 ? TRUE : FALSE);
         if (!NT_SUCCESS(status)) {
             LOG_ERROR("Socket create failed", TraceLoggingValue((UINT32)status),
                 TraceLoggingHexUInt32(*(UINT32*)(&addrIn->ListenAddress.Addr4.sin_addr), "addr"));
@@ -985,7 +985,8 @@ OvpnEvtDeviceAdd(WDFDRIVER wdfDriver, PWDFDEVICE_INIT deviceInit) {
 
     POVPN_DEVICE device = OvpnGetDeviceContext(wdfDevice);
     device->WdfDevice = wdfDevice;
-    KeInitializeEvent(&device->SocketDrained, NotificationEvent, FALSE);
+    device->Socket.Device = device;
+    KeInitializeEvent(&device->Socket.Drained, NotificationEvent, FALSE);
 
     // create manual pending queue which handles async reads
     WDF_IO_QUEUE_CONFIG_INIT(&queueConfig, WdfIoQueueDispatchManual);

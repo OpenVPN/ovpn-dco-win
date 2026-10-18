@@ -127,9 +127,6 @@ struct OVPN_DEVICE {
     // comes back only when its send completes, so this is what the pool cap gates on.
     volatile LONG TxDataInFlight;
 
-    volatile LONG SocketRefs;       // senders inside OvpnSocketSend
-    KEVENT SocketDrained;
-
     // decrypt received data packets on several cores, deliver them in order
     OVPN_RX_WORKERS RxWorkers;
 
