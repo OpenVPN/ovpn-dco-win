@@ -584,9 +584,8 @@ OvpnPeerNew(POVPN_DEVICE device, WDFREQUEST request)
     GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnTimerCreate(device->WdfDevice, peerCtx, &peerCtx->Timer));
 
     if (proto_tcp) {
-        LOG_IF_NOT_NT_SUCCESS(status = WdfRequestForwardToIoQueue(request, device->PendingNewPeerQueue));
-        // start async connect
-        status = OvpnSocketTcpConnect(socket, (PSOCKADDR)&peer->Remote);
+        // start async connect, which takes the request over
+        status = OvpnSocketTcpConnect(socket, (PSOCKADDR)&peer->Remote, request);
     }
 
 done:

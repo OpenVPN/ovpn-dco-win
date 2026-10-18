@@ -808,6 +808,19 @@ VOID OvpnEvtDeviceCleanup(WDFOBJECT obj) {
 
     OVPN_DEVICE* device = OvpnGetDeviceContext(obj);
 
+    // A connect the transport has not given up on holds its socket open, and it can
+    // keep retrying for minutes, so cancel before waiting rather than wait for that.
+    // Under the lock the IRPs cannot go: a socket leaves the list before its IRP is.
+    KIRQL kirql = ExAcquireSpinLockExclusive(&device->SpinLock);
+    for (PLIST_ENTRY entry = device->Sockets.Flink; entry != &device->Sockets; entry = entry->Flink) {
+        OvpnSocket* sock = CONTAINING_RECORD(entry, OvpnSocket, Link);
+        if (sock->ConnectIrp != NULL) {
+            LOG_INFO("Cancelling a connect still in flight");
+            IoCancelIrp(sock->ConnectIrp);
+        }
+    }
+    ExReleaseSpinLockExclusive(&device->SpinLock, kirql);
+
     // Nothing below may run, and this image may not go, while WSK still holds a socket
     // of ours: it would call back into code that is no longer there.
     ExWaitForRundownProtectionRelease(&device->SocketRundown);
@@ -952,8 +965,9 @@ OvpnEvtDeviceAdd(WDFDRIVER wdfDriver, PWDFDEVICE_INIT deviceInit) {
     GOTO_IF_NOT_NT_SUCCESS(done, status, WdfDeviceCreate(&deviceInit, &objAttributes, &wdfDevice));
 
     // Before anything that can fail: from here on a failure deletes the device, and
-    // the cleanup that runs then waits on this.
+    // the cleanup that runs then walks these.
     ExInitializeRundownProtection(&OvpnGetDeviceContext(wdfDevice)->SocketRundown);
+    InitializeListHead(&OvpnGetDeviceContext(wdfDevice)->Sockets);
 
     POVPN_DRIVER driverCtx = OvpnGetDriverContext(WdfGetDriver());
     InterlockedIncrement(&driverCtx->DeviceCount);

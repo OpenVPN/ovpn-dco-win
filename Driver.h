@@ -120,6 +120,12 @@ struct OVPN_DEVICE {
     // A socket now outlives the session that opened it, and WSK can call back into
     // this image for as long as one exists, so removal has to wait for them.
     EX_RUNDOWN_REF SocketRundown;
+
+    // The sockets alive on this device, which is how removal reaches a connect that
+    // is still in flight. A socket leaves this list before its IRP is freed.
+    _Guarded_by_(SpinLock)
+    LIST_ENTRY Sockets;
+
     // Control writes handed to the socket and not yet completed. Userspace is not
     // throttled by the send any more - the write completes as soon as the payload is
     // copied - so this is what stops a writer outrunning the sends and taking the

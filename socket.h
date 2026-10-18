@@ -60,13 +60,24 @@ struct OvpnSocket
 
 	// Closing needs PASSIVE_LEVEL and the last reference can go at DISPATCH_LEVEL.
 	// Deliberately not a WDFWORKITEM: the device's own children are disposed while its
-	// cleanup runs, and that cleanup is what waits for this to close the socket.
+	// cleanup runs, and that cleanup waits for this to close the socket.
 	PIO_WORKITEM CloseWorkItem;
 
 	// Set when the device lets go of it. A retired socket stays open while someone
 	// is still sending over it, but what it receives is no longer anyone's: the
 	// session it belonged to is gone.
 	volatile LONG Retired;
+
+	// This socket's place in the device's list of live sockets.
+	LIST_ENTRY Link;
+
+	// The IRP of this socket's connect, if it had one. A socket gets at most one, and
+	// it is freed with the socket rather than by the completion, so it can be
+	// cancelled for as long as the socket is in the device's list.
+	PIRP ConnectIrp;
+
+	// WskConnect reads this until its IRP completes, so it cannot be the caller's
+	SOCKADDR_STORAGE Remote;
 };
 
 // Creates a socket and its WSK handle, with one reference for the caller.
@@ -125,7 +136,7 @@ OvpnSocketDataPacketDeliver(_In_ OVPN_DEVICE* device, _In_ OVPN_RX_BUFFER* buffe
 
 _Must_inspect_result_
 NTSTATUS
-OvpnSocketTcpConnect(_In_ OvpnSocket* sock, _In_ PSOCKADDR remote);
+OvpnSocketTcpConnect(_In_ OvpnSocket* sock, _In_ PSOCKADDR remote, _In_ WDFREQUEST request);
 
 // A peer's remote transport address. It has a name so that the code handling one does
 // not have to be a template over a type it cannot spell.
