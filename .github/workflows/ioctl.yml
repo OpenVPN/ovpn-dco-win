@@ -245,11 +245,19 @@ jobs:
           fi
 
       # A leak is reported when the driver unloads and at no other time, so force it. If
-      # the machine stops answering here, that is the finding.
+      # the machine stops answering here, that is the finding. The unload also takes the
+      # device down with a connect still in flight, which is its own trap: a removal that
+      # waits for a socket nothing can close never returns and takes the PnP engine with
+      # it, so this is bounded rather than left to the job timeout.
       - name: Unload the driver to check for leaked pool
         if: env.skip != 'true'
         run: |
-          ssh target 'powershell -NoProfile -ExecutionPolicy Bypass -File C:\ovpn-ioctl\Run-IoctlStress.ps1 -Unload'
+          timeout 300s ssh target 'powershell -NoProfile -ExecutionPolicy Bypass -File C:\ovpn-ioctl\Run-IoctlStress.ps1 -Unload' || rc=$?
+          if [ "${rc:-0}" -eq 124 ]; then
+            echo "::error::removing the device never finished: the teardown is waiting for a socket that cannot close"
+            exit 1
+          fi
+          [ "${rc:-0}" -eq 0 ] || exit 1
           for _ in $(seq 1 12); do
             ssh -o BatchMode=yes target 'echo up' 2>/dev/null | grep -q up && ok=1 && break
             sleep 10

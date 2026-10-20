@@ -59,6 +59,15 @@ if ($Unload) {
     # which is the same signal as any other fault.
     $dev = Get-PnpDevice -FriendlyName '*Data Channel Offload*' -ErrorAction SilentlyContinue
     if (-not $dev) { throw 'no ovpn-dco device to unload' }
+
+    # Take the device down with a connect still in flight to somewhere that will not
+    # answer. The transport can call back minutes later, so the driver has to hold the
+    # removal until it has let go of the socket - and has to be able to let go at all.
+    # Get this wrong and the disable below never returns.
+    & $Exe @('--mode', 'pendingconnect', '--peer', '10.255.255.1:1194')
+    # or the disable below proves nothing: there would be no connect to survive
+    if ($LASTEXITCODE -ne 0) { throw "pendingconnect failed with $LASTEXITCODE" }
+
     Disable-PnpDevice -InstanceId $dev.InstanceId -Confirm:$false
     Start-Sleep 5
     Enable-PnpDevice -InstanceId $dev.InstanceId -Confirm:$false

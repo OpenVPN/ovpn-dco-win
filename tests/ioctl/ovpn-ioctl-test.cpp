@@ -1275,6 +1275,70 @@ static int run_unknown(HANDLE h)
     return 0;
 }
 
+// A connect left in flight on purpose, to somewhere that will not answer. The process
+// exits with it still pending, which is the state a device removal has to survive: the
+// transport can call back into the driver minutes later, long after the image would
+// otherwise have gone.
+struct pending_ctx { HANDLE h; ULONG addr; USHORT port; DWORD err; volatile LONG returned; };
+
+static DWORD WINAPI pending_worker(LPVOID arg)
+{
+    pending_ctx* c = (pending_ctx*)arg;
+
+    OVPN_NEW_PEER np;
+    memset(&np, 0, sizeof(np));
+    fill_sockaddr((SOCKADDR_IN*)&np.Local, 0, 0);
+    fill_sockaddr((SOCKADDR_IN*)&np.Remote, c->addr, c->port);
+    np.Proto = OVPN_PROTO_TCP;
+
+    // blocks until the transport gives up, which is the point: the process exits first
+    c->err = call(c->h, OVPN_IOCTL_NEW_PEER, &np, sizeof(np), NULL, 0);
+    InterlockedExchange(&c->returned, 1);
+    return 0;
+}
+
+static int run_pendingconnect(HANDLE h, ULONG addr, USHORT port)
+{
+    if (addr == 0) {
+        fprintf(stderr, "pendingconnect needs --peer a.b.c.d:port\n");
+        return 2;
+    }
+
+    OVPN_SET_MODE sm;
+    sm.Mode = OVPN_MODE_P2P;
+    if (call(h, OVPN_IOCTL_SET_MODE, &sm, sizeof(sm), NULL, 0)) {
+        fprintf(stderr, "SET_MODE(P2P) refused\n");
+        return 1;
+    }
+
+    // static, because the thread outlives this frame - and the process, briefly
+    static pending_ctx c;
+    c.h = h;
+    c.addr = addr;
+    c.port = port;
+
+    HANDLE t = CreateThread(NULL, 0, pending_worker, &c, 0, NULL);
+    if (t == NULL) {
+        fprintf(stderr, "CreateThread failed\n");
+        return 1;
+    }
+    CloseHandle(t);
+
+    // long enough for the connect to be WSK's problem rather than still on its way there
+    Sleep(1500);
+
+    // Still inside NEW_PEER is the whole point. One that has come back left nothing in
+    // flight, so whatever is removed next has nothing to survive and proves nothing.
+    if (InterlockedCompareExchange(&c.returned, 0, 0)) {
+        fprintf(stderr, "NEW_PEER already returned (error %lu): no connect left in flight\n", c.err);
+        return 1;
+    }
+
+    printf("== connect to %lu.%lu.%lu.%lu:%u left in flight\n",
+           (addr >> 24) & 0xFF, (addr >> 16) & 0xFF, (addr >> 8) & 0xFF, addr & 0xFF, port);
+    return 0;
+}
+
 int main(int argc, char** argv)
 {
     const char* mode = "mutate";
@@ -1306,7 +1370,7 @@ int main(int argc, char** argv)
                 peerAddr = ntohl(parsed.S_un.S_addr);
         }
         else {
-            fprintf(stderr, "usage: %s [--mode mutate|mutate-p2p|unknown|churn|selfsend|ctrlself|p2pselfsend|listen|floatprobe] [--seed N] [--seconds N] [--port N] [--no-packets|--no-churn]\n", argv[0]);
+            fprintf(stderr, "usage: %s [--mode mutate|mutate-p2p|unknown|churn|selfsend|ctrlself|p2pselfsend|listen|floatprobe|pendingconnect] [--seed N] [--seconds N] [--port N] [--no-packets|--no-churn]\n", argv[0]);
             return 2;
         }
     }
@@ -1339,6 +1403,8 @@ int main(int argc, char** argv)
         rc = run_selfsend(h, seconds, (USHORT)port, packets, true);
     else if (!strcmp(mode, "listen"))
         rc = run_listen(h, seconds, (USHORT)port);
+    else if (!strcmp(mode, "pendingconnect"))
+        rc = run_pendingconnect(h, peerAddr, peerPort);
     else if (!strcmp(mode, "floatprobe"))
         rc = run_floatprobe(h, seconds, (USHORT)port, peerAddr, peerPort);
     else {
