@@ -725,11 +725,21 @@ OvpnEvtTxQueueAdvance(NETPACKETQUEUE netPacketQueue)
     POVPN_DEVICE device = OvpnGetDeviceContext(queue->Adapter->WdfDevice);
     BOOLEAN packetSent = false;
 
-    // Held for the whole batch, released after the flush at the end. Nothing is returned
-    // to the framework without a socket: the packets stay on the ring for the next pass,
-    // and EvtTxQueueCancel gives them all back when the datapath stops.
+    // Held for the whole batch, released after the flush at the end.
     OvpnSocketRef socket;
     if (!OvpnSocketAcquire(device, &socket)) {
+        // Nowhere to send them, so drop them and hand the ring back. Leaving them on it
+        // waits for EvtTxQueueCancel, which never comes: the adapter stays started with
+        // the media down between sessions, and the framework polls a ring that never
+        // drains.
+        while (NetPacketIteratorHasAny(&pi)) {
+            NET_PACKET* packet = NetPacketIteratorGetPacket(&pi);
+            if (!packet->Ignore && !packet->Scratch) {
+                InterlockedIncrementNoFence(&device->Stats.LostOutDataPackets);
+            }
+            NetPacketIteratorAdvance(&pi);
+        }
+        NetPacketIteratorSet(&pi);
         return;
     }
     BOOLEAN isTcp = socket.Tcp;
