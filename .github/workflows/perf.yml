@@ -406,6 +406,22 @@ jobs:
           [ -n "$LPEER_PRIV" ] && run_one linux-linux-udp --mode baseline --peer lpeer --proto udp
           exit $rc
 
+      # Throughput says nothing about what the driver costs when idle, and a core
+      # spinning with no session up fails none of the other gates: nothing crashes and
+      # nothing gets slower. That is how the stalled transmit queue in 2.8.13 shipped.
+      - name: Check the driver is idle with no session
+        if: always()
+        run: |
+          ssh dut 'powershell -NoProfile -ExecutionPolicy Bypass -File C:\ovpn-perf\Start-Client.ps1 -Down' || true
+          sleep 5
+          rc=0
+          ssh dut 'powershell -NoProfile -ExecutionPolicy Bypass -File C:\ovpn-perf\Measure-IdleCpu.ps1' || rc=$?
+          case "$rc" in
+            0) ;;
+            2) echo "::error::the idle check could not run: a session was still up"; exit 1 ;;
+            *) echo "::error::the driver burns CPU with nothing connected - see the line above"; exit 1 ;;
+          esac
+
       - name: Report
         if: always()
         env:
