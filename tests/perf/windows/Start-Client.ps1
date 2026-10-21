@@ -26,7 +26,8 @@ param(
     [ValidateSet('udp', 'tcp')][string]$Proto = 'udp',
     [string]$CertDir = 'C:\ovpn-perf\keys',
     [string]$WorkDir = "$env:TEMP\ovpn-perf",
-    [string]$OpenVpn = 'C:\Program Files\OpenVPN\bin\openvpn.exe'
+    [string]$OpenVpn = 'C:\Program Files\OpenVPN\bin\openvpn.exe',
+    [int]$MgmtPort = 7505
 )
 
 $ErrorActionPreference = 'Stop'
@@ -44,8 +45,36 @@ $conf = Join-Path $WorkDir 'client.conf'
 $logFile = Join-Path $WorkDir 'client.log'
 
 if ($Down) {
-    Get-Process openvpn -ErrorAction SilentlyContinue | Stop-Process -Force
-    'client stopped'
+    # Ask openvpn to shut down rather than killing it, which is what the GUI and the
+    # service do. It matters: a killed client never tears its session down, and the
+    # driver state that leaves behind is not the one users end up in.
+    if (-not (Get-Process openvpn -ErrorAction SilentlyContinue)) {
+        'no client running'
+        return
+    }
+
+    $stopped = $false
+    try {
+        $c = New-Object Net.Sockets.TcpClient
+        $c.Connect('127.0.0.1', $MgmtPort)
+        $w = New-Object IO.StreamWriter($c.GetStream())
+        $w.AutoFlush = $true
+        $w.WriteLine('signal SIGTERM')
+        Start-Sleep -Seconds 1
+        $w.WriteLine('quit')
+        $c.Close()
+        for ($i = 0; $i -lt 20; $i++) {
+            Start-Sleep -Seconds 1
+            if (-not (Get-Process openvpn -ErrorAction SilentlyContinue)) { $stopped = $true; break }
+        }
+    }
+    catch { }
+
+    if ($stopped) { 'client stopped' }
+    else {
+        Get-Process openvpn -ErrorAction SilentlyContinue | Stop-Process -Force
+        'client killed: it did not answer the management interface'
+    }
     return
 }
 
@@ -83,6 +112,7 @@ key $certs/client.key
 remote-cert-tls server
 data-ciphers AES-256-GCM
 verb 3
+management 127.0.0.1 $MgmtPort
 log "$($logFile -replace '\\', '/')"
 "@ | Set-Content -Encoding ASCII $conf
 

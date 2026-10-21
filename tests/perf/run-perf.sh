@@ -369,7 +369,9 @@ resets=0
 if [ "$CLI_OS" = linux ]; then
     linux_run "$CLI_HOST" start-client.sh --stop >/dev/null 2>&1
 else
-    ps_on "$CLI_HOST" 'Start-Client.ps1' -Down >/dev/null 2>&1
+    # Not silenced: a client that has to be killed rather than asked to stop leaves the
+    # driver in a state no user reaches, and the idle check below would pass on it.
+    ps_on "$CLI_HOST" 'Start-Client.ps1' -Down 2>&1 | sed 's/^/client teardown: /'
     ps_on "$CLI_HOST" 'Get-DcoStats.ps1' -AsJson 2>/dev/null | tr -d '\r' > "$OUTDIR/driver-stats-client.json"
 fi
 if [ "$SRV_OS" = linux ]; then
