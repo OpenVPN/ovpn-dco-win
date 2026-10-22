@@ -606,8 +606,11 @@ OvpnSocketTcpConnectComplete(_In_ PDEVICE_OBJECT deviceObj, _In_ PIRP irp, _In_ 
         WdfRequestCompleteWithInformation(request, status, bytesSent);
     }
 
-    // Free the IRP
-    IoFreeIrp(irp);
+    UNREFERENCED_PARAMETER(irp);
+
+    // The IRP belongs to the socket and is freed by OvpnSocketDetach, which cannot run
+    // until this decrement lets its wait finish. Freeing it here would race that cancel.
+    InterlockedDecrement(&device->SocketSenders);
 
     // Always return STATUS_MORE_PROCESSING_REQUIRED to
     // terminate the completion processing of the IRP.
@@ -616,20 +619,39 @@ OvpnSocketTcpConnectComplete(_In_ PDEVICE_OBJECT deviceObj, _In_ PIRP irp, _In_ 
 
 NTSTATUS
 _Use_decl_annotations_
-OvpnSocketTcpConnect(PWSK_SOCKET socket, PVOID context, PSOCKADDR remote)
+OvpnSocketTcpConnect(PWSK_SOCKET socket, PVOID context, PSOCKADDR remote, PIRP irp)
 {
     // Get pointer to the socket's provider dispatch structure
     PWSK_PROVIDER_CONNECTION_DISPATCH dispatch = (PWSK_PROVIDER_CONNECTION_DISPATCH)(socket->Dispatch);
 
-    // Allocate an IRP
-    PIRP irp = IoAllocateIrp(1, FALSE);
+    POVPN_DEVICE device = (POVPN_DEVICE)context;
 
-    // Check result
-    if (!irp)
-    {
-        // Return error
-        return STATUS_INSUFFICIENT_RESOURCES;
+    // Counted and then re-checked against the published pointer, exactly as
+    // OvpnSocketAcquire does it. Counting alone is not enough: teardown can unpublish,
+    // drain and close between the caller reading the socket and this increment, and the
+    // connect would then run on a closed socket.
+    InterlockedIncrement(&device->SocketSenders);
+
+    PWSK_SOCKET published = (PWSK_SOCKET)InterlockedCompareExchangePointer(
+        (PVOID volatile*)&device->Socket.Socket, NULL, NULL);
+
+    if (published != socket) {
+        InterlockedDecrement(&device->SocketSenders);
+        IoFreeIrp(irp);
+
+        // The request was handed to this connect, so finish it here - no completion
+        // routine will run to do it.
+        WDFREQUEST request;
+        if (NT_SUCCESS(WdfIoQueueRetrieveNextRequest(device->PendingNewPeerQueue, &request))) {
+            WdfRequestCompleteWithInformation(request, STATUS_INVALID_DEVICE_STATE, 0);
+        }
+        LOG_INFO("Socket went before the connect started");
+        return STATUS_INVALID_DEVICE_STATE;
     }
+
+    KIRQL kirql = ExAcquireSpinLockExclusive(&device->SpinLock);
+    device->ConnectIrp = irp;
+    ExReleaseSpinLockExclusive(&device->SpinLock, kirql);
 
     // Set the completion routine for the IRP
     IoSetCompletionRoutine(irp, OvpnSocketTcpConnectComplete, context, TRUE, TRUE, TRUE);
@@ -728,6 +750,16 @@ OvpnSocketDetach(OVPN_DEVICE* device)
     PWSK_SOCKET socket = (PWSK_SOCKET)InterlockedExchangePointer(
         (PVOID volatile*)&device->Socket.Socket, NULL);
 
+    // A connect in flight is not bounded by anything, so cancel it first: WSK completes a
+    // cancelled connect, which is what lets the wait below finish.
+    KIRQL kirql = ExAcquireSpinLockExclusive(&device->SpinLock);
+    PIRP connectIrp = device->ConnectIrp;
+    ExReleaseSpinLockExclusive(&device->SpinLock, kirql);
+    if (connectIrp != NULL) {
+        LOG_INFO("Cancelling a connect still in flight");
+        IoCancelIrp(connectIrp);
+    }
+
     // No new sender can find the socket now, so this only waits out the ones already
     // inside a send. They hold nothing and are bounded by the send call itself.
     for (ULONG waited = 0; InterlockedCompareExchange(&device->SocketSenders, 0, 0) != 0; ++waited) {
@@ -739,6 +771,15 @@ OvpnSocketDetach(OVPN_DEVICE* device)
             LOG_WARN("Still waiting for senders to leave the socket",
                 TraceLoggingValue(waited, "ms"));
         }
+    }
+
+    // The connect has left, so its IRP is ours to free and the socket is safe to close.
+    kirql = ExAcquireSpinLockExclusive(&device->SpinLock);
+    connectIrp = device->ConnectIrp;
+    device->ConnectIrp = NULL;
+    ExReleaseSpinLockExclusive(&device->SpinLock, kirql);
+    if (connectIrp != NULL) {
+        IoFreeIrp(connectIrp);
     }
 
     return socket;

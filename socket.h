@@ -100,6 +100,8 @@ _Must_inspect_result_
 NTSTATUS
 OvpnSocketSend(_In_ OvpnSocketRef* ovpnSocket, _In_ OVPN_TX_BUFFER* buffer);
 
+// Takes an IRP the caller has already allocated, so that nothing can fail between handing
+// the NEW_PEER request to the queue and starting the connect that owns it from then on.
 _Must_inspect_result_
 NTSTATUS
-OvpnSocketTcpConnect(_In_ PWSK_SOCKET socket, _In_ PVOID context, _In_ PSOCKADDR remote);
+OvpnSocketTcpConnect(_In_ PWSK_SOCKET socket, _In_ PVOID context, _In_ PSOCKADDR remote, _In_ PIRP irp);

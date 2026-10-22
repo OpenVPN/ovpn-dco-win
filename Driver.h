@@ -102,9 +102,15 @@ struct OVPN_DEVICE {
     // state buffers are still the lock's.
     OvpnSocket Socket;
 
-    // senders inside OvpnSocketSend, so teardown can wait for them before closing
+    // senders inside OvpnSocketSend, and a TCP connect while it is in flight, so teardown
+    // can wait for them before closing
     _Interlocked_
     LONG SocketSenders;
+
+    // The connect IRP belongs to the socket, not to its completion: teardown cancels it and
+    // frees it once the connect has left, so closing cannot race a connect still running.
+    _Guarded_by_(SpinLock)
+    PIRP ConnectIrp;
 
     _Guarded_by_(SpinLock)
     NETADAPTER Adapter;

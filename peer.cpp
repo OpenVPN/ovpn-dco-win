@@ -105,9 +105,26 @@ OvpnPeerNew(POVPN_DEVICE device, WDFREQUEST request)
     GOTO_IF_NOT_NT_SUCCESS(done, status, OvpnTimerCreate(device->WdfDevice, &device->Timer));
 
     if (proto_tcp) {
-        LOG_IF_NOT_NT_SUCCESS(status = WdfRequestForwardToIoQueue(request, device->PendingNewPeerQueue));
-        // start async connect
-        LOG_IF_NOT_NT_SUCCESS(status = OvpnSocketTcpConnect(socket, device, (PSOCKADDR)&peer->Remote));
+        // Allocated before the request is handed over, so that nothing between the forward
+        // and the connect can fail and leave the request with no owner to finish it.
+        PIRP irp = IoAllocateIrp(1, FALSE);
+        if (irp == NULL) {
+            LOG_ERROR("Failed to allocate connect IRP");
+            status = STATUS_INSUFFICIENT_RESOURCES;
+            goto done;
+        }
+
+        status = WdfRequestForwardToIoQueue(request, device->PendingNewPeerQueue);
+        if (!NT_SUCCESS(status)) {
+            LOG_ERROR("WdfRequestForwardToIoQueue failed", TraceLoggingNTStatus(status, "status"));
+            IoFreeIrp(irp);
+            goto done;
+        }
+
+        // The request belongs to the connect completion from here, whatever WskConnect
+        // returns, so this must report pending and never complete it a second time.
+        LOG_IF_NOT_NT_SUCCESS(OvpnSocketTcpConnect(socket, device, (PSOCKADDR)&peer->Remote, irp));
+        status = STATUS_PENDING;
     }
 
 done:
