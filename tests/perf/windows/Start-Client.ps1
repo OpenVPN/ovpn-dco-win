@@ -53,22 +53,25 @@ if ($Down) {
         return
     }
 
-    $stopped = $false
+    # Only the signal goes in the try: openvpn can exit while we are still writing, and
+    # a throw there must not skip the wait below and send us down the kill path. A client
+    # that was killed never tore its session down, which is the one state the idle check
+    # cannot see a stalled queue in.
     try {
         $c = New-Object Net.Sockets.TcpClient
         $c.Connect('127.0.0.1', $MgmtPort)
         $w = New-Object IO.StreamWriter($c.GetStream())
         $w.AutoFlush = $true
         $w.WriteLine('signal SIGTERM')
-        Start-Sleep -Seconds 1
-        $w.WriteLine('quit')
         $c.Close()
-        for ($i = 0; $i -lt 20; $i++) {
-            Start-Sleep -Seconds 1
-            if (-not (Get-Process openvpn -ErrorAction SilentlyContinue)) { $stopped = $true; break }
-        }
     }
     catch { }
+
+    $stopped = $false
+    for ($i = 0; $i -lt 20; $i++) {
+        Start-Sleep -Seconds 1
+        if (-not (Get-Process openvpn -ErrorAction SilentlyContinue)) { $stopped = $true; break }
+    }
 
     if ($stopped) { 'client stopped' }
     else {
@@ -116,8 +119,9 @@ management 127.0.0.1 $MgmtPort
 log "$($logFile -replace '\\', '/')"
 "@ | Set-Content -Encoding ASCII $conf
 
-Get-Process openvpn -ErrorAction SilentlyContinue | Stop-Process -Force
-Start-Sleep -Seconds 1
+Get-Process openvpn -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+# the management port has to be free before the next client binds it
+Start-Sleep -Seconds 2
 
 $cmd = '"' + $OpenVpn + '" --config "' + $conf + '"'
 Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $cmd } | Out-Null
