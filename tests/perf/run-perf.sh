@@ -369,9 +369,16 @@ resets=0
 if [ "$CLI_OS" = linux ]; then
     linux_run "$CLI_HOST" start-client.sh --stop >/dev/null 2>&1
 else
-    # Not silenced: a client that has to be killed rather than asked to stop leaves the
-    # driver in a state no user reaches, and the idle check below would pass on it.
-    ps_on "$CLI_HOST" 'Start-Client.ps1' -Down 2>&1 | sed 's/^/client teardown: /'
+    # A client that has to be killed rather than asked to stop leaves the driver in a
+    # state no user reaches, and the idle check would pass on it however broken the
+    # driver is. Say so where it will be read, rather than leaving it in the log.
+    down_out=$(ps_on "$CLI_HOST" 'Start-Client.ps1' -Down 2>&1)
+    echo "$down_out" | sed 's/^/client teardown: /'
+    case "$down_out" in
+        *"client killed"*)
+            echo "WARNING: the client was killed, not stopped - it never tore its session down, so the idle check cannot see a stalled queue" >&2
+            ;;
+    esac
     ps_on "$CLI_HOST" 'Get-DcoStats.ps1' -AsJson 2>/dev/null | tr -d '\r' > "$OUTDIR/driver-stats-client.json"
 fi
 if [ "$SRV_OS" = linux ]; then
