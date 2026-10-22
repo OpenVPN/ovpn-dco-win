@@ -414,11 +414,18 @@ jobs:
         run: |
           ssh dut 'powershell -NoProfile -ExecutionPolicy Bypass -File C:\ovpn-perf\Start-Client.ps1 -Down' || true
           sleep 5
+          # A machine we cannot reach says nothing about the driver, so check that first:
+          # ssh exits 255 for its own failures, which the catch-all below would blame on us.
+          if ! ssh -o ConnectTimeout=30 dut 'exit 0'; then
+            echo "::error::could not reach the machine for the idle check - infrastructure, not the driver"
+            exit 1
+          fi
           rc=0
           ssh dut 'powershell -NoProfile -ExecutionPolicy Bypass -File C:\ovpn-perf\Measure-IdleCpu.ps1' || rc=$?
           case "$rc" in
             0) ;;
             2) echo "::error::the idle check could not run: a session was still up"; exit 1 ;;
+            255) echo "::error::lost the connection while the idle check ran - infrastructure, not the driver"; exit 1 ;;
             *) echo "::error::the driver burns CPU with nothing connected - see the line above"; exit 1 ;;
           esac
 
