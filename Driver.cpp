@@ -30,6 +30,9 @@
 #include "control.h"
 #include "driver.h"
 #include "trace.h"
+#ifdef _AMD64_
+#include "cryptogams.h"
+#endif
 #include "peer.h"
 #include "uapi\ovpn-dco.h"
 #include "socket.h"
@@ -92,6 +95,12 @@ DriverEntry(_In_ PDRIVER_OBJECT driverObject, _In_ PUNICODE_STRING registryPath)
     LOG_INFO("Driver Version", TraceLoggingValue(OVPN_DCO_VERSION_MAJOR, "Major"),
         TraceLoggingValue(OVPN_DCO_VERSION_MINOR, "Minor"),
         TraceLoggingValue(OVPN_DCO_VERSION_PATCH, "Patch"));
+
+#ifdef _AMD64_
+    // capability vector and self test for the assembly crypto; must run before any
+    // peer can install a key, since the result decides which implementation is used
+    OvpnCryptogamsInit();
+#endif
 
     WDF_OBJECT_ATTRIBUTES driverAttrs;
     WDF_OBJECT_ATTRIBUTES_INIT(&driverAttrs);

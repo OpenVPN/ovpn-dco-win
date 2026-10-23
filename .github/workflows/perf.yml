@@ -401,6 +401,12 @@ jobs:
           run_one client-tcp --mode client --proto tcp
           run_one server-udp --mode server --proto udp
           [ "$WINWIN" = 'true' ] && run_one win-win-udp --mode server --peer dut2 --proto udp
+          # ChaCha20-Poly1305 reaches the hand-vendored assembly; AES-GCM goes through CNG
+          # and never touches it. Both stream counts matter: poly1305 picks a different
+          # implementation by input length, and one of those was ABI-broken on Win64.
+          run_one client-udp-chacha --mode client --proto udp --cipher CHACHA20-POLY1305
+          [ "$WINWIN" = 'true' ] &&
+            run_one win-win-udp-chacha --mode server --peer dut2 --proto udp --cipher CHACHA20-POLY1305
           # The control runs last: it says nothing about the driver, so it should not
           # delay the tests that do.
           [ -n "$LPEER_PRIV" ] && run_one linux-linux-udp --mode baseline --peer lpeer --proto udp

@@ -23,7 +23,10 @@
 #include <ntddk.h>
 #include <ntstrsafe.h>
 #include "trace.h"
+#include "uapi\ovpn-dco.h"
 #else
+// pulls <winsock2.h>, which must precede the <winsock.h> that <windows.h> brings in
+#include "uapi\ovpn-dco.h"
 #define WIN32_NO_STATUS     // keep windows.h from redefining STATUS_*
 #include <windows.h>
 #undef WIN32_NO_STATUS
@@ -65,6 +68,11 @@ struct OvpnCryptoKeyContext
     BCRYPT_KEY_HANDLE Key;
     UCHAR ImplicitIV[12];
 
+    // ChaCha20-Poly1305 only: the assembly takes raw key bytes, where CNG takes a
+    // handle. Set when that path passed its self test and the key is the right size.
+    UCHAR RawKey[32];
+    BOOLEAN UseAsm;
+
     // number of plaintext blocks encrypted using this key, accumulated atomically
     LONG64 PlaintextBlocks;
     UINT16 Epoch;
@@ -94,6 +102,8 @@ struct OvpnCryptoOptions {
 
     BCRYPT_ALG_HANDLE HkdfAlgHandle;
     BCRYPT_ALG_HANDLE AeadAlgHangle;
+
+    OVPN_CIPHER_ALG CipherAlg;
 };
 
 NTSTATUS OvpnCryptoExpandLabel(

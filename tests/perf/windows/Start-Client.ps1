@@ -24,6 +24,7 @@ param(
     [string]$Server = '',
     [int]$Port = 11198,
     [ValidateSet('udp', 'tcp')][string]$Proto = 'udp',
+    [string]$Cipher = 'AES-256-GCM',
     [string]$CertDir = 'C:\ovpn-perf\keys',
     [string]$WorkDir = "$env:TEMP\ovpn-perf",
     [string]$OpenVpn = 'C:\Program Files\OpenVPN\bin\openvpn.exe',
@@ -113,7 +114,7 @@ ca $certs/ca.crt
 cert $certs/client.crt
 key $certs/client.key
 remote-cert-tls server
-data-ciphers AES-256-GCM
+data-ciphers $Cipher
 verb 3
 management 127.0.0.1 $MgmtPort
 log "$($logFile -replace '\\', '/')"
