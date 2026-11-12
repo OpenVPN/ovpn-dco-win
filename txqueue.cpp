@@ -784,6 +784,13 @@ OvpnEvtTxQueueAdvance(NETPACKETQUEUE netPacketQueue)
             NetPacketIteratorAdvance(&pi);
         }
         NetPacketIteratorSet(&pi);
+
+        // The fragments go back too. Without this they stay ours, the fragment ring
+        // fills, and the framework stops posting packets for good - the datapath is
+        // dead from then on, even once a transport is back.
+        NET_RING* fragmentRing = NetRingCollectionGetFragmentRing(queue->Rings);
+        fragmentRing->BeginIndex = fragmentRing->EndIndex;
+
         return;
     }
 
